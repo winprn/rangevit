@@ -24,6 +24,7 @@ from .model_utils import adapt_input_conv, padding, unpadding, resize_pos_embed,
 from .stems import PatchEmbedding, ConvStem
 from .decoders import DecoderLinear, DecoderUpConv
 from .rangevit_kpconv import RangeViT_KPConv, KPClassifier
+from .swin_transformer_v2 import SwinTransformerV2, create_swin_v2
 
 
 class VisionTransformer(nn.Module):
@@ -176,7 +177,13 @@ def create_rangevit(model_cfg, use_kpconv=False):
     decoder_cfg = model_cfg.pop('decoder')
     decoder_cfg['n_cls'] = model_cfg['n_cls']
 
-    encoder = create_vit(model_cfg)
+    # Choose encoder architecture
+    backbone = model_cfg.get('backbone', 'vit_small_patch16_384')
+    if backbone.startswith('swin'):
+        encoder = create_swin_v2(model_cfg)
+    else:
+        encoder = create_vit(model_cfg)
+    
     decoder = create_decoder(encoder, decoder_cfg)
 
     if use_kpconv:
@@ -279,6 +286,27 @@ class RangeViT(nn.Module):
             dropout = 0.0
             drop_path_rate = 0.1
             d_model = 1024
+        elif backbone == 'swin_small_patch4_window7_224':
+            n_heads = 3
+            n_layers = 12
+            patch_size = 4
+            dropout = 0.0
+            drop_path_rate = 0.1
+            d_model = 96
+        elif backbone == 'swin_base_patch4_window7_224':
+            n_heads = 4
+            n_layers = 12
+            patch_size = 4
+            dropout = 0.0
+            drop_path_rate = 0.1
+            d_model = 128
+        elif backbone == 'swin_large_patch4_window7_224':
+            n_heads = 6
+            n_layers = 12
+            patch_size = 4
+            dropout = 0.0
+            drop_path_rate = 0.1
+            d_model = 192
         else:
             raise NameError('Not known ViT backbone.')
 
