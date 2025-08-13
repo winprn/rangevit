@@ -1,8 +1,9 @@
-numpy
 einops
 scipy
 pyyaml
 tensorboardX
 prettytable
 timm
-nuscenes-devkit
+numpy==1.26.4
+opencv-python==4.5.4.58
+nuscenes-devkit==1.1.11
