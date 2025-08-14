@@ -19,12 +19,12 @@ train_result_frequency: 100 # printing frequency of the train results
 
 
 # Model config
-vit_backbone: 'vit_small_patch16_384'
+vit_backbone: 'vit_base_patch16_384'
 in_channels: 5
 patch_size: [2, 8]  # patch size = patch stride if a convolutional stem (ConvStem) is used
 patch_stride: [2, 8]
-image_size: [64, 384]  # random crop at train
-window_size: [64, 384] # sliding window size
+image_size: [64, 768]  # random crop at train
+window_size: [64, 768] # sliding window size
 window_stride: [64, 256] # sliding window stride
 original_image_size: [64, 2048]
 
