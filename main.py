@@ -28,25 +28,55 @@ from models.model_utils import resize_pos_embed
 
 
 def build_rangevit_model(settings, pretrained_path=None):
+    # model = models.RangeViT(
+    #     in_channels=settings.in_channels,
+    #     n_cls=settings.n_classes,
+    #     backbone=settings.vit_backbone,
+    #     image_size=settings.image_size,
+    #     pretrained_path=pretrained_path,
+    #     new_patch_size=settings.patch_size,
+    #     new_patch_stride=settings.patch_stride,
+    #     reuse_pos_emb=settings.reuse_pos_emb,
+    #     reuse_patch_emb=settings.reuse_patch_emb,
+    #     conv_stem=settings.conv_stem,
+    #     stem_base_channels=settings.stem_base_channels,
+    #     stem_hidden_dim=settings.D_h,
+    #     skip_filters=settings.skip_filters,
+    #     decoder=settings.decoder,
+    #     up_conv_d_decoder=settings.D_h,
+    #     up_conv_scale_factor=settings.patch_stride,
+    #     use_kpconv=settings.use_kpconv)
     model = models.RangeViT(
         in_channels=settings.in_channels,
         n_cls=settings.n_classes,
         backbone=settings.vit_backbone,
-        image_size=settings.image_size,
-        pretrained_path=pretrained_path,
-        new_patch_size=settings.patch_size,
-        new_patch_stride=settings.patch_stride,
+        decoder=settings.decoder,
+        image_size=tuple(settings.image_size),
+        pretrained_path=settings.pretrained_model,
         reuse_pos_emb=settings.reuse_pos_emb,
         reuse_patch_emb=settings.reuse_patch_emb,
+        new_patch_size=tuple(settings.patch_size),
+        new_patch_stride=tuple(settings.patch_stride),
         conv_stem=settings.conv_stem,
         stem_base_channels=settings.stem_base_channels,
         stem_hidden_dim=settings.D_h,
+        up_conv_d_decoder=settings.up_conv_d_decoder,
+        up_conv_scale_factor=tuple(settings.up_conv_scale_factor),
         skip_filters=settings.skip_filters,
-        decoder=settings.decoder,
-        up_conv_d_decoder=settings.D_h,
-        up_conv_scale_factor=settings.patch_stride,
-        use_kpconv=settings.use_kpconv)
+        use_kpconv=settings.use_kpconv,
+        d_model=getattr(settings, 'd_model', 96),
+        n_layers=settings.n_layers,
+        n_heads=settings.n_heads,
+        dropout=getattr(settings, 'dropout', 0.0),
+        drop_path_rate=getattr(settings, 'drop_path_rate', 0.0),
+        window_size=settings.window_size,
+        mlp_ratio=settings.mlp_ratio,
+        depths=settings.depths,
+        num_heads=settings.num_heads,
+    )
     return model
+
+
 
 
 class Experiment(object):
@@ -62,12 +92,11 @@ class Experiment(object):
 
         # Set random seed
         torch.manual_seed(self.settings.seed)
-        torch.cuda.manual_seed(self.settings.seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed(self.settings.seed)
+            torch.cuda.set_device("cuda:0")
+            torch.backends.cudnn.benchmark = True
         np.random.seed(self.settings.seed)
-        # torch.cuda.set_device(self.settings.gpu)
-        torch.cuda.set_device("cuda:0")
-
-        torch.backends.cudnn.benchmark = True
 
         # Init checkpoint
         self.recorder = None
@@ -192,6 +221,8 @@ class Experiment(object):
 
     def run(self):
         t_start = time.time()
+        
+        # Run validation
         if self.settings.val_only:
             save_results_path = self.prediction_path if self.settings.save_eval_results else None
             self.trainer.run(self.epoch_start,
@@ -204,6 +235,8 @@ class Experiment(object):
                 self.recorder.logger.info('==== Total cost time: {}'.format(
                     datetime.timedelta(seconds=cost_time)))
             return
+        
+        # Run training
         best_val_result = None
 
         #self.trainer.scheduler.step(self.epoch_start*len(self.trainer.train_loader))

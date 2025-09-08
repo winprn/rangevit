@@ -37,7 +37,7 @@ class Trainer(object):
         # Init params
         self.settings = settings
         self.recorder = recorder
-        self.model = model.cuda()
+        self.model = model.cuda() if torch.cuda.is_available() else model
         self.remain_time = tools.RemainTime(self.settings.n_epochs)
 
         # Init data loader
@@ -270,14 +270,14 @@ class Trainer(object):
             input_feature = input_feature.cuda() # shape: B x 5 x H x W
 
             input_label = input_label.cuda().long()
-            input_label = input_label * input_label.ge(1).long()
-            input_mask = input_mask.cuda() * input_label.ge(1).float()
+            input_label = input_label * input_label.ge(1).long() # shape: B x H x W : per pixel semantic label
+            input_mask = input_mask.cuda() * input_label.ge(1).float() # shape: B x H x W : binary mask
 
             # Forward propagation
             if mode == 'Train':
-                with torch.cuda.amp.autocast(self.fp16_scaler is not None):
+                with torch.amp.autocast('cuda', enabled=self.fp16_scaler is not None):
                     output = self.model(input_feature)
-                    output_softmax = F.softmax(output, dim=1)
+                    output_softmax = F.softmax(output, dim=1) # shape: B x 17 x H x W
 
                     # Loss calculation
                     total_loss, loss_lovasz, loss_focal = self.compute_losses(
@@ -301,7 +301,7 @@ class Trainer(object):
 
                     # Validation
                     im_meta = dict(flip=False)
-                    with torch.cuda.amp.autocast(self.fp16_scaler is not None):
+                    with torch.amp.autocast('cuda', enabled=self.fp16_scaler is not None):
                         lidar_pred = inference(
                             model_without_ddp.rangevit,
                             [input_feature],
@@ -464,7 +464,7 @@ class Trainer(object):
 
             # Forward propagation
             if mode == 'Train':
-                with torch.cuda.amp.autocast(self.fp16_scaler is not None):
+                with torch.amp.autocast('cuda', enabled=self.fp16_scaler is not None):
                     output3d = self.model(input_feature, px, py, pxyz, knns, num_points)
 
                     output3d_softmax = F.softmax(output3d, dim=1)
@@ -491,7 +491,7 @@ class Trainer(object):
 
                     # Validation
                     im_meta = dict(flip=False)
-                    with torch.cuda.amp.autocast(self.fp16_scaler is not None):
+                    with torch.amp.autocast('cuda', enabled=self.fp16_scaler is not None):
                         output_features2d = inference(
                             model_without_ddp.rangevit,
                             [input_feature],

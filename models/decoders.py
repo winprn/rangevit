@@ -103,6 +103,11 @@ class UpConvBlock(nn.Module):
         if self.skip_filters > 0:
             assert skip is not None
             assert skip.shape[1] == self.skip_filters
+            
+            # Handle spatial size mismatch between x_up and skip
+            if skip.shape[2:] != x_up.shape[2:]:
+                skip = F.interpolate(skip, size=x_up.shape[2:], mode='bilinear', align_corners=False)
+            
             x_up = torch.cat((x_up, skip), dim=1)
 
         x_up_out = self.conv_output(self.conv1(x_up))
@@ -145,8 +150,26 @@ class DecoderUpConv(nn.Module):
 
     def forward(self, x, im_size, skip=None, return_features=False):
         H, W = im_size
-        GS_H, GS_W = get_grid_size_2d(H, W, self.patch_size, self.patch_stride)
-        x = rearrange(x, 'b (h w) c -> b c h w', h=GS_H) # B, d_model, image_size[0]/patch_stride[0], image_size[1]/patch_stride[1]
+        B, L, C = x.shape
+        
+        # Try to use expected grid size first
+        try:
+            GS_H, GS_W = get_grid_size_2d(H, W, self.patch_size, self.patch_stride)
+            expected_tokens = GS_H * GS_W
+            if expected_tokens != L:
+                raise ValueError(f"Token count mismatch: expected {expected_tokens}, got {L}")
+        except (AssertionError, ValueError):
+            # Fallback: calculate grid size from actual tensor shape
+            import math
+            aspect_ratio = W / H
+            GS_H = int(math.sqrt(L / aspect_ratio))
+            GS_W = L // GS_H
+            # Adjust to get exact factorization
+            while GS_H * GS_W != L and GS_H > 1:
+                GS_H -= 1
+                GS_W = L // GS_H
+            
+        x = rearrange(x, 'b (h w) c -> b c h w', h=GS_H) # B, d_model, spatial_h, spatial_w
         x = self.up_conv_block(x, skip)
         if return_features:
             return x

@@ -1,7 +1,7 @@
 *.pyc
 *core.*
 __pycache__/
-save_path/*
+save_path*
 !save_path/README.md
 
 pretrained_model/*

@@ -48,7 +48,7 @@ class WindowAttention(nn.Module):
                  pretrained_window_size=[0, 0]):
         super().__init__()
         self.dim = dim
-        self.window_size = window_size
+        self.window_size = window_size if isinstance(window_size, tuple) else (window_size, window_size)
         self.pretrained_window_size = pretrained_window_size
         self.num_heads = num_heads
         head_dim = dim // num_heads
@@ -74,6 +74,15 @@ class WindowAttention(nn.Module):
         relative_coords_table = torch.sign(relative_coords_table) * torch.log2(
             torch.abs(relative_coords_table) + 1.0) / np.log2(8)
 
+        # Resize relative_coords_table if pretrained window size differs
+        if pretrained_window_size[0] > 0 and (pretrained_window_size[0] != self.window_size[0] or pretrained_window_size[1] != self.window_size[1]):
+            relative_coords_table = F.interpolate(
+                relative_coords_table.permute(0, 3, 1, 2),
+                size=self.window_size,
+                mode='bilinear',
+                align_corners=False
+            ).permute(0, 2, 3, 1)
+        
         self.register_buffer("relative_coords_table", relative_coords_table)
 
         # get pair-wise relative position index for each token inside the window
@@ -113,7 +122,7 @@ class WindowAttention(nn.Module):
 
         # cosine attention
         attn = (F.normalize(q, dim=-1) @ F.normalize(k, dim=-1).transpose(-2, -1))
-        logit_scale = torch.clamp(self.scale, max=torch.log(torch.tensor(1. / 0.01))).exp()
+        logit_scale = torch.clamp(torch.tensor(self.scale), max=torch.log(torch.tensor(1. / 0.01))).exp()
         attn = attn * logit_scale
 
         relative_position_bias_table = self.cpb_mlp(self.relative_coords_table).view(-1, self.num_heads)
@@ -151,51 +160,64 @@ class SwinTransformerBlock(nn.Module):
         self.window_size = window_size
         self.shift_size = shift_size
         self.mlp_ratio = mlp_ratio
-        if min(self.input_resolution) <= self.window_size:
+        # Handle case where window_size might be a list/tuple
+        window_size_val = self.window_size[0] if isinstance(self.window_size, (list, tuple)) else self.window_size
+        if min(self.input_resolution) <= window_size_val:
             self.shift_size = 0
             self.window_size = min(self.input_resolution)
-        assert 0 <= self.shift_size < self.window_size, "shift_size must in 0-window_size"
+        window_size_check = self.window_size[0] if isinstance(self.window_size, (list, tuple)) else self.window_size
+        assert 0 <= self.shift_size < window_size_check, "shift_size must in 0-window_size"
 
         self.norm1 = norm_layer(dim)
         self.attn = WindowAttention(
-            dim, window_size=to_2tuple(self.window_size), num_heads=num_heads, qkv_bias=qkv_bias,
-            attn_drop=attn_drop, proj_drop=drop, pretrained_window_size=to_2tuple(pretrained_window_size))
+            dim, window_size=to_2tuple(self.window_size), num_heads=num_heads,
+            qkv_bias=qkv_bias, attn_drop=attn_drop, proj_drop=drop,
+            pretrained_window_size=to_2tuple(pretrained_window_size))
 
         self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
         self.norm2 = norm_layer(dim)
         mlp_hidden_dim = int(dim * mlp_ratio)
         self.mlp = Mlp(in_features=dim, hidden_features=mlp_hidden_dim, act_layer=act_layer, drop=drop)
 
-        if self.shift_size > 0:
-            H, W = self.input_resolution
-            img_mask = torch.zeros((1, H, W, 1))
-            h_slices = (slice(0, -self.window_size),
-                        slice(-self.window_size, -self.shift_size),
-                        slice(-self.shift_size, None))
-            w_slices = (slice(0, -self.window_size),
-                        slice(-self.window_size, -self.shift_size),
-                        slice(-self.shift_size, None))
-            cnt = 0
-            for h in h_slices:
-                for w in w_slices:
-                    img_mask[:, h, w, :] = cnt
-                    cnt += 1
-
-            mask_windows = window_partition(img_mask, self.window_size)
-            mask_windows = mask_windows.view(-1, self.window_size * self.window_size)
-            attn_mask = mask_windows.unsqueeze(1) - mask_windows.unsqueeze(2)
-            attn_mask = attn_mask.masked_fill(attn_mask != 0, float(-100.0)).masked_fill(attn_mask == 0, float(0.0))
-        else:
-            attn_mask = None
-
-        self.register_buffer("attn_mask", attn_mask)
-
     def forward(self, x):
         H, W = self.input_resolution
         B, L, C = x.shape
-        assert L == H * W, "input feature has wrong size"
+        
+        # Handle dynamic input sizes during inference
+        if L != H * W:
+            # Calculate actual H, W from input tensor size
+            # Try to maintain aspect ratio similar to expected resolution
+            aspect_ratio = W / H if H > 0 else 1
+            import math
+            H_actual = int(math.sqrt(L / aspect_ratio))
+            
+            # Ensure H_actual is at least 1 to avoid division by zero
+            H_actual = max(H_actual, 1)
+            W_actual = L // H_actual
+            
+            # Ensure exact factorization
+            while H_actual * W_actual != L and H_actual > 1:
+                H_actual -= 1
+                if H_actual <= 0:  # Prevent H_actual from becoming 0
+                    H_actual = 1
+                    break
+                W_actual = L // H_actual
+                
+            # Final fallback: if we still can't factorize properly, use simple linear arrangement
+            if H_actual * W_actual != L:
+                # Find the best factorization by trying divisors of L
+                best_h, best_w = 1, L
+                for h in range(1, int(math.sqrt(L)) + 1):
+                    if L % h == 0:
+                        w = L // h
+                        if abs(h/w - H/W) < abs(best_h/best_w - H/W):
+                            best_h, best_w = h, w
+                H_actual, W_actual = best_h, best_w
+                
+            H, W = H_actual, W_actual
 
         shortcut = x
+        x = self.norm1(x)
         x = x.view(B, H, W, C)
 
         # cyclic shift
@@ -205,15 +227,28 @@ class SwinTransformerBlock(nn.Module):
             shifted_x = x
 
         # partition windows
-        x_windows = window_partition(shifted_x, self.window_size)
-        x_windows = x_windows.view(-1, self.window_size * self.window_size, C)
+        window_size_val = self.window_size[0] if isinstance(self.window_size, (list, tuple)) else self.window_size
+        
+        # pad feature maps to multiples of window size
+        pad_l = pad_t = 0
+        pad_r = (window_size_val - W % window_size_val) % window_size_val
+        pad_b = (window_size_val - H % window_size_val) % window_size_val
+        shifted_x = F.pad(shifted_x, (0, 0, pad_l, pad_r, pad_t, pad_b))
+        _, Hp, Wp, _ = shifted_x.shape
+        
+        x_windows = window_partition(shifted_x, window_size_val)
+        x_windows = x_windows.view(-1, window_size_val * window_size_val, C)
 
         # W-MSA/SW-MSA
-        attn_windows = self.attn(x_windows, mask=self.attn_mask)
+        attn_windows = self.attn(x_windows)
 
         # merge windows
-        attn_windows = attn_windows.view(-1, self.window_size, self.window_size, C)
-        shifted_x = window_reverse(attn_windows, self.window_size, H, W)
+        attn_windows = attn_windows.view(-1, window_size_val, window_size_val, C)
+        shifted_x = window_reverse(attn_windows, window_size_val, Hp, Wp)
+        
+        # unpad if necessary
+        if pad_r > 0 or pad_b > 0:
+            shifted_x = shifted_x[:, :H, :W, :].contiguous()
 
         # reverse cyclic shift
         if self.shift_size > 0:
@@ -223,27 +258,69 @@ class SwinTransformerBlock(nn.Module):
         x = x.view(B, H * W, C)
 
         # FFN
-        x = shortcut + self.drop_path(self.norm1(x))
-        x = x + self.drop_path(self.norm2(self.mlp(x)))
+        x = shortcut + self.drop_path(x)
+        x = x + self.drop_path(self.mlp(self.norm2(x)))
 
         return x
 
 
 class PatchMerging(nn.Module):
-    """Patch Merging Layer."""
-
     def __init__(self, input_resolution, dim, norm_layer=nn.LayerNorm):
         super().__init__()
         self.input_resolution = input_resolution
         self.dim = dim
         self.reduction = nn.Linear(4 * dim, 2 * dim, bias=False)
-        self.norm = norm_layer(2 * dim)
+        self.norm = norm_layer(4 * dim)
 
     def forward(self, x):
         H, W = self.input_resolution
         B, L, C = x.shape
-        assert L == H * W, "input feature has wrong size"
-        assert H % 2 == 0 and W % 2 == 0, f"x size ({H}*{W}) are not even."
+        
+        # Handle dynamic input sizes during inference
+        if L != H * W:
+            # Calculate actual H, W from input tensor size
+            # Try to maintain aspect ratio similar to expected resolution
+            aspect_ratio = W / H if H > 0 else 1
+            import math
+            H_actual = int(math.sqrt(L / aspect_ratio))
+            
+            # Ensure H_actual is at least 1 to avoid division by zero
+            H_actual = max(H_actual, 1)
+            W_actual = L // H_actual
+            
+            # Ensure exact factorization
+            while H_actual * W_actual != L and H_actual > 1:
+                H_actual -= 1
+                if H_actual <= 0:  # Prevent H_actual from becoming 0
+                    H_actual = 1
+                    break
+                W_actual = L // H_actual
+                
+            # Final fallback: if we still can't factorize properly, use simple linear arrangement
+            if H_actual * W_actual != L:
+                # Find the best factorization by trying divisors of L
+                best_h, best_w = 1, L
+                for h in range(1, int(math.sqrt(L)) + 1):
+                    if L % h == 0:
+                        w = L // h
+                        if abs(h/w - H/W) < abs(best_h/best_w - H/W):
+                            best_h, best_w = h, w
+                H_actual, W_actual = best_h, best_w
+                
+            H, W = H_actual, W_actual
+        
+        # Ensure dimensions are even for patch merging
+        if H % 2 != 0 or W % 2 != 0:
+            # Pad to make dimensions even
+            pad_h = H % 2
+            pad_w = W % 2
+            x = x.view(B, H, W, C)
+            if pad_h or pad_w:
+                x = F.pad(x, (0, 0, 0, pad_w, 0, pad_h))  # pad right and bottom
+                H = H + pad_h
+                W = W + pad_w
+                x = x.view(B, -1, C)
+                L = H * W
 
         x = x.view(B, H, W, C)
 
@@ -254,30 +331,26 @@ class PatchMerging(nn.Module):
         x = torch.cat([x0, x1, x2, x3], -1)  # B H/2 W/2 4*C
         x = x.view(B, -1, 4 * C)  # B H/2*W/2 4*C
 
-        x = self.reduction(x)
         x = self.norm(x)
+        x = self.reduction(x)
 
         return x
 
 
 class BasicLayer(nn.Module):
-    """A basic Swin Transformer layer for one stage."""
-
     def __init__(self, dim, input_resolution, depth, num_heads, window_size,
                  mlp_ratio=4., qkv_bias=True, drop=0., attn_drop=0.,
-                 drop_path=0., norm_layer=nn.LayerNorm, downsample=None, use_checkpoint=False,
-                 pretrained_window_size=0):
+                 drop_path=0., norm_layer=nn.LayerNorm, downsample=None, pretrained_window_size=0):
         super().__init__()
         self.dim = dim
         self.input_resolution = input_resolution
         self.depth = depth
-        self.use_checkpoint = use_checkpoint
 
         # build blocks
         self.blocks = nn.ModuleList([
             SwinTransformerBlock(dim=dim, input_resolution=input_resolution,
                                  num_heads=num_heads, window_size=window_size,
-                                 shift_size=0 if (i % 2 == 0) else window_size // 2,
+                                 shift_size=0 if (i % 2 == 0) else (window_size[0] if isinstance(window_size, (list, tuple)) else window_size) // 2,
                                  mlp_ratio=mlp_ratio,
                                  qkv_bias=qkv_bias,
                                  drop=drop, attn_drop=attn_drop,
@@ -349,6 +422,10 @@ class SwinTransformerV2(nn.Module):
         self.conv_stem = conv_stem
         self.num_layers = len(depths)
         self.embed_dim = d_model
+        # d_model property should reflect the final output dimension
+        # For Swin architectures, final stage has d_model * 2^(num_stages-1) channels
+        final_stage_multiplier = 2 ** (len(depths) - 1)
+        self.d_model = d_model * final_stage_multiplier  # Actual output dimension
         self.mlp_ratio = mlp_ratio
         self.window_size = window_size
         self.patch_size = patch_size
@@ -452,8 +529,8 @@ def create_swin_v2(model_cfg):
     model_cfg = model_cfg.copy()
     model_cfg.pop('backbone')
     
-    new_patch_size = model_cfg.pop('new_patch_size')
-    new_patch_stride = model_cfg.pop('new_patch_stride')
+    new_patch_size = model_cfg.pop('new_patch_size', None)
+    new_patch_stride = model_cfg.pop('new_patch_stride', None)
 
     if new_patch_size is not None:
         if new_patch_stride is None:
@@ -461,16 +538,30 @@ def create_swin_v2(model_cfg):
         model_cfg['patch_size'] = new_patch_size
         model_cfg['patch_stride'] = new_patch_stride
     
-    # Set appropriate depths and heads based on model size
-    if model_cfg.get('d_model', 384) == 384:  # Small
-        model_cfg['depths'] = [2, 2, 6, 2]
-        model_cfg['num_heads'] = [3, 6, 12, 24]
-    elif model_cfg.get('d_model', 384) == 768:  # Base
-        model_cfg['depths'] = [2, 2, 18, 2]
-        model_cfg['num_heads'] = [4, 8, 16, 32]
-    else:  # Large
-        model_cfg['depths'] = [2, 2, 18, 2]
-        model_cfg['num_heads'] = [6, 12, 24, 48]
+    # Calculate d_ff based on mlp_ratio and d_model
+    mlp_ratio = model_cfg.get('mlp_ratio', 4.0)
+    d_model = model_cfg.get('d_model', 96)
+    model_cfg['d_ff'] = int(mlp_ratio * d_model)
+    
+    # Set appropriate depths and heads based on d_model (if not already set)
+    if 'depths' not in model_cfg or 'num_heads' not in model_cfg:
+        if d_model == 96:
+            model_cfg['depths'] = [2, 2, 18, 2]  # Swin V2 Small
+            model_cfg['num_heads'] = [3, 6, 12, 24]
+        elif d_model == 128:
+            model_cfg['depths'] = [2, 2, 18, 2]
+            model_cfg['num_heads'] = [4, 8, 16, 32]
+        elif d_model == 192:
+            model_cfg['depths'] = [2, 2, 18, 2]
+            model_cfg['num_heads'] = [6, 12, 24, 48]
+        elif d_model == 384:
+            model_cfg['depths'] = [2, 2, 6, 2]
+            model_cfg['num_heads'] = [3, 6, 12, 24]
+        elif d_model == 768:
+            model_cfg['depths'] = [2, 2, 18, 2]
+            model_cfg['num_heads'] = [4, 8, 16, 32]
+        else:
+            raise ValueError(f"Unsupported d_model for Swin Transformer V2: {d_model}")
 
     model = SwinTransformerV2(**model_cfg)
     return model
