@@ -5,5 +5,5 @@ __pycache__/
 *console.log
 .claude*
 *.pth
-save_path/*
+save_path*
 save_path_swin/*

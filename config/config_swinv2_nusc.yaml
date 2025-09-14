@@ -1,0 +1,101 @@
+# Configuration for RangeViT with Swin Transformer V2 on nuScenes
+# Alternative configuration using SwinV2 with different window size
+
+# General config
+num_workers: 4
+id: 'exp_nusc_swinv2'
+
+# Data config
+dataset: 'nuScenes'
+n_classes: 17 # 16 + 1(ignored)
+
+# Train config
+has_label: true
+val_frequency: 10
+n_epochs: 150
+warmup_epochs: 10
+batch_size: 8
+batch_size_val: 1
+lr: 0.0008  # Start with same as ViT, may need adjustment
+train_result_frequency: 100
+
+# Model config - Swin Transformer V2
+vit_backbone: 'swinv2_tiny_window16_256'  # Use SwinV2-Tiny with larger window
+in_channels: 5
+patch_size: [2, 8]  # Keep range-image optimized patch size
+patch_stride: [2, 8]
+image_size: [32, 384]  # Training crop size - adjusted for window compatibility
+window_size: [32, 384]  # Sliding window size
+window_stride: [32, 256]  # Sliding window stride
+original_image_size: [32, 2048]
+
+# Stem - Keep ConvStem for range image preprocessing
+conv_stem: 'ConvStem'  # ConvStem works well with range images
+stem_base_channels: 32
+D_h: 256  # Hidden dimension of the stem
+
+# Decoder
+decoder: 'up_conv'  # Use up_conv decoder for better performance
+skip_filters: 0  # No skip connection for Swin (Swin doesn't provide ConvStem skip)
+
+# 3D refiner
+use_kpconv: true
+
+# Checkpoint model
+checkpoint: null
+pretrained_model: './pretrained_model/swinv2_tiny_patch4_window16_256.pth'
+
+# Swin-specific weight loading settings
+reuse_pos_emb: false  # SwinV2 uses relative positional bias, not absolute pos_embed
+reuse_patch_emb: false  # ConvStem handles input channels, no patch embedding reuse
+
+# Data augmentation config (same as ViT)
+augmentation:
+  # flip
+  p_flipx: 0.
+  p_flipy: 0.5
+
+  # translation
+  p_transx: 0.5
+  trans_xmin: -5
+  trans_xmax: 5
+  p_transy: 0.5
+  trans_ymin: -3
+  trans_ymax: 3
+  p_transz: 0.5
+  trans_zmin: -1
+  trans_zmax: 0.
+
+  # rotation
+  p_rot_roll: 0.5
+  rot_rollmin: -5
+  rot_rollmax: 5
+  p_rot_pitch: 0.5
+  rot_pitchmin: -5
+  rot_pitchmax: 5
+  p_rot_yaw: 0.5
+  rot_yawmin: 5
+  rot_yawmax: -5
+
+# Sensor config (same as ViT)
+sensor:
+  name: 'HDL64'
+  type: 'spherical'
+  proj_h: 32
+  proj_w: 2048
+  fov_up: 10.
+  fov_down: -30.
+  fov_left: -180
+  fov_right: 180
+  img_mean:
+    - 12.12
+    - 10.88
+    - 0.23
+    - -1.04
+    - 0.21
+  img_stds:
+    - 12.32
+    - 11.47
+    - 6.91
+    - 0.86
+    - 0.16

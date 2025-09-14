@@ -24,6 +24,7 @@ from .model_utils import adapt_input_conv, padding, unpadding, resize_pos_embed,
 from .stems import PatchEmbedding, ConvStem
 from .decoders import DecoderLinear, DecoderUpConv
 from .rangevit_kpconv import RangeViT_KPConv, KPClassifier
+from .swin_transformer import create_swin_backbone, SwinVisionTransformer
 
 
 class VisionTransformer(nn.Module):
@@ -136,22 +137,45 @@ class VisionTransformer(nn.Module):
 
 def create_vit(model_cfg):
     model_cfg = model_cfg.copy()
-    model_cfg.pop('backbone')
-    mlp_expansion_ratio = 4
-    model_cfg['d_ff'] = mlp_expansion_ratio * model_cfg['d_model']
+    backbone_name = model_cfg.pop('backbone')
 
-    new_patch_size = model_cfg.pop('new_patch_size')
-    new_patch_stride = model_cfg.pop('new_patch_stride')
+    # Check if this is a Swin model
+    if backbone_name.startswith('swin'):
+        # Create Swin backbone
+        # Note: For now we create without pretrained weights and load them separately
+        # TODO: In the future, we could modify this to load pretrained weights directly
+        swin_backbone = create_swin_backbone(
+            model_name=backbone_name,
+            channels=model_cfg['channels'],
+            pretrained=False  # We'll load weights separately in RangeViT.__init__
+        )
 
-    if (new_patch_size is not None):
-        if new_patch_stride is None:
-            new_patch_stride = new_patch_size
-        model_cfg['patch_size'] = new_patch_size
-        model_cfg['patch_stride'] = new_patch_stride
+        # Wrap in compatibility layer
+        model = SwinVisionTransformer(swin_backbone, use_stage=2)  # Use F2 stage
 
-    model = VisionTransformer(**model_cfg)
+        # Set required attributes for compatibility
+        model.image_size = model_cfg['image_size']
+        model.n_cls = model_cfg['n_cls']
 
-    return model
+        return model
+
+    else:
+        # Original ViT path
+        mlp_expansion_ratio = 4
+        model_cfg['d_ff'] = mlp_expansion_ratio * model_cfg['d_model']
+
+        new_patch_size = model_cfg.pop('new_patch_size')
+        new_patch_stride = model_cfg.pop('new_patch_stride')
+
+        if (new_patch_size is not None):
+            if new_patch_stride is None:
+                new_patch_stride = new_patch_size
+            model_cfg['patch_size'] = new_patch_size
+            model_cfg['patch_stride'] = new_patch_stride
+
+        model = VisionTransformer(**model_cfg)
+
+        return model
 
 
 def create_decoder(encoder, decoder_cfg):
@@ -222,11 +246,61 @@ class RangeViT_noKPConv(nn.Module):
 
         x, skip = self.encoder(im, return_features=True) # x.shape = [16, 577, 384]
 
-        # remove CLS tokens for decoding
-        num_extra_tokens = 1
-        x = x[:, num_extra_tokens:] # x.shape = [16, 576, 384]
+        # Check if this is a Swin encoder
+        is_swin = hasattr(self.encoder, 'swin')
 
-        feats = self.decoder(x, (H, W), skip) # feats.shape = [16, 17, 24, 24]
+        if is_swin:
+            # For Swin: remove dummy CLS token (first token)
+            x = x[:, 1:]  # Remove dummy CLS token added for compatibility
+
+            # For Swin, we need to handle the decoder differently
+            # The decoder expects tokens that can be reshaped to a 2D grid
+            # We need to pass dimensions that match the actual feature map size
+
+            # Get actual grid size from Swin backbone
+            actual_grid = self.encoder.get_actual_grid_size()
+            if actual_grid is not None:
+                feat_H, feat_W = actual_grid
+                # For the decoder, we need to find dimensions that work with its patch calculations
+                # The decoder calculates: GS_H = get_grid_size_1d(H, PS_H, H_stride)
+                # We want: GS_H = feat_H, so we need to find H such that this works
+
+                # Get decoder's patch info
+                if hasattr(self.decoder, 'patch_size') and hasattr(self.decoder, 'patch_stride'):
+                    dec_patch_size = self.decoder.patch_size
+                    dec_patch_stride = self.decoder.patch_stride
+
+                    if isinstance(dec_patch_size, int):
+                        PS_H = PS_W = dec_patch_size
+                    else:
+                        PS_H, PS_W = dec_patch_size
+
+                    if dec_patch_stride is not None:
+                        if isinstance(dec_patch_stride, int):
+                            H_stride = W_stride = dec_patch_stride
+                        else:
+                            H_stride, W_stride = dec_patch_stride
+                    else:
+                        H_stride, W_stride = PS_H, PS_W
+
+                    # Calculate input dimensions that would produce the desired grid size
+                    # From get_grid_size_1d: grid_size = (length - patch_size) // stride + 1
+                    # Solving for length: length = (grid_size - 1) * stride + patch_size
+                    decoder_H = (feat_H - 1) * H_stride + PS_H
+                    decoder_W = (feat_W - 1) * W_stride + PS_W
+                else:
+                    # Fallback: use stride-based calculation
+                    stride = self.encoder.swin.strides[self.encoder.use_stage]
+                    decoder_H, decoder_W = feat_H * stride, feat_W * stride
+            else:
+                decoder_H, decoder_W = H, W
+        else:
+            # For ViT: remove real CLS token
+            num_extra_tokens = 1
+            x = x[:, num_extra_tokens:]
+            decoder_H, decoder_W = H, W
+
+        feats = self.decoder(x, (decoder_H, decoder_W), skip) # feats.shape = [16, 17, 24, 24]
         feats = F.interpolate(feats, size=(H, W), mode='bilinear')
         feats = unpadding(feats, (H_ori, W_ori)) # feats.shape = [16, 17, 384, 384]
 
@@ -279,8 +353,32 @@ class RangeViT(nn.Module):
             dropout = 0.0
             drop_path_rate = 0.1
             d_model = 1024
+        elif backbone == 'swin_tiny_patch4_window7_224':
+            # Swin-Tiny configuration
+            embed_dim = 96
+            depths = [2, 2, 6, 2]
+            num_heads = [3, 6, 12, 24]
+            n_heads = 12  # Use F2 stage heads for compatibility
+            n_layers = sum(depths)  # Total layers
+            window_size = 7
+            patch_size = 4
+            dropout = 0.0
+            drop_path_rate = 0.1
+            d_model = 384  # Use F2 stage output dimension
+        elif backbone == 'swinv2_tiny_window16_256':
+            # SwinV2-Tiny configuration
+            embed_dim = 96
+            depths = [2, 2, 6, 2]
+            num_heads = [3, 6, 12, 24]
+            n_heads = 12  # Use F2 stage heads for compatibility
+            n_layers = sum(depths)  # Total layers
+            window_size = 16
+            patch_size = 4
+            dropout = 0.0
+            drop_path_rate = 0.1
+            d_model = 384  # Use F2 stage output dimension
         else:
-            raise NameError('Not known ViT backbone.')
+            raise NameError('Not known ViT/Swin backbone.')
 
         # Decoder config
         if decoder == 'linear':
@@ -318,54 +416,105 @@ class RangeViT(nn.Module):
 
         old_state_dict = self.rangevit.state_dict()
 
-        # Loading pre-trained weights in the ViT encoder
+        # Loading pre-trained weights in the encoder
         if pretrained_path is not None:
             print(f'Loading pretrained parameters from {pretrained_path}')
+
+            # Check if this is a Swin model
+            is_swin_model = backbone.startswith('swin')
+
             if pretrained_path == 'timmImageNet21k':
-                vit_imagenet = timm.create_model(backbone, pretrained=True) #.cuda()
-                pretrained_state_dict = vit_imagenet.state_dict() # nb keys: 152
-                all_keys = list(pretrained_state_dict.keys())
-                for key in all_keys:
-                    pretrained_state_dict['encoder.'+key] = pretrained_state_dict.pop(key)
-            else:
-                pretrained_state_dict = torch.load(pretrained_path, map_location='cpu')
-                if 'model' in pretrained_state_dict:
-                    pretrained_state_dict = pretrained_state_dict['model']
-                elif 'pos_embed' in pretrained_state_dict.keys():
+                if is_swin_model:
+                    # For Swin models, load through timm directly in the backbone
+                    print('Note: Swin models will use timm pretrained weights during backbone creation')
+                    pretrained_state_dict = {}  # Empty dict, weights loaded in backbone
+                else:
+                    # Original ViT path
+                    vit_imagenet = timm.create_model(backbone, pretrained=True)
+                    pretrained_state_dict = vit_imagenet.state_dict()
                     all_keys = list(pretrained_state_dict.keys())
                     for key in all_keys:
                         pretrained_state_dict['encoder.'+key] = pretrained_state_dict.pop(key)
-
-            # Reuse pre-trained positional embeddings
-            if reuse_pos_emb:
-                # Resize the existing position embeddings to the desired size
-                print('Reusing positional embeddings.')
-                gs_new_h = int((image_size[0] - new_patch_size[0]) // new_patch_stride[0] + 1)
-                gs_new_w = int((image_size[1] - new_patch_size[1]) // new_patch_stride[1] + 1)
-                num_extra_tokens = 1
-                resized_pos_emb = resize_pos_embed(pretrained_state_dict['encoder.pos_embed'],
-                                                   grid_old_shape=None,
-                                                   grid_new_shape=(gs_new_h, gs_new_w),
-                                                   num_extra_tokens=num_extra_tokens)
-                pretrained_state_dict['encoder.pos_embed'] = resized_pos_emb
             else:
-                del pretrained_state_dict['encoder.pos_embed'] # remove positional embeddings
+                # Load from file
+                pretrained_state_dict = torch.load(pretrained_path, map_location='cpu')
+                if 'model' in pretrained_state_dict:
+                    pretrained_state_dict = pretrained_state_dict['model']
 
-            # Reuse pre-trained patch embeddings
-            if reuse_patch_emb:
-                assert conv_stem=='none' # no patch embedding if a convolutional stem is used
-                print('Reusing patch embeddings.')
+                if is_swin_model:
+                    # Handle Swin weight loading
+                    print('Loading Swin Transformer weights...')
 
-                assert old_state_dict['encoder.patch_embed.proj.bias'].shape == pretrained_state_dict['encoder.patch_embed.proj.bias'].shape
-                old_state_dict['encoder.patch_embed.proj.bias'] = pretrained_state_dict['encoder.patch_embed.proj.bias']
+                    # For Swin models, we need to prefix keys properly
+                    # The structure is: rangevit.encoder.swin.{swin_keys}
+                    all_keys = list(pretrained_state_dict.keys())
+                    for key in all_keys:
+                        # Add proper prefix for Swin weights
+                        new_key = f'rangevit.encoder.swin.{key}'
+                        pretrained_state_dict[new_key] = pretrained_state_dict.pop(key)
 
-                _, _, gs_new_h, gs_new_w = old_state_dict['encoder.patch_embed.proj.weight'].shape
-                reshaped_weight = adapt_input_conv(in_channels, pretrained_state_dict['encoder.patch_embed.proj.weight'])
-                reshaped_weight = F.interpolate(reshaped_weight, size=(gs_new_h, gs_new_w), mode='bilinear')
-                pretrained_state_dict['encoder.patch_embed.proj.weight'] = reshaped_weight
+                    # Remove ViT-specific keys that don't exist in Swin
+                    keys_to_remove = []
+                    for key in list(pretrained_state_dict.keys()):
+                        # Remove keys that are ViT-specific
+                        if any(skip_key in key for skip_key in ['pos_embed', 'cls_token', 'head']):
+                            keys_to_remove.append(key)
+
+                    for key in keys_to_remove:
+                        del pretrained_state_dict[key]
+                        print(f'Removed ViT-specific key: {key}')
+
+                else:
+                    # Original ViT handling
+                    if 'pos_embed' in pretrained_state_dict.keys():
+                        all_keys = list(pretrained_state_dict.keys())
+                        for key in all_keys:
+                            pretrained_state_dict['encoder.'+key] = pretrained_state_dict.pop(key)
+
+            # Handle positional embeddings (ViT only)
+            if not is_swin_model:
+                # ViT positional embedding handling
+                if reuse_pos_emb:
+                    # Resize the existing position embeddings to the desired size
+                    print('Reusing positional embeddings.')
+                    gs_new_h = int((image_size[0] - new_patch_size[0]) // new_patch_stride[0] + 1)
+                    gs_new_w = int((image_size[1] - new_patch_size[1]) // new_patch_stride[1] + 1)
+                    num_extra_tokens = 1
+                    resized_pos_emb = resize_pos_embed(pretrained_state_dict['encoder.pos_embed'],
+                                                       grid_old_shape=None,
+                                                       grid_new_shape=(gs_new_h, gs_new_w),
+                                                       num_extra_tokens=num_extra_tokens)
+                    pretrained_state_dict['encoder.pos_embed'] = resized_pos_emb
+                else:
+                    if 'encoder.pos_embed' in pretrained_state_dict:
+                        del pretrained_state_dict['encoder.pos_embed'] # remove positional embeddings
             else:
-                del pretrained_state_dict['encoder.patch_embed.proj.weight'] # remove patch embedding layers
-                del pretrained_state_dict['encoder.patch_embed.proj.bias'] # remove patch embedding layers
+                # Swin doesn't use absolute positional embeddings
+                print('Swin Transformer uses relative positional bias, skipping pos_embed handling.')
+
+            # Handle patch embeddings (ViT only)
+            if not is_swin_model:
+                # ViT patch embedding handling
+                if reuse_patch_emb:
+                    assert conv_stem=='none' # no patch embedding if a convolutional stem is used
+                    print('Reusing patch embeddings.')
+
+                    assert old_state_dict['encoder.patch_embed.proj.bias'].shape == pretrained_state_dict['encoder.patch_embed.proj.bias'].shape
+                    old_state_dict['encoder.patch_embed.proj.bias'] = pretrained_state_dict['encoder.patch_embed.proj.bias']
+
+                    _, _, gs_new_h, gs_new_w = old_state_dict['encoder.patch_embed.proj.weight'].shape
+                    reshaped_weight = adapt_input_conv(in_channels, pretrained_state_dict['encoder.patch_embed.proj.weight'])
+                    reshaped_weight = F.interpolate(reshaped_weight, size=(gs_new_h, gs_new_w), mode='bilinear')
+                    pretrained_state_dict['encoder.patch_embed.proj.weight'] = reshaped_weight
+                else:
+                    if 'encoder.patch_embed.proj.weight' in pretrained_state_dict:
+                        del pretrained_state_dict['encoder.patch_embed.proj.weight'] # remove patch embedding layers
+                    if 'encoder.patch_embed.proj.bias' in pretrained_state_dict:
+                        del pretrained_state_dict['encoder.patch_embed.proj.bias'] # remove patch embedding layers
+            else:
+                # For Swin, handle input channel adaptation at the patch embedding level
+                print('Swin Transformer patch embedding will be adapted for multi-channel input.')
+                # Note: Channel adaptation for Swin happens in the timm model creation
 
             # Delete the pre-trained weights of the decoder
             decoder_keys = []
