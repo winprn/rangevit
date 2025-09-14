@@ -479,7 +479,7 @@ class SwinTransformerV2(nn.Module):
                  pretrain_img_size=224,
                  patch_size=4,
                  in_chans=3,
-                 embed_dim=96,
+                 d_model=96,
                  depths=[2, 2, 6, 2],
                  num_heads=[3, 6, 12, 24],
                  window_size=7,
@@ -499,7 +499,7 @@ class SwinTransformerV2(nn.Module):
 
         self.pretrain_img_size = pretrain_img_size
         self.num_layers = len(depths)
-        self.embed_dim = embed_dim
+        self.embed_dim = d_model
         self.ape = ape
         self.patch_norm = patch_norm
         self.out_indices = out_indices
@@ -507,7 +507,7 @@ class SwinTransformerV2(nn.Module):
 
         # split image into non-overlapping patches
         self.patch_embed = PatchEmbed(
-            patch_size=patch_size, in_chans=in_chans, embed_dim=embed_dim,
+            patch_size=patch_size, in_chans=in_chans, embed_dim=d_model,
             norm_layer=norm_layer if self.patch_norm else None)
 
         # absolute position embedding
@@ -516,7 +516,7 @@ class SwinTransformerV2(nn.Module):
             patch_size = to_2tuple(patch_size)
             patches_resolution = [pretrain_img_size[0] // patch_size[0], pretrain_img_size[1] // patch_size[1]]
 
-            self.absolute_pos_embed = nn.Parameter(torch.zeros(1, embed_dim, patches_resolution[0], patches_resolution[1]))
+            self.absolute_pos_embed = nn.Parameter(torch.zeros(1, d_model, patches_resolution[0], patches_resolution[1]))
             trunc_normal_(self.absolute_pos_embed, std=.02)
 
         self.pos_drop = nn.Dropout(p=drop_rate)
@@ -528,7 +528,7 @@ class SwinTransformerV2(nn.Module):
         self.layers = nn.ModuleList()
         for i_layer in range(self.num_layers):
             layer = BasicLayer(
-                dim=int(embed_dim * 2 ** i_layer),
+                dim=int(d_model * 2 ** i_layer),
                 depth=depths[i_layer],
                 num_heads=num_heads[i_layer],
                 window_size=window_size,
@@ -543,7 +543,7 @@ class SwinTransformerV2(nn.Module):
                 use_checkpoint=use_checkpoint)
             self.layers.append(layer)
 
-        num_features = [int(embed_dim * 2 ** i) for i in range(self.num_layers)]
+        num_features = [int(d_model * 2 ** i) for i in range(self.num_layers)]
         self.num_features = num_features
 
         # add a norm layer for each output
