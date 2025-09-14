@@ -628,3 +628,31 @@ class SwinTransformer(nn.Module):
         """Convert the model into training mode while keep layers freezed."""
         super(SwinTransformer, self).train(mode)
         self._freeze_stages()
+
+def create_swin(model_cfg):
+    """Create Swin Transformer V2 model."""
+    model_cfg = model_cfg.copy()
+    model_cfg.pop('backbone')
+    
+    new_patch_size = model_cfg.pop('new_patch_size')
+    new_patch_stride = model_cfg.pop('new_patch_stride')
+
+    if new_patch_size is not None:
+        if new_patch_stride is None:
+            new_patch_stride = new_patch_size
+        model_cfg['patch_size'] = new_patch_size
+        model_cfg['patch_stride'] = new_patch_stride
+    
+    # Set appropriate depths and heads based on model size
+    if model_cfg.get('d_model', 384) == 384:  # Small
+        model_cfg['depths'] = [2, 2, 6, 2]
+        model_cfg['num_heads'] = [3, 6, 12, 24]
+    elif model_cfg.get('d_model', 384) == 768:  # Base
+        model_cfg['depths'] = [2, 2, 18, 2]
+        model_cfg['num_heads'] = [4, 8, 16, 32]
+    else:  # Large
+        model_cfg['depths'] = [2, 2, 18, 2]
+        model_cfg['num_heads'] = [6, 12, 24, 48]
+
+    model = SwinTransformerV2(**model_cfg)
+    return model

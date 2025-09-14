@@ -24,7 +24,7 @@ from .model_utils import adapt_input_conv, padding, unpadding, resize_pos_embed,
 from .stems import PatchEmbedding, ConvStem
 from .decoders import DecoderLinear, DecoderUpConv
 from .rangevit_kpconv import RangeViT_KPConv, KPClassifier
-from .swin_transformer_v2 import SwinTransformerV2, create_swin_v2
+from .swin_transformer_v2 import SwinTransformer, create_swin
 
 
 class VisionTransformer(nn.Module):
