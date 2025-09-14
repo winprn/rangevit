@@ -12,7 +12,7 @@ import torch.utils.checkpoint as checkpoint
 import numpy as np
 from timm.models.layers import DropPath, to_2tuple, trunc_normal_
 
-from mmcv import load_checkpoint
+# from mmcv_custom import load_checkpoint
 from mmseg.utils import get_root_logger
 from ..builder import BACKBONES
 
@@ -591,7 +591,7 @@ class SwinTransformer(nn.Module):
         if isinstance(pretrained, str):
             self.apply(_init_weights)
             logger = get_root_logger()
-            load_checkpoint(self, pretrained, strict=False, logger=logger)
+            # load_checkpoint(self, pretrained, strict=False, logger=logger)
         elif pretrained is None:
             self.apply(_init_weights)
         else:
