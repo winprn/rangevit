@@ -629,7 +629,7 @@ class SwinTransformerV2(nn.Module):
         super(SwinTransformerV2, self).train(mode)
         self._freeze_stages()
 
-def create_swin(model_cfg):
+def create_swin_v2(model_cfg):
     """Create Swin Transformer V2 model."""
     model_cfg = model_cfg.copy()
     model_cfg.pop('backbone')
