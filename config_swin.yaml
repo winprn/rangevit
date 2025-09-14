@@ -11,17 +11,18 @@ dataset:
   name: 'SemanticKitti'
   n_classes: 20  # Keep for compatibility
   original_image_size: [64, 2048]
+  window_size: [64, 384] # sliding window size
   window_stride: [64, 256]
-use_trainval: true  # Use both train and validation sequences for training
+use_trainval: false  # Use separate train/val splits
 
 # Train config
 has_label: true
-val_frequency: 10
+val_frequency: 1
 n_epochs: 60
 warmup_epochs: 10
-batch_size: 4
+batch_size: 8
 batch_size_val: 1
-lr: 0.0006
+lr: 0.0002
 train_result_frequency: 100
 
 # Model config
@@ -36,8 +37,8 @@ d_model: 96
 depths: [2, 2, 18, 2]
 num_heads: [3, 6, 12, 24]
 mlp_ratio: 4.0
-dropout: 0.0
-drop_path_rate: 0.3
+dropout: 0.1
+drop_path_rate: 0.1
 
 # Stem
 conv_stem: 'ConvStem'

@@ -183,38 +183,20 @@ class SwinTransformerBlock(nn.Module):
         H, W = self.input_resolution
         B, L, C = x.shape
         
-        # Handle dynamic input sizes during inference
+        # Handle dynamic input sizes during inference - simplified
         if L != H * W:
-            # Calculate actual H, W from input tensor size
-            # Try to maintain aspect ratio similar to expected resolution
-            aspect_ratio = W / H if H > 0 else 1
+            # Use simple square-like factorization
             import math
-            H_actual = int(math.sqrt(L / aspect_ratio))
+            sqrt_L = int(math.sqrt(L))
             
-            # Ensure H_actual is at least 1 to avoid division by zero
-            H_actual = max(H_actual, 1)
-            W_actual = L // H_actual
-            
-            # Ensure exact factorization
-            while H_actual * W_actual != L and H_actual > 1:
-                H_actual -= 1
-                if H_actual <= 0:  # Prevent H_actual from becoming 0
-                    H_actual = 1
+            # Find the closest factors
+            for h in range(sqrt_L, 0, -1):
+                if L % h == 0:
+                    H, W = h, L // h
                     break
-                W_actual = L // H_actual
-                
-            # Final fallback: if we still can't factorize properly, use simple linear arrangement
-            if H_actual * W_actual != L:
-                # Find the best factorization by trying divisors of L
-                best_h, best_w = 1, L
-                for h in range(1, int(math.sqrt(L)) + 1):
-                    if L % h == 0:
-                        w = L // h
-                        if abs(h/w - H/W) < abs(best_h/best_w - H/W):
-                            best_h, best_w = h, w
-                H_actual, W_actual = best_h, best_w
-                
-            H, W = H_actual, W_actual
+            else:
+                # Fallback: use 1 x L
+                H, W = 1, L
 
         shortcut = x
         x = self.norm1(x)
@@ -276,38 +258,20 @@ class PatchMerging(nn.Module):
         H, W = self.input_resolution
         B, L, C = x.shape
         
-        # Handle dynamic input sizes during inference
+        # Handle dynamic input sizes during inference - simplified
         if L != H * W:
-            # Calculate actual H, W from input tensor size
-            # Try to maintain aspect ratio similar to expected resolution
-            aspect_ratio = W / H if H > 0 else 1
+            # Use simple square-like factorization
             import math
-            H_actual = int(math.sqrt(L / aspect_ratio))
+            sqrt_L = int(math.sqrt(L))
             
-            # Ensure H_actual is at least 1 to avoid division by zero
-            H_actual = max(H_actual, 1)
-            W_actual = L // H_actual
-            
-            # Ensure exact factorization
-            while H_actual * W_actual != L and H_actual > 1:
-                H_actual -= 1
-                if H_actual <= 0:  # Prevent H_actual from becoming 0
-                    H_actual = 1
+            # Find the closest factors
+            for h in range(sqrt_L, 0, -1):
+                if L % h == 0:
+                    H, W = h, L // h
                     break
-                W_actual = L // H_actual
-                
-            # Final fallback: if we still can't factorize properly, use simple linear arrangement
-            if H_actual * W_actual != L:
-                # Find the best factorization by trying divisors of L
-                best_h, best_w = 1, L
-                for h in range(1, int(math.sqrt(L)) + 1):
-                    if L % h == 0:
-                        w = L // h
-                        if abs(h/w - H/W) < abs(best_h/best_w - H/W):
-                            best_h, best_w = h, w
-                H_actual, W_actual = best_h, best_w
-                
-            H, W = H_actual, W_actual
+            else:
+                # Fallback: use 1 x L
+                H, W = 1, L
         
         # Ensure dimensions are even for patch merging
         if H % 2 != 0 or W % 2 != 0:
@@ -422,10 +386,8 @@ class SwinTransformerV2(nn.Module):
         self.conv_stem = conv_stem
         self.num_layers = len(depths)
         self.embed_dim = d_model
-        # d_model property should reflect the final output dimension
-        # For Swin architectures, final stage has d_model * 2^(num_stages-1) channels
-        final_stage_multiplier = 2 ** (len(depths) - 1)
-        self.d_model = d_model * final_stage_multiplier  # Actual output dimension
+        # Keep d_model consistent with decoder expectations
+        self.d_model = d_model  # Keep original dimension for decoder compatibility
         self.mlp_ratio = mlp_ratio
         self.window_size = window_size
         self.patch_size = patch_size
@@ -486,7 +448,12 @@ class SwinTransformerV2(nn.Module):
             )
             self.layers.append(layer)
 
-        self.norm = nn.LayerNorm(d_model * (2 ** (self.num_layers - 1)))
+        # Use final layer dimension for norm
+        final_dim = d_model * (2 ** (self.num_layers - 1))
+        self.norm = nn.LayerNorm(final_dim)
+        
+        # Add projection layer to match decoder expectations
+        self.final_proj = nn.Linear(final_dim, d_model)
         
         self.apply(self._init_weights)
 
@@ -518,6 +485,30 @@ class SwinTransformerV2(nn.Module):
             features.append(x)
         
         x = self.norm(x)
+        x = self.final_proj(x)  # Project to decoder expected dimension
+        
+        # Ensure output format matches decoder expectations
+        # The decoder expects (B, L, C) where L = grid_H * grid_W
+        # After Swin layers, we need to ensure proper spatial arrangement
+        B, L, C = x.shape
+        
+        # Calculate expected grid size based on original image and patch stride
+        expected_H = H // self.patch_stride[0]
+        expected_W = W // self.patch_stride[1]
+        expected_L = expected_H * expected_W
+        
+        # If the current tensor length doesn't match expected, we need to reshape properly
+        if L != expected_L:
+            # This can happen due to patch merging in Swin layers
+            # We'll interpolate to match the expected output size
+            import math
+            current_H = int(math.sqrt(L))
+            current_W = L // current_H
+            
+            # Reshape to spatial format, interpolate, then flatten back
+            x_spatial = x.view(B, current_H, current_W, C).permute(0, 3, 1, 2)  # B, C, H, W
+            x_spatial = F.interpolate(x_spatial, size=(expected_H, expected_W), mode='bilinear', align_corners=False)
+            x = x_spatial.permute(0, 2, 3, 1).view(B, expected_L, C)  # B, L, C
         
         if return_features:
             return x, skip, features

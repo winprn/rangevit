@@ -94,8 +94,9 @@ class Experiment(object):
         torch.manual_seed(self.settings.seed)
         if torch.cuda.is_available():
             torch.cuda.manual_seed(self.settings.seed)
-            torch.cuda.set_device("cuda:0")
+            torch.cuda.set_device(torch.cuda.current_device())
             torch.backends.cudnn.benchmark = True
+            print(f"CUDA Info - Available: {torch.cuda.is_available()}, Current device: {torch.cuda.current_device()}, Device count: {torch.cuda.device_count()}, Device name: {torch.cuda.get_device_name()}")
         np.random.seed(self.settings.seed)
 
         # Init checkpoint

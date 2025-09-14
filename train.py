@@ -51,14 +51,18 @@ class Trainer(object):
 
         if tools.is_dist_avail_and_initialized():
             self.model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(self.model).cuda()
+
+            print(f"Using DistributedDataParallel with GPUs: {self.settings.gpu}")
             self.model = nn.parallel.DistributedDataParallel(
                 	self.model, device_ids=[self.settings.gpu],
                     find_unused_parameters=True)
 
         # Get metrics
         self.metrics = utils.metrics.IOUEval(
-            n_classes=self.settings.n_classes, device=torch.device('cpu'),
-            ignore=self.ignore_class, is_distributed=self.settings.distributed)
+            n_classes=self.settings.n_classes, 
+            device=torch.device('cpu'),
+            ignore=self.ignore_class, 
+            is_distributed=self.settings.distributed)
         self.metrics.reset()
 
         # Define scheduler
@@ -244,6 +248,9 @@ class Trainer(object):
         if mode == 'Train':
             dataloader = self.train_loader
             self.model.train()
+            # Print CUDA info at start of training
+            if torch.cuda.is_available():
+                print(f"[CUDA INFO] Device: {torch.cuda.current_device()}, Name: {torch.cuda.get_device_name()}, Count: {torch.cuda.device_count()}")
             if self.train_sampler is not None:
                 self.train_sampler.set_epoch(epoch)
         elif mode == 'Validation':
@@ -424,6 +431,9 @@ class Trainer(object):
         if mode == 'Train':
             dataloader = self.train_loader
             self.model.train()
+            # Print CUDA info at start of training
+            if torch.cuda.is_available():
+                print(f"[CUDA INFO] Device: {torch.cuda.current_device()}, Name: {torch.cuda.get_device_name()}, Count: {torch.cuda.device_count()}")
             if self.train_sampler is not None:
                 self.train_sampler.set_epoch(epoch)
         elif mode == 'Validation':

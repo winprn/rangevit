@@ -234,8 +234,8 @@ class RangeViT_noKPConv(nn.Module):
 
         x, skip = self.encoder(im, return_features=True)
 
-        # Remove CLS tokens for decoding (only for ViT, not Swin)
-        if not isinstance(self.encoder, SwinTransformerV2):
+        # Remove CLS tokens for decoding (only for ViT, not Swin)  
+        if hasattr(self.encoder, 'cls_token') and not hasattr(self.encoder, 'layers'):
             num_extra_tokens = 1
             x = x[:, num_extra_tokens:]
 
@@ -481,5 +481,5 @@ if __name__ == '__main__':
     pknn = torch.randint(0, 1000, (1000, 16))
     num_points = torch.tensor([1000])
     predictions = model(x, px, py, pxyz, pknn, num_points)
-    print(predictions.shape)
-    print(model.counter_model_parameters())
+    # print(predictions.shape)
+    # print(model.counter_model_parameters())
