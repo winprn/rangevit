@@ -246,16 +246,45 @@ class SwinVisionTransformer(nn.Module):
         B, C, H, W = im.shape
         self.image_size = (H, W)  # Store for compatibility
 
+        # Reshape to square for pretrained SwinV2 compatibility
+        # Most pretrained Swin models expect square inputs (224x224, 256x256, etc.)
+        target_size = 256  # Standard size for swinv2_tiny_window16_256
+
+        if H != target_size or W != target_size:
+            # Resize to square, preserving aspect ratio with padding
+            im_resized = torch.nn.functional.interpolate(
+                im, size=(target_size, target_size), mode='bilinear', align_corners=False
+            )
+        else:
+            im_resized = im
+
         # Get all hierarchical features from Swin
-        multi_scale_features = self.swin(im)  # [F0, F1, F2, F3]
+        multi_scale_features = self.swin(im_resized)  # [F0, F1, F2, F3]
 
         # Use specified stage (default F2 for Phase 1)
         selected_feature = multi_scale_features[self.use_stage]  # (B, D, H/stride, W/stride)
 
+        # If we resized input, we need to adjust feature map size back
+        feat_B, feat_D, feat_H, feat_W = selected_feature.shape
+
+        if H != target_size or W != target_size:
+            # Calculate expected feature map size based on original input
+            # Assuming F2 stage has stride 16 for Swin-Tiny
+            expected_feat_H = H // 16
+            expected_feat_W = W // 16
+
+            # Resize feature map back to expected proportions
+            selected_feature = torch.nn.functional.interpolate(
+                selected_feature,
+                size=(expected_feat_H, expected_feat_W),
+                mode='bilinear',
+                align_corners=False
+            )
+            feat_B, feat_D, feat_H, feat_W = selected_feature.shape
+
         # Convert to token format like ViT
         # ViT returns (B, N+1, D) where N+1 includes CLS token
         # We'll return (B, N, D) and handle CLS token removal in the caller
-        feat_B, feat_D, feat_H, feat_W = selected_feature.shape
         tokens = selected_feature.flatten(2).transpose(1, 2)  # (B, N, D) where N = feat_H * feat_W
 
         # Store the actual grid size for decoder compatibility
@@ -309,6 +338,12 @@ def create_swin_backbone(
             'depths': [2, 2, 18, 2],
             'num_heads': [4, 8, 16, 32],
             'window_size': 7,
+        },
+        'swinv2_tiny_window16_256': {
+            'embed_dim': 96,
+            'depths': [2, 2, 6, 2],
+            'num_heads': [3, 6, 12, 24],
+            'window_size': 16,
         },
         'swinv2_tiny_window16_256': {
             'embed_dim': 96,

@@ -377,6 +377,18 @@ class RangeViT(nn.Module):
             dropout = 0.0
             drop_path_rate = 0.1
             d_model = 384  # Use F2 stage output dimension
+        elif backbone == 'swinv2_tiny_window16_256':
+            # SwinV2-Tiny configuration (correct timm naming)
+            embed_dim = 96
+            depths = [2, 2, 6, 2]
+            num_heads = [3, 6, 12, 24]
+            n_heads = 12  # Use F2 stage heads for compatibility
+            n_layers = sum(depths)  # Total layers
+            window_size = 16
+            patch_size = 4
+            dropout = 0.0
+            drop_path_rate = 0.1
+            d_model = 384  # Use F2 stage output dimension
         else:
             raise NameError('Not known ViT/Swin backbone.')
 
@@ -531,7 +543,17 @@ class RangeViT(nn.Module):
         stats = {}
         stats['total_num_parameters'] = count_parameters(self.rangevit)
         stats['decoder_num_parameters'] = count_parameters(self.rangevit.decoder)
-        stats['stem_num_parameters'] = count_parameters(self.rangevit.encoder.patch_embed)
+
+        # Handle both ViT and Swin models
+        if hasattr(self.rangevit.encoder, 'patch_embed'):
+            # Original ViT model
+            stats['stem_num_parameters'] = count_parameters(self.rangevit.encoder.patch_embed)
+        elif hasattr(self.rangevit.encoder, 'swin'):
+            # Swin model - count patch embedding in the backbone
+            stats['stem_num_parameters'] = count_parameters(self.rangevit.encoder.swin.swin.patch_embed) if hasattr(self.rangevit.encoder.swin.swin, 'patch_embed') else 0
+        else:
+            stats['stem_num_parameters'] = 0
+
         stats['encoder_num_parameters'] = count_parameters(self.rangevit.encoder) - stats['stem_num_parameters']
         return stats
 

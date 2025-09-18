@@ -452,6 +452,11 @@ class Trainer(object):
             input_feature = batch_dict['input2d'].cuda(non_blocking=True)
             assert self.settings.in_channels == 5
 
+            # Debug: Check for NaN/Inf in input
+            if mode == 'Validation' and (torch.isnan(input_feature).any() or torch.isinf(input_feature).any()):
+                print(f"NaN/Inf detected in input_feature!")
+                input_feature = torch.nan_to_num(input_feature, nan=0.0, posinf=1e6, neginf=-1e6)
+
             # 3D inputs
             py = batch_dict['py'].cuda(non_blocking=True)
             px = batch_dict['px'].cuda(non_blocking=True)
@@ -502,13 +507,28 @@ class Trainer(object):
                             batch_size=input_feature.shape[0],
                             use_kpconv=True)
 
+                        # Debug: Check for NaN/Inf in 2D features
+                        if torch.isnan(output_features2d).any() or torch.isinf(output_features2d).any():
+                            print(f"NaN/Inf detected in output_features2d!")
+                            output_features2d = torch.nan_to_num(output_features2d, nan=0.0, posinf=1e6, neginf=-1e6)
+
                         output_features2d = output_features2d.unsqueeze(0) # [C, H, W] ==> [1, C, H, W]
 
                         # Apply KPConv layer
                         output3d = model_without_ddp.rangevit.kpclassifier(
                             output_features2d, px, py, pxyz, knns, num_points)
 
+                        # Debug: Check for NaN/Inf in 3D output
+                        if torch.isnan(output3d).any() or torch.isinf(output3d).any():
+                            print(f"NaN/Inf detected in output3d!")
+                            output3d = torch.nan_to_num(output3d, nan=0.0, posinf=1e6, neginf=-1e6)
+
                     output3d_softmax = F.softmax(output3d, dim=1)
+
+                    # Debug: Check for NaN/Inf in softmax output
+                    if torch.isnan(output3d_softmax).any() or torch.isinf(output3d_softmax).any():
+                        print(f"NaN/Inf detected in output3d_softmax!")
+                        output3d_softmax = torch.nan_to_num(output3d_softmax, nan=1.0/output3d_softmax.shape[1])
 
                     # Loss calculation
                     total_loss, loss_lovasz, loss_focal = self.compute_losses(
@@ -529,6 +549,9 @@ class Trainer(object):
                 index = batch_dict['index']
                 assert index.shape[0] == 1
                 index = index.item()
+
+                print(f"Saving results to: {save_results_path}")
+
                 if self.settings.dataset == 'nuScenes':
                     pred_path = os.path.join(save_results_path, 'lidarseg', self.data_split)
                     nu_dataset = self.val_loader.dataset.dataset
@@ -537,6 +560,7 @@ class Trainer(object):
                         os.makedirs(pred_path)
                     pred_result_path = os.path.join(pred_path, '{}_lidarseg.bin'.format(lidar_token))
                     pred_np.tofile(pred_result_path)
+                    print(f"Saved: {pred_result_path}")
 
                 elif self.settings.dataset == 'SemanticKitti':
                     sk_dataset = self.val_loader.dataset.dataset
@@ -547,6 +571,7 @@ class Trainer(object):
                         os.makedirs(pred_path)
                     pred_result_path = os.path.join(pred_path, '{}.label'.format(frame_id))
                     pred_np_origin.tofile(pred_result_path)
+                    print(f"Saved: {pred_result_path}")
 
             # Timer logger
             t_process_end = time.time()

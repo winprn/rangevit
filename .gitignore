@@ -7,3 +7,4 @@ __pycache__/
 *.pth
 save_path*
 save_path_swin/*
+results/*

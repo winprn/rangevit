@@ -26,25 +26,67 @@ def tensorboard_logger(epoch,
 
     recorder.tensorboard.add_scalar(
         tag='{}_Loss'.format(mode), scalar_value=loss_meter_avg, global_step=epoch)
-    recorder.tensorboard.add_scalar(
-        tag='{}_LossSoftmax'.format(mode), scalar_value=loss_focal.item(), global_step=epoch)
-    recorder.tensorboard.add_scalar(
-        tag='{}_LossLovasz'.format(mode), scalar_value=loss_lovasz.item(), global_step=epoch)
+    # Handle case where loss_focal might be empty tensor
+    if loss_focal.numel() > 0:
+        recorder.tensorboard.add_scalar(
+            tag='{}_LossSoftmax'.format(mode), scalar_value=loss_focal.item(), global_step=epoch)
+    else:
+        recorder.tensorboard.add_scalar(
+            tag='{}_LossSoftmax'.format(mode), scalar_value=0.0, global_step=epoch)
+
+    # Handle case where loss_lovasz might be empty tensor
+    if loss_lovasz.numel() > 0:
+        recorder.tensorboard.add_scalar(
+            tag='{}_LossLovasz'.format(mode), scalar_value=loss_lovasz.item(), global_step=epoch)
+    else:
+        recorder.tensorboard.add_scalar(
+            tag='{}_LossLovasz'.format(mode), scalar_value=0.0, global_step=epoch)
     
-    recorder.tensorboard.add_scalar(
-        tag='{}_meanAcc'.format(mode), scalar_value=mean_acc.item(), global_step=epoch)
-    recorder.tensorboard.add_scalar(
-        tag='{}_meanIOU'.format(mode), scalar_value=mean_iou.item(), global_step=epoch)
-    recorder.tensorboard.add_scalar(
-        tag='{}_meanRecall'.format(mode), scalar_value=mean_recall.item(), global_step=epoch)
+    # Handle cases where metrics might be empty tensors
+    if mean_acc.numel() > 0:
+        recorder.tensorboard.add_scalar(
+            tag='{}_meanAcc'.format(mode), scalar_value=mean_acc.item(), global_step=epoch)
+    else:
+        recorder.tensorboard.add_scalar(
+            tag='{}_meanAcc'.format(mode), scalar_value=0.0, global_step=epoch)
+
+    if mean_iou.numel() > 0:
+        recorder.tensorboard.add_scalar(
+            tag='{}_meanIOU'.format(mode), scalar_value=mean_iou.item(), global_step=epoch)
+    else:
+        recorder.tensorboard.add_scalar(
+            tag='{}_meanIOU'.format(mode), scalar_value=0.0, global_step=epoch)
+
+    if mean_recall.numel() > 0:
+        recorder.tensorboard.add_scalar(
+            tag='{}_meanRecall'.format(mode), scalar_value=mean_recall.item(), global_step=epoch)
+    else:
+        recorder.tensorboard.add_scalar(
+            tag='{}_meanRecall'.format(mode), scalar_value=0.0, global_step=epoch)
     recorder.tensorboard.add_scalar(
         tag='{}_lr'.format(mode), scalar_value=lr, global_step=epoch)
 
     for i, (_, v) in enumerate(mapped_cls_name.items()):
-        recorder.tensorboard.add_scalar(
-            tag='{}_{:02d}_{}_Acc'.format(mode, i, v), scalar_value=class_acc[i].item(), global_step=epoch)
-        recorder.tensorboard.add_scalar(
-            tag='{}_{:02d}_{}_Recall'.format(mode, i, v), scalar_value=class_recall[i].item(),
-            global_step=epoch)
-        recorder.tensorboard.add_scalar(
-            tag='{}_{:02d}_{}_IOU'.format(mode, i, v), scalar_value=class_iou[i].item(), global_step=epoch)
+        # Handle cases where class metrics might be empty tensors
+        if i < len(class_acc) and class_acc[i].numel() > 0:
+            recorder.tensorboard.add_scalar(
+                tag='{}_{:02d}_{}_Acc'.format(mode, i, v), scalar_value=class_acc[i].item(), global_step=epoch)
+        else:
+            recorder.tensorboard.add_scalar(
+                tag='{}_{:02d}_{}_Acc'.format(mode, i, v), scalar_value=0.0, global_step=epoch)
+
+        if i < len(class_recall) and class_recall[i].numel() > 0:
+            recorder.tensorboard.add_scalar(
+                tag='{}_{:02d}_{}_Recall'.format(mode, i, v), scalar_value=class_recall[i].item(),
+                global_step=epoch)
+        else:
+            recorder.tensorboard.add_scalar(
+                tag='{}_{:02d}_{}_Recall'.format(mode, i, v), scalar_value=0.0,
+                global_step=epoch)
+
+        if i < len(class_iou) and class_iou[i].numel() > 0:
+            recorder.tensorboard.add_scalar(
+                tag='{}_{:02d}_{}_IOU'.format(mode, i, v), scalar_value=class_iou[i].item(), global_step=epoch)
+        else:
+            recorder.tensorboard.add_scalar(
+                tag='{}_{:02d}_{}_IOU'.format(mode, i, v), scalar_value=0.0, global_step=epoch)

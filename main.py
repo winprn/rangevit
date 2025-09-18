@@ -55,7 +55,8 @@ class Experiment(object):
 
         # Init gpu
         tools.init_distributed_mode(self.settings)
-        torch.distributed.barrier()
+        if self.settings.distributed:
+            torch.distributed.barrier()
 
         self.settings.check_path()
 
@@ -63,6 +64,10 @@ class Experiment(object):
         torch.manual_seed(self.settings.seed)
         torch.cuda.manual_seed(self.settings.seed)
         np.random.seed(self.settings.seed)
+
+        # Set GPU device (default to 0 for non-distributed mode)
+        if self.settings.gpu is None:
+            self.settings.gpu = 0
         torch.cuda.set_device(self.settings.gpu)
         torch.backends.cudnn.benchmark = True
 
