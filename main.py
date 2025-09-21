@@ -45,7 +45,10 @@ def build_rangevit_model(settings, pretrained_path=None):
         decoder=settings.decoder,
         up_conv_d_decoder=settings.D_h,
         up_conv_scale_factor=settings.patch_stride,
-        use_kpconv=settings.use_kpconv)
+        use_kpconv=settings.use_kpconv,
+        # Multi-scale parameters for Swin transformers
+        use_all_stages=getattr(settings, 'use_all_stages', False),
+        native_input=getattr(settings, 'native_input', False))
     return model
 
 
@@ -262,6 +265,12 @@ class Experiment(object):
                 if self.trainer.fp16_scaler is not None:
                     checkpoint_data['fp16_scaler'] = self.trainer.fp16_scaler.state_dict()
                 torch.save(checkpoint_data, saved_path)
+                # Save periodic checkpoint based on save_interval
+                save_interval = getattr(self.settings, 'save_interval', 5)
+                if (epoch + 1) % save_interval == 0:
+                    periodic_saved_path = os.path.join(self.recorder.checkpoint_path, f'checkpoint_epoch_{epoch+1}.pth')
+                    torch.save(checkpoint_data, periodic_saved_path)
+                    print(f'Saved periodic checkpoint: {periodic_saved_path}')
 
                 # Logging best results
                 if best_val_result is not None:

@@ -8,3 +8,5 @@ __pycache__/
 save_path*
 save_path_swin/*
 results/*
+*TODO.md
+test*

@@ -97,7 +97,9 @@ class RangeViT_KPConv(nn.Module):
         self.patch_stride = encoder.patch_stride
         self.encoder = encoder
         self.decoder = decoder
-        del self.decoder.head
+        # Delete the decoder head if it exists (not present in multi-scale decoders)
+        if hasattr(self.decoder, 'head'):
+            del self.decoder.head
         self.kpclassifier = kpclassifier
 
     @torch.jit.ignore
@@ -114,16 +116,36 @@ class RangeViT_KPConv(nn.Module):
         H_ori, W_ori = im.size(2), im.size(3)
         im = padding(im, self.patch_size)
         H, W = im.size(2), im.size(3)
-        
-        x, skip = self.encoder(im, return_features=True) # x.shape = [16, 577, 384]
-        
-        # remove CLS tokens for decoding
-        num_extra_tokens = 1
-        x = x[:, num_extra_tokens:] # x.shape = [16, 576, 384]
-        
-        feats = self.decoder(x, (H, W), skip, return_features=True)
-        feats = F.interpolate(feats, size=(H, W), mode='bilinear', align_corners=False)
-        feats = unpadding(feats, (H_ori, W_ori))
+
+        x, skip = self.encoder(im, return_features=True)
+
+        # Check if this is a Swin encoder and if it's in multi-scale mode
+        is_swin = hasattr(self.encoder, 'swin_backbone')
+        is_multi_scale = hasattr(self.encoder, 'multi_scale') and self.encoder.multi_scale
+
+        if is_swin and is_multi_scale:
+            # Phase 2A: Multi-scale Swin mode
+            # x is now a list of [F0, F1, F2, F3] feature maps
+            multi_scale_features = x
+
+            # Pass directly to multi-scale decoder with return_features=True
+            feats = self.decoder(multi_scale_features, (H_ori, W_ori), skip, return_features=True)
+            # Multi-scale decoder already handles final resolution upsampling
+
+        else:
+            # Traditional ViT or single-scale Swin mode
+            if is_swin:
+                # For single-scale Swin: remove dummy CLS token
+                x = x[:, 1:]
+            else:
+                # For ViT: remove real CLS token
+                num_extra_tokens = 1
+                x = x[:, num_extra_tokens:]
+
+            feats = self.decoder(x, (H, W), skip, return_features=True)
+            feats = F.interpolate(feats, size=(H, W), mode='bilinear', align_corners=False)
+            feats = unpadding(feats, (H_ori, W_ori))
+
         return feats
 
     def forward(self, im, px, py, pxyz, pknn, num_points):

@@ -23,8 +23,9 @@ from .blocks import Block
 from .model_utils import adapt_input_conv, padding, unpadding, resize_pos_embed, init_weights
 from .stems import PatchEmbedding, ConvStem
 from .decoders import DecoderLinear, DecoderUpConv
+from .decoders_multiscale import DecoderMultiScaleFPN
 from .rangevit_kpconv import RangeViT_KPConv, KPClassifier
-from .swin_transformer import create_swin_backbone, SwinVisionTransformer
+from .swin_transformer_fixed import create_swin_backbone, SwinVisionTransformer
 
 
 class VisionTransformer(nn.Module):
@@ -141,17 +142,22 @@ def create_vit(model_cfg):
 
     # Check if this is a Swin model
     if backbone_name.startswith('swin'):
-        # Create Swin backbone
-        # Note: For now we create without pretrained weights and load them separately
-        # TODO: In the future, we could modify this to load pretrained weights directly
-        swin_backbone = create_swin_backbone(
+        # Extract multi-scale configuration
+        use_all_stages = model_cfg.get('use_all_stages', False)  # Phase 2A: multi-scale mode
+        native_input = model_cfg.get('native_input', False)     # Phase 2C: native input mode
+        use_stage = model_cfg.get('use_stage', 2)               # Default F2 for single-scale
+
+        # Debug: Print configuration values
+        print(f"[DEBUG] Swin config - use_all_stages: {use_all_stages}, native_input: {native_input}, use_stage: {use_stage}")
+        print(f"[DEBUG] Model config keys: {list(model_cfg.keys())}")
+        # Create Swin-ViT wrapper (creates backbone internally with auto-fallback)
+        model = SwinVisionTransformer(
             model_name=backbone_name,
             channels=model_cfg['channels'],
-            pretrained=False  # We'll load weights separately in RangeViT.__init__
+            use_stage=use_stage,
+            multi_scale=use_all_stages,
+            native_input=native_input
         )
-
-        # Wrap in compatibility layer
-        model = SwinVisionTransformer(swin_backbone, use_stage=2)  # Use F2 stage
 
         # Set required attributes for compatibility
         model.image_size = model_cfg['image_size']
@@ -181,17 +187,49 @@ def create_vit(model_cfg):
 def create_decoder(encoder, decoder_cfg):
     decoder_cfg = decoder_cfg.copy()
     name = decoder_cfg.pop('name')
-    decoder_cfg['d_encoder'] = encoder.d_model
-    decoder_cfg['patch_size'] = encoder.patch_size
 
-    if name == 'linear':
-        decoder_cfg['patch_stride'] = encoder.patch_stride
-        decoder = DecoderLinear(**decoder_cfg)
-    elif name == 'up_conv':
-        decoder_cfg['patch_stride'] = encoder.patch_stride
-        decoder = DecoderUpConv(**decoder_cfg)
+    if name == 'multi_scale_fpn':
+        # Phase 2A: Multi-scale decoder for Swin Transformer
+        # Extract Swin-specific parameters
+        if hasattr(encoder, 'swin_backbone') and hasattr(encoder, 'multi_scale') and encoder.multi_scale:
+            # Multi-scale Swin encoder
+            if hasattr(encoder.swin_backbone, 'get_feature_dims'):
+                # Real Swin backbone
+                swin_channels = encoder.swin_backbone.get_feature_dims()
+            elif hasattr(encoder.swin_backbone, 'feature_dims'):
+                # Real MockSwinBackbone case
+                swin_channels = encoder.swin_backbone.feature_dims
+            elif hasattr(encoder.swin_backbone, 'mock_swin'):
+                # MockSwinVisionTransformer case
+                swin_channels = encoder.swin_backbone.mock_swin.feature_dims
+            else:
+                # Default fallback
+                swin_channels = [96, 192, 384, 768]
+        else:
+            # Default Swin-Tiny channels for backward compatibility
+            swin_channels = [96, 192, 384, 768]
+
+        decoder = DecoderMultiScaleFPN(
+            swin_channels=swin_channels,
+            **decoder_cfg
+        )
+        # Set d_decoder for KPConv compatibility
+        # Multi-scale FPN outputs at pyramid_channels dimension
+        decoder.d_decoder = decoder_cfg.get('pyramid_channels', 256)
     else:
-        raise ValueError(f'Unknown decoder: {name}')
+        # Original decoders (linear, up_conv) for ViT and single-scale Swin
+        decoder_cfg['d_encoder'] = encoder.d_model
+        decoder_cfg['patch_size'] = encoder.patch_size
+
+        if name == 'linear':
+            decoder_cfg['patch_stride'] = encoder.patch_stride
+            decoder = DecoderLinear(**decoder_cfg)
+        elif name == 'up_conv':
+            decoder_cfg['patch_stride'] = encoder.patch_stride
+            decoder = DecoderUpConv(**decoder_cfg)
+        else:
+            raise ValueError(f'Unknown decoder: {name}')
+
     return decoder
 
 
@@ -204,9 +242,14 @@ def create_rangevit(model_cfg, use_kpconv=False):
     decoder = create_decoder(encoder, decoder_cfg)
 
     if use_kpconv:
+        # Get d_decoder from decoder object (for multi-scale) or config (for traditional decoders)
+        d_decoder = getattr(decoder, 'd_decoder', decoder_cfg.get('d_decoder'))
+        if d_decoder is None:
+            raise ValueError("d_decoder not found in decoder config or decoder object for KPConv")
+
         kpclassifier = KPClassifier(
-            in_channels=decoder_cfg['d_decoder'] ,
-            out_channels=decoder_cfg['d_decoder'],
+            in_channels=d_decoder,
+            out_channels=d_decoder,
             num_classes=model_cfg['n_cls'])
         model = RangeViT_KPConv(encoder, decoder, kpclassifier, n_cls=model_cfg['n_cls'])
     else:
@@ -244,12 +287,23 @@ class RangeViT_noKPConv(nn.Module):
         im = padding(im, self.patch_size)
         H, W = im.size(2), im.size(3)
 
-        x, skip = self.encoder(im, return_features=True) # x.shape = [16, 577, 384]
+        x, skip = self.encoder(im, return_features=True)
 
-        # Check if this is a Swin encoder
-        is_swin = hasattr(self.encoder, 'swin')
+        # Check if this is a Swin encoder and if it's in multi-scale mode
+        is_swin = hasattr(self.encoder, 'swin_backbone')
+        is_multi_scale = hasattr(self.encoder, 'multi_scale') and self.encoder.multi_scale
 
-        if is_swin:
+        if is_swin and is_multi_scale:
+            # Phase 2A: Multi-scale Swin mode
+            # x is now a list of [F0, F1, F2, F3] feature maps
+            multi_scale_features = x
+
+            # Pass directly to multi-scale decoder
+            # The multi-scale decoder handles upsampling to original resolution internally
+            feats = self.decoder(multi_scale_features, (H_ori, W_ori), skip)
+
+        elif is_swin:
+            # Phase 1: Single-scale Swin mode (backward compatibility)
             # For Swin: remove dummy CLS token (first token)
             x = x[:, 1:]  # Remove dummy CLS token added for compatibility
 
@@ -290,19 +344,27 @@ class RangeViT_noKPConv(nn.Module):
                     decoder_W = (feat_W - 1) * W_stride + PS_W
                 else:
                     # Fallback: use stride-based calculation
-                    stride = self.encoder.swin.strides[self.encoder.use_stage]
+                    stride = self.encoder.swin_backbone.strides[self.encoder.use_stage]
                     decoder_H, decoder_W = feat_H * stride, feat_W * stride
             else:
                 decoder_H, decoder_W = H, W
+
+            feats = self.decoder(x, (decoder_H, decoder_W), skip)
+            feats = F.interpolate(feats, size=(H, W), mode='bilinear')
+
         else:
+            # Original ViT mode
             # For ViT: remove real CLS token
             num_extra_tokens = 1
             x = x[:, num_extra_tokens:]
             decoder_H, decoder_W = H, W
 
-        feats = self.decoder(x, (decoder_H, decoder_W), skip) # feats.shape = [16, 17, 24, 24]
-        feats = F.interpolate(feats, size=(H, W), mode='bilinear')
-        feats = unpadding(feats, (H_ori, W_ori)) # feats.shape = [16, 17, 384, 384]
+            feats = self.decoder(x, (decoder_H, decoder_W), skip)
+            feats = F.interpolate(feats, size=(H, W), mode='bilinear')
+
+        # Final unpadding (only needed for non-multi-scale decoders)
+        if not (is_swin and is_multi_scale):
+            feats = unpadding(feats, (H_ori, W_ori))
 
         return feats
 
@@ -327,6 +389,8 @@ class RangeViT(nn.Module):
         up_conv_d_decoder=64,
         up_conv_scale_factor=(2, 8),
         use_kpconv=False,
+        use_all_stages=False,  # Multi-scale mode for Swin transformers
+        native_input=False,    # Native input mode for Swin transformers
         ):
         super(RangeViT, self).__init__()
 
@@ -393,6 +457,7 @@ class RangeViT(nn.Module):
             raise NameError('Not known ViT/Swin backbone.')
 
         # Decoder config
+        print(f'Decoder: {decoder}')
         if decoder == 'linear':
             decoder_cfg = {'n_cls': n_cls, 'name': 'linear'}
         elif decoder == 'up_conv':
@@ -401,6 +466,16 @@ class RangeViT(nn.Module):
                 'd_decoder': up_conv_d_decoder, # hidden dim of the decoder
                 'scale_factor': up_conv_scale_factor, # scaling factor in the PixelShuffle layer
                 'skip_filters': skip_filters,} # channel dim of the skip connection (between the convolutional stem and the up_conv decoder)
+        elif decoder == 'multi_scale_fpn':
+            decoder_cfg = {
+                'n_cls': n_cls,
+                'name': 'multi_scale_fpn',
+                'pyramid_channels': 256,  # Default unified FPN channel dimension
+                'use_ppm': True,          # Enable Pyramid Pooling Module
+                'ppm_scales': [1, 2, 3, 6]  # PPM pooling scales
+            }
+        else:
+            raise NameError('Not known decoder.')
 
         # ViT encoder and stem config
         net_kwargs = {
@@ -420,6 +495,9 @@ class RangeViT(nn.Module):
             'conv_stem': conv_stem,
             'stem_base_channels': stem_base_channels,
             'stem_hidden_dim': stem_hidden_dim,
+            # Multi-scale configuration for Swin transformers
+            'use_all_stages': use_all_stages,
+            'native_input': native_input,
         }
 
 

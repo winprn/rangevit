@@ -1,0 +1,117 @@
+# Configuration for RangeViT with Multi-Scale Swin Transformer on SemanticKITTI
+# Phase 2A: Multi-scale FPN decoder with hierarchical feature fusion
+
+# General config
+num_workers: 4
+id: 'exp_kitti_swin_multiscale'
+
+# Data config
+dataset: 'SemanticKitti'
+n_classes: 20 # 19 + 1(ignored)
+use_trainval: false # set to true if you want to train on train-val of SemanticKITTI
+
+# Train config
+has_label: true
+val_frequency: 1
+n_epochs: 60
+warmup_epochs: 10
+batch_size: 3  # Reduced due to higher memory usage of multi-scale decoder
+batch_size_val: 1
+lr: 0.0003  # Slightly lower LR for stable multi-scale training
+train_result_frequency: 100
+save_interval: 5  # Save checkpoint every 5 epochs
+
+# Model config - Multi-Scale Swin Transformer
+vit_backbone: 'swinv2_tiny_window16_256'  # Use SwinV2 with window_size=16
+in_channels: 5
+patch_size: [2, 8]  # Keep range-image optimized patch size
+patch_stride: [2, 8]
+image_size: [64, 384]  # Training crop size
+window_size: [64, 384]  # Sliding window size
+window_stride: [64, 256]  # Sliding window stride
+original_image_size: [64, 2048]
+
+# Multi-scale configuration (Phase 2A)
+use_all_stages: true  # Enable multi-scale mode - use all Swin stages [F0,F1,F2,F3]
+native_input: false   # Phase 2C feature - keep false for Phase 2A
+
+# Stem - Keep ConvStem for range image preprocessing
+conv_stem: 'ConvStem'  # ConvStem works well with range images
+stem_base_channels: 32
+D_h: 128  # Hidden dimension of the stem
+
+# Multi-Scale FPN Decoder
+decoder: 'multi_scale_fpn'  # New multi-scale decoder
+pyramid_channels: 256        # Unified FPN channel dimension
+use_ppm: true               # Enable Pyramid Pooling Module on F3
+ppm_scales: [1, 2, 3, 6]    # PPM pooling scales for global context
+skip_filters: 0             # No skip connections in Phase 2A
+
+# 3D refiner
+use_kpconv: true
+
+# Checkpoint model
+checkpoint: null
+pretrained_model: './pretrained_model/swinv2_tiny_patch4_window16_256.pth'
+
+# Swin-specific weight loading settings
+reuse_pos_emb: false  # Swin uses relative positional bias
+reuse_patch_emb: false  # ConvStem handles input channels
+
+# Data augmentation config (same as single-scale)
+augmentation:
+  # flip
+  p_flipx: 0.
+  p_flipy: 0.5
+
+  # translation
+  p_transx: 0.5
+  trans_xmin: -5
+  trans_xmax: 5
+  p_transy: 0.5
+  trans_ymin: -3
+  trans_ymax: 3
+  p_transz: 0.5
+  trans_zmin: -1
+  trans_zmax: 0.
+
+  # rotation
+  p_rot_roll: 0.5
+  rot_rollmin: -5
+  rot_rollmax: 5
+  p_rot_pitch: 0.5
+  rot_pitchmin: -5
+  rot_pitchmax: 5
+  p_rot_yaw: 0.5
+  rot_yawmin: 5
+  rot_yawmax: -5
+
+# Sensor config (same as single-scale)
+sensor:
+  name: 'HDL64'
+  type: 'spherical'
+  scan_proj: true
+  proj_h: 64
+  proj_w: 2048
+  fov_up: 3.
+  fov_down: -25.
+  fov_left: -180
+  fov_right: 180
+  img_mean:
+    - 12.12
+    - 10.88
+    - 0.23
+    - -1.04
+    - 0.21
+  img_stds:
+    - 12.32
+    - 11.47
+    - 6.91
+    - 0.86
+    - 0.16
+
+# Phase 2A Training Notes:
+# - Expected memory usage: ~1.3x compared to single-scale
+# - Expected performance: +1-2% mIoU improvement
+# - Training time: ~15% longer due to more complex decoder
+# - Recommended: Start from single-scale checkpoint for faster convergence

@@ -54,6 +54,7 @@ class Option(object):
         self.log_frequency = 100
         self.train_result_frequency = self.config.get('train_result_frequency', 100)
         self.use_fp16 = self.config.get('use_fp16', False) # for mixed-precision training
+        self.save_interval = self.config.get('save_interval', 5) # save checkpoint every N epochs
 
 
         # Model config
@@ -84,6 +85,9 @@ class Option(object):
         # 3D refiner
         self.use_kpconv = self.config.get('use_kpconv', True)
 
+        # Multi-scale Swin parameters
+        self.use_all_stages = self.config.get('use_all_stages', False)
+        self.native_input = self.config.get('native_input', False)
 
         # Checkpoint model
         self.checkpoint = self.config.get('checkpoint', None)
@@ -122,8 +126,8 @@ class Option(object):
             assert self.reuse_patch_emb == False
 
         # When using the KPConv layer, the decoder has to be up_conv.
-        if self.use_kpconv:
-            assert self.decoder == 'up_conv'
+        # if self.use_kpconv:
+        #     assert self.decoder == 'up_conv'
 
         # The following hyperparameters have to be tuples or lists with two elements.
         tuple_list = [self.patch_size, self.patch_stride,
