@@ -20,6 +20,7 @@ import torchvision.transforms.functional as TF
 from scipy.spatial.ckdtree import cKDTree as kdtree
 
 from .preprocess import augmentor, projection
+from .preprocess.range_augmentor import RangeImageAugmentor
 
 
 class RangeViewLoader(Dataset):
@@ -58,6 +59,24 @@ class RangeViewLoader(Dataset):
                     scale_min=augment_config['scale_min'],
                     scale_max=augment_config['scale_max'])
                 print(f'Adding scaling augmentation with range [{augment_params.scale_min}, {augment_params.scale_max}] and probability {augment_params.p_scale}')
+                
+            # Add new augmentation parameters
+            if 'p_noise' in augment_config:
+                augment_params.p_noise = augment_config['p_noise']
+                augment_params.noise_std = augment_config.get('noise_std', 0.01)
+                print(f'Adding noise augmentation with std {augment_params.noise_std} and probability {augment_params.p_noise}')
+                
+            if 'p_dropout' in augment_config:
+                augment_params.p_dropout = augment_config['p_dropout']
+                augment_params.dropout_ratio = augment_config.get('dropout_ratio', 0.1)
+                print(f'Adding dropout augmentation with ratio {augment_params.dropout_ratio} and probability {augment_params.p_dropout}')
+                
+            if 'p_intensity_scale' in augment_config:
+                augment_params.p_intensity_scale = augment_config['p_intensity_scale']
+                augment_params.intensity_scale_min = augment_config.get('intensity_scale_min', 0.8)
+                augment_params.intensity_scale_max = augment_config.get('intensity_scale_max', 1.2)
+                print(f'Adding intensity scaling with range [{augment_params.intensity_scale_min}, {augment_params.intensity_scale_max}] and probability {augment_params.p_intensity_scale}')
+                
             self.augmentor = augmentor.Augmentor(augment_params)
         else:
             self.augmentor = None
@@ -65,6 +84,19 @@ class RangeViewLoader(Dataset):
         self.proj_p_hflip = augment_config.get('p_hflip', 0.0)
         if self.proj_p_hflip > 0.0:
             print(f'Horizontal flip of range projections with p={self.proj_p_hflip}')
+            
+        # Range image augmentations (mixup/cutmix)
+        if self.is_train:
+            self.range_augmentor = RangeImageAugmentor(
+                mixup_alpha=augment_config.get('mixup_alpha', 0.2),
+                cutmix_alpha=augment_config.get('cutmix_alpha', 1.0),
+                p_mixup=augment_config.get('p_mixup', 0.0),
+                p_cutmix=augment_config.get('p_cutmix', 0.0)
+            )
+            if self.range_augmentor.p_mixup > 0 or self.range_augmentor.p_cutmix > 0:
+                print(f'Adding range image augmentation: mixup p={self.range_augmentor.p_mixup}, cutmix p={self.range_augmentor.p_cutmix}')
+        else:
+            self.range_augmentor = None
 
         projection_config = self.config['sensor']
         self.scan_proj = projection_config.get('scan_proj', False)

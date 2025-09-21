@@ -15,7 +15,10 @@ class AugmentParams(object):
                  p_rot_roll=0., rot_rollmin=0., rot_rollmax=0.,
                  p_rot_pitch=0., rot_pitchmin=0, rot_pitchmax=0.,
                  p_rot_yaw=0., rot_yawmin=0., rot_yawmax=0.,
-                 p_scale=0., scale_min=1.0, scale_max=1.0):
+                 p_scale=0., scale_min=1.0, scale_max=1.0,
+                 p_noise=0., noise_std=0.01,
+                 p_dropout=0., dropout_ratio=0.1,
+                 p_intensity_scale=0., intensity_scale_min=0.8, intensity_scale_max=1.2):
         self.p_flipx = p_flipx
         self.p_flipy = p_flipy
 
@@ -46,6 +49,16 @@ class AugmentParams(object):
         self.p_scale = p_scale
         self.scale_min = scale_min
         self.scale_max = scale_max
+
+        self.p_noise = p_noise
+        self.noise_std = noise_std
+
+        self.p_dropout = p_dropout
+        self.dropout_ratio = dropout_ratio
+
+        self.p_intensity_scale = p_intensity_scale
+        self.intensity_scale_min = intensity_scale_min
+        self.intensity_scale_max = intensity_scale_max
 
     def sefScaleParams(self, p_scale, scale_min, scale_max):
         self.p_scale = p_scale
@@ -106,6 +119,10 @@ class AugmentParams(object):
             self.p_rot_yaw, self.rot_yawmin, self.rot_yawmax))
         print('p_scale: {}, scale_min: {}, scale_max: {}'.format(
             self.p_scale, self.scale_min, self.scale_max))
+        print('p_noise: {}, noise_std: {}'.format(self.p_noise, self.noise_std))
+        print('p_dropout: {}, dropout_ratio: {}'.format(self.p_dropout, self.dropout_ratio))
+        print('p_intensity_scale: {}, intensity_scale_min: {}, intensity_scale_max: {}'.format(
+            self.p_intensity_scale, self.intensity_scale_min, self.intensity_scale_max))
 
 class Augmentor(object):
     def __init__(self, params: AugmentParams):
@@ -144,6 +161,27 @@ class Augmentor(object):
     @staticmethod
     def scale_cloud(pointcloud: np.ndarray, scale_min: float, scale_max: float):
         pointcloud = pointcloud * np.random.uniform(scale_min, scale_max)
+        return pointcloud
+
+    @staticmethod
+    def add_noise(pointcloud: np.ndarray, noise_std: float):
+        noise = np.random.normal(0, noise_std, pointcloud[:, :3].shape)
+        pointcloud[:, :3] += noise
+        return pointcloud
+
+    @staticmethod
+    def dropout_points(pointcloud: np.ndarray, dropout_ratio: float):
+        n_points = pointcloud.shape[0]
+        keep_ratio = 1 - dropout_ratio
+        n_keep = int(n_points * keep_ratio)
+        keep_indices = np.random.choice(n_points, n_keep, replace=False)
+        return pointcloud[keep_indices]
+
+    @staticmethod
+    def scale_intensity(pointcloud: np.ndarray, scale_min: float, scale_max: float):
+        if pointcloud.shape[1] > 3:
+            scale_factor = np.random.uniform(scale_min, scale_max)
+            pointcloud[:, 3] = np.clip(pointcloud[:, 3] * scale_factor, 0, 1)
         return pointcloud
 
     def doAugmentation(self, pointcloud):
@@ -202,5 +240,20 @@ class Augmentor(object):
         else:
             rot_yaw = 0
         pointcloud = self.rotation(pointcloud, rot_roll, rot_pitch, rot_yaw)
+
+        # noise augment
+        rand = random.uniform(0, 1)
+        if rand < self.parmas.p_noise:
+            pointcloud = self.add_noise(pointcloud, self.parmas.noise_std)
+
+        # dropout augment
+        rand = random.uniform(0, 1)
+        if rand < self.parmas.p_dropout:
+            pointcloud = self.dropout_points(pointcloud, self.parmas.dropout_ratio)
+
+        # intensity scaling augment
+        rand = random.uniform(0, 1)
+        if rand < self.parmas.p_intensity_scale:
+            pointcloud = self.scale_intensity(pointcloud, self.parmas.intensity_scale_min, self.parmas.intensity_scale_max)
 
         return pointcloud
