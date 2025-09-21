@@ -79,6 +79,30 @@ augmentation:
   p_rot_yaw: 0.5
   rot_yawmin: 5
   rot_yawmax: -5
+  
+  # scaling
+  p_scale: 0.2
+  scale_min: 0.95
+  scale_max: 1.05
+  
+  # noise
+  p_noise: 0.3
+  noise_std: 0.02
+  
+  # dropout
+  p_dropout: 0.2
+  dropout_ratio: 0.05
+  
+  # intensity scaling
+  p_intensity_scale: 0.3
+  intensity_scale_min: 0.9
+  intensity_scale_max: 1.1
+  
+  # range image augmentations
+  p_mixup: 0.1
+  mixup_alpha: 0.2
+  p_cutmix: 0.1
+  cutmix_alpha: 1.0
 
 sensor:
   name: 'HDL64'
