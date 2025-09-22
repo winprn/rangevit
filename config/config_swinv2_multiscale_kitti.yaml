@@ -15,11 +15,11 @@ has_label: true
 val_frequency: 1
 n_epochs: 60
 warmup_epochs: 10
-batch_size: 4  # Reduced due to higher memory usage of multi-scale decoder
+batch_size: 8  # Reduced due to higher memory usage of multi-scale decoder
 batch_size_val: 1
 lr: 0.0003  # Slightly lower LR for stable multi-scale training
 train_result_frequency: 100
-save_interval: 5  # Save checkpoint every 5 epochs
+save_interval: 2  # Save checkpoint every 2 epochs
 
 # Model config - Multi-Scale Swin Transformer
 vit_backbone: 'swinv2_tiny_window16_256'  # Use SwinV2 with window_size=16
