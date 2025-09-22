@@ -349,8 +349,17 @@ class DecoderMultiScaleFPN(nn.Module):
         P0 = self.fusion_1_0(P1, F0)  # (B, pyramid_channels, H/4, W/4)
 
         # Return features if requested (for visualization/analysis)
+        # Return features if requested (for KPConv processing)
         if return_features:
-            return P0
+            # For KPConv, we need features at the target resolution, not F0 resolution
+            # Upsample P0 to target resolution
+            upsampled_features = F.interpolate(
+                P0,
+                size=(H_orig, W_orig),
+                mode='bilinear',
+                align_corners=False
+            )  # (B, pyramid_channels, H, W)
+            return upsampled_features
 
         # Stage 3: Classification
         logits = self.classifier(P0)  # (B, n_cls, H/4, W/4)

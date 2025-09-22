@@ -15,7 +15,7 @@ has_label: true
 val_frequency: 1
 n_epochs: 60
 warmup_epochs: 10
-batch_size: 3  # Reduced due to higher memory usage of multi-scale decoder
+batch_size: 4  # Reduced due to higher memory usage of multi-scale decoder
 batch_size_val: 1
 lr: 0.0003  # Slightly lower LR for stable multi-scale training
 train_result_frequency: 100
@@ -52,7 +52,7 @@ use_kpconv: true
 
 # Checkpoint model
 checkpoint: null
-pretrained_model: './pretrained_model/swinv2_tiny_patch4_window16_256.pth'
+pretrained_model: './pretrained_model/swinv2_tiny_window16_256.pth'
 
 # Swin-specific weight loading settings
 reuse_pos_emb: false  # Swin uses relative positional bias
@@ -109,9 +109,3 @@ sensor:
     - 6.91
     - 0.86
     - 0.16
-
-# Phase 2A Training Notes:
-# - Expected memory usage: ~1.3x compared to single-scale
-# - Expected performance: +1-2% mIoU improvement
-# - Training time: ~15% longer due to more complex decoder
-# - Recommended: Start from single-scale checkpoint for faster convergence

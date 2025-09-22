@@ -223,8 +223,6 @@ class SwinTransformerBackbone(nn.Module):
             'padding': padding
         }
 
-        print(f"[DEBUG] Window size: {window_size}, Target multiple: {window_size * window_size}")
-        print(f"[DEBUG] Original: {H}x{W}, Padding: +{pad_H}x{pad_W}")
         print(f"[INFO] Applied intelligent padding: ({H}, {W}) -> ({target_H}, {target_W})")
 
         return x_padded, padding_info

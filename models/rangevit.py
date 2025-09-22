@@ -147,9 +147,6 @@ def create_vit(model_cfg):
         native_input = model_cfg.get('native_input', False)     # Phase 2C: native input mode
         use_stage = model_cfg.get('use_stage', 2)               # Default F2 for single-scale
 
-        # Debug: Print configuration values
-        print(f"[DEBUG] Swin config - use_all_stages: {use_all_stages}, native_input: {native_input}, use_stage: {use_stage}")
-        print(f"[DEBUG] Model config keys: {list(model_cfg.keys())}")
         # Create Swin-ViT wrapper (creates backbone internally with auto-fallback)
         model = SwinVisionTransformer(
             model_name=backbone_name,
@@ -431,18 +428,6 @@ class RangeViT(nn.Module):
             d_model = 384  # Use F2 stage output dimension
         elif backbone == 'swinv2_tiny_window16_256':
             # SwinV2-Tiny configuration
-            embed_dim = 96
-            depths = [2, 2, 6, 2]
-            num_heads = [3, 6, 12, 24]
-            n_heads = 12  # Use F2 stage heads for compatibility
-            n_layers = sum(depths)  # Total layers
-            window_size = 16
-            patch_size = 4
-            dropout = 0.0
-            drop_path_rate = 0.1
-            d_model = 384  # Use F2 stage output dimension
-        elif backbone == 'swinv2_tiny_window16_256':
-            # SwinV2-Tiny configuration (correct timm naming)
             embed_dim = 96
             depths = [2, 2, 6, 2]
             num_heads = [3, 6, 12, 24]

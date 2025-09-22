@@ -128,9 +128,11 @@ class RangeViT_KPConv(nn.Module):
             # x is now a list of [F0, F1, F2, F3] feature maps
             multi_scale_features = x
 
-            # Pass directly to multi-scale decoder with return_features=True
-            feats = self.decoder(multi_scale_features, (H_ori, W_ori), skip, return_features=True)
-            # Multi-scale decoder already handles final resolution upsampling
+            # Pass padded size to decoder (consistent with traditional decoders)
+            feats = self.decoder(multi_scale_features, (H, W), skip, return_features=True)
+
+            # Apply unpadding to get original input size (consistent with traditional decoders)
+            feats = unpadding(feats, (H_ori, W_ori))
 
         else:
             # Traditional ViT or single-scale Swin mode
