@@ -115,16 +115,16 @@ class RangeViT_KPConv(nn.Module):
         im = padding(im, self.patch_size)
         H, W = im.size(2), im.size(3)
         
-        x, skip = self.encoder(im, return_features=True) # x.shape = [16, 577, 384]
+        x, skip = self.encoder(im, return_features=True) # output : x.shape = [16, 577, 384]
         
         # remove CLS tokens for decoding
         num_extra_tokens = 1
         x = x[:, num_extra_tokens:] # x.shape = [16, 576, 384]
         
-        feats = self.decoder(x, (H, W), skip, return_features=True)
-        feats = F.interpolate(feats, size=(H, W), mode='bilinear', align_corners=False)
+        feats = self.decoder(x, (H, W), skip, return_features=True) # [B, d_decoder, H, W]
+        feats = F.interpolate(feats, size=(H, W), mode='bilinear', align_corners=False) 
         feats = unpadding(feats, (H_ori, W_ori))
-        return feats
+        return feats  # Rich 2D features [B, d_decoder, H, W], e.g., [16, 256, 32, 384]
 
     def forward(self, im, px, py, pxyz, pknn, num_points):
         feats = self.forward_2d_features(im)

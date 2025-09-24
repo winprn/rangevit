@@ -21,32 +21,66 @@ import numpy as np
 
 from option import Option
 from train import Trainer
-import models
 import utils
 import utils.tools as tools
 from models.model_utils import resize_pos_embed
+import models
 
 
-def build_rangevit_model(settings, pretrained_path=None):
-    model = models.RangeViT(
-        in_channels=settings.in_channels,
-        n_cls=settings.n_classes,
-        backbone=settings.vit_backbone,
-        image_size=settings.image_size,
-        pretrained_path=pretrained_path,
-        new_patch_size=settings.patch_size,
-        new_patch_stride=settings.patch_stride,
-        reuse_pos_emb=settings.reuse_pos_emb,
-        reuse_patch_emb=settings.reuse_patch_emb,
-        conv_stem=settings.conv_stem,
-        stem_base_channels=settings.stem_base_channels,
-        stem_hidden_dim=settings.D_h,
-        skip_filters=settings.skip_filters,
-        decoder=settings.decoder,
-        up_conv_d_decoder=settings.D_h,
-        up_conv_scale_factor=settings.patch_stride,
-        use_kpconv=settings.use_kpconv)
+# def build_rangevit_model(settings, pretrained_path=None):
+#     model = models.RangeViT(
+#         in_channels=settings.in_channels,
+#         n_cls=settings.n_classes,
+#         backbone=settings.vit_backbone,
+#         image_size=settings.image_size,
+#         pretrained_path=pretrained_path,
+#         new_patch_size=settings.patch_size,
+#         new_patch_stride=settings.patch_stride,
+#         reuse_pos_emb=settings.reuse_pos_emb,
+#         reuse_patch_emb=settings.reuse_patch_emb,
+#         conv_stem=settings.conv_stem,
+#         stem_base_channels=settings.stem_base_channels,
+#         stem_hidden_dim=settings.D_h,
+#         skip_filters=settings.skip_filters,
+#         decoder=settings.decoder,
+#         up_conv_d_decoder=settings.D_h,
+#         up_conv_scale_factor=settings.patch_stride,
+#         use_kpconv=settings.use_kpconv)
+#     return model
+
+def build_range_model(settings, pretrained_path=None):
+    if 'swin' in settings.vit_backbone.lower():
+        # build a config dict compatible with create_rangeswin()
+        model_cfg = {
+            'in_channels': settings.in_channels,
+            'n_cls': settings.n_classes,
+            'swin_name': settings.vit_backbone,
+            'out_channels': settings.D_h,
+            'pretrained_path': pretrained_path,
+        }
+        model = models.create_rangeswin(model_cfg, use_kpconv=settings.use_kpconv)
+    else:
+        # existing RangeViT path (unchanged)
+        model = models.RangeViT(
+            in_channels=settings.in_channels,
+            n_cls=settings.n_classes,
+            backbone=settings.vit_backbone,
+            image_size=settings.image_size,
+            pretrained_path=pretrained_path,
+            new_patch_size=settings.patch_size,
+            new_patch_stride=settings.patch_stride,
+            reuse_pos_emb=settings.reuse_pos_emb,
+            reuse_patch_emb=settings.reuse_patch_emb,
+            conv_stem=settings.conv_stem,
+            stem_base_channels=settings.stem_base_channels,
+            stem_hidden_dim=settings.D_h,
+            skip_filters=settings.skip_filters,
+            decoder=settings.decoder,
+            up_conv_d_decoder=settings.D_h,
+            up_conv_scale_factor=settings.patch_stride,
+            use_kpconv=settings.use_kpconv)
     return model
+
 
 
 class Experiment(object):
@@ -55,7 +89,8 @@ class Experiment(object):
 
         # Init gpu
         tools.init_distributed_mode(self.settings)
-        torch.distributed.barrier()
+        if self.settings.distributed:
+            torch.distributed.barrier()
 
         self.settings.check_path()
 
@@ -87,7 +122,7 @@ class Experiment(object):
 
     def _initModel(self):
         # Model
-        model = build_rangevit_model(
+        model = build_range_model(
             self.settings,
             pretrained_path=self.settings.pretrained_model)
 
