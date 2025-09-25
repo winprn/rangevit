@@ -50,6 +50,7 @@ class RangeSwin_KPConv(nn.Module):
         """
         Produce 2D dense features [B, D_h, H, W] from Swin+UPerNet.
         """
+        print(f"forward_2d_features im.shape: ${im.shape}")
         feats = self.swin_encoder(im, return_features=True)
         return feats
 

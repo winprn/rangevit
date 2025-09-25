@@ -254,6 +254,7 @@ class RangeSwinUPerNet(nn.Module):
             self.backbone.patch_embed.img_size = (H, W)
 
         # forward through Swin backbone
+        print(f"!!!rangeswin: im.shape!!!: ${im.shape}")
         feats = self.backbone(im)  # list of feature maps
 
         # ensure format is [B, C, H, W]

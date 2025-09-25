@@ -12,13 +12,13 @@ has_label: true
 val_frequency: 1
 n_epochs: 60
 warmup_epochs: 10
-batch_size: 4
+batch_size: 8
 batch_size_val: 1
 lr: 0.0004
 train_result_frequency: 100
 
 # Model config
-vit_backbone: 'swin_tiny_patch4_window7_224'   # switched from ViT to Swin
+vit_backbone: 'swinv2_tiny_window16_256'   # switched from ViT to Swin
 in_channels: 5
 image_size: [64, 384]        # random crop at train
 window_size: [64, 384]       # sliding window size
