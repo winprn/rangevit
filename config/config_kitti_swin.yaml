@@ -18,7 +18,7 @@ lr: 0.0004
 train_result_frequency: 100
 
 # Model config
-vit_backbone: 'swinv2_tiny_window16_256'   # switched from ViT to Swin
+vit_backbone: 'swin_tiny_patch4_window7_224'   # switched from ViT to Swin
 in_channels: 5
 image_size: [64, 384]        # random crop at train
 window_size: [64, 384]       # sliding window size
