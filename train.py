@@ -275,7 +275,7 @@ class Trainer(object):
 
             # Forward propagation
             if mode == 'Train':
-                with torch.cuda.amp.autocast(self.fp16_scaler is not None):
+                with torch.amp.autocast('cuda', enabled=self.fp16_scaler is not None):
                     output = self.model(input_feature)
                     output_softmax = F.softmax(output, dim=1)
 
@@ -301,9 +301,17 @@ class Trainer(object):
 
                     # Validation
                     im_meta = dict(flip=False)
-                    with torch.cuda.amp.autocast(self.fp16_scaler is not None):
+                    with torch.amp.autocast('cuda', enabled=self.fp16_scaler is not None):
+                        # Handle different model architectures
+                        if hasattr(model_without_ddp, 'rangevit'):
+                            inference_model = model_without_ddp.rangevit
+                        elif hasattr(model_without_ddp, 'swin_encoder'):
+                            inference_model = model_without_ddp  # Full model for RangeSwin
+                        else:
+                            inference_model = model_without_ddp  # fallback for direct backbone
+
                         lidar_pred = inference(
-                            model_without_ddp.rangevit,
+                            inference_model,
                             [input_feature],
                             [im_meta],
                             ori_shape=input_feature.shape[2:4],
@@ -464,7 +472,7 @@ class Trainer(object):
 
             # Forward propagation
             if mode == 'Train':
-                with torch.cuda.amp.autocast(self.fp16_scaler is not None):
+                with torch.amp.autocast('cuda', enabled=self.fp16_scaler is not None):
                     output3d = self.model(input_feature, px, py, pxyz, knns, num_points)
 
                     output3d_softmax = F.softmax(output3d, dim=1)
@@ -491,9 +499,19 @@ class Trainer(object):
 
                     # Validation
                     im_meta = dict(flip=False)
-                    with torch.cuda.amp.autocast(self.fp16_scaler is not None):
+                    with torch.amp.autocast('cuda', enabled=self.fp16_scaler is not None):
+                        # Handle different model architectures
+                        if hasattr(model_without_ddp, 'rangevit'):
+                            inference_model = model_without_ddp.rangevit
+                            kpclassifier = model_without_ddp.rangevit.kpclassifier
+                        elif hasattr(model_without_ddp, 'swin_encoder'):
+                            inference_model = model_without_ddp  # Full model for RangeSwin
+                            kpclassifier = model_without_ddp.kpclassifier
+                        else:
+                            raise AttributeError("Model does not have expected backbone attribute (rangevit or swin_encoder)")
+
                         output_features2d = inference(
-                            model_without_ddp.rangevit,
+                            inference_model,
                             [input_feature],
                             [im_meta],
                             ori_shape=input_feature.shape[2:4],
@@ -505,7 +523,7 @@ class Trainer(object):
                         output_features2d = output_features2d.unsqueeze(0) # [C, H, W] ==> [1, C, H, W]
 
                         # Apply KPConv layer
-                        output3d = model_without_ddp.rangevit.kpclassifier(
+                        output3d = kpclassifier(
                             output_features2d, px, py, pxyz, knns, num_points)
 
                     output3d_softmax = F.softmax(output3d, dim=1)
