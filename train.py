@@ -464,7 +464,10 @@ class Trainer(object):
 
             # Forward propagation
             if mode == 'Train':
-                with torch.amp.autocast(self.fp16_scaler is not None):
+                if (self.fp16_scaler is None):
+                    print("HEHE you die")
+                    return
+                with torch.amp.autocast(self.fp16_scaler):
                     output3d = self.model(input_feature, px, py, pxyz, knns, num_points)
 
                     output3d_softmax = F.softmax(output3d, dim=1)
