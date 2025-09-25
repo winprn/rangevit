@@ -492,21 +492,34 @@ class Trainer(object):
                     # Validation
                     im_meta = dict(flip=False)
                     with torch.cuda.amp.autocast(self.fp16_scaler is not None):
-                        output_features2d = inference(
-                            model_without_ddp.rangevit,
-                            [input_feature],
-                            [im_meta],
-                            ori_shape=input_feature.shape[2:4],
-                            window_size=self.settings.window_size,
-                            window_stride=self.settings.window_stride,
-                            batch_size=input_feature.shape[0],
-                            use_kpconv=True)
+                        if hasattr(model_without_ddp, "rangevit"):
+                            # Old RangeViT path
+                            output_features2d = inference(
+                                model_without_ddp.rangevit,
+                                [input_feature],
+                                [im_meta],
+                                ori_shape=input_feature.shape[2:4],
+                                window_size=self.settings.window_size,
+                                window_stride=self.settings.window_stride,
+                                batch_size=input_feature.shape[0],
+                                use_kpconv=True)
+                        else:
+                            # New RangeSwin path
+                            output_features2d = model_without_ddp.forward_2d_features(input_feature)
 
                         output_features2d = output_features2d.unsqueeze(0) # [C, H, W] ==> [1, C, H, W]
 
                         # Apply KPConv layer
-                        output3d = model_without_ddp.rangevit.kpclassifier(
-                            output_features2d, px, py, pxyz, knns, num_points)
+                        if hasattr(model_without_ddp, "rangevit"):
+                            # Old RangeViT path
+                            output3d = model_without_ddp.rangevit.kpclassifier(
+                                output_features2d, px, py, pxyz, knns, num_points)
+                        else:
+                            # New RangeSwin path
+                            output3d = model_without_ddp.kpclassifier(
+                                output_features2d, px, py, pxyz, knns, num_points)
+
+
 
                     output3d_softmax = F.softmax(output3d, dim=1)
 
