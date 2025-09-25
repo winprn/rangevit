@@ -245,6 +245,19 @@ class Experiment(object):
             # Run one epoch
             self.trainer.run(epoch, mode='Train')
 
+            # Save checkpoint immediately after training (before validation)
+            if self.recorder is not None:
+                saved_path = os.path.join(self.recorder.checkpoint_path, 'checkpoint.pth')
+
+                checkpoint_data = {
+                    'model': self.model.state_dict(),
+                    'optimizer': self.trainer.optimizer.state_dict(),
+                    'epoch': epoch,
+                }
+                if self.trainer.fp16_scaler is not None:
+                    checkpoint_data['fp16_scaler'] = self.trainer.fp16_scaler.state_dict()
+                torch.save(checkpoint_data, saved_path)
+
             # Run validation
             if (epoch % self.settings.val_frequency == 0 or
                 epoch == self.settings.n_epochs - 1 or
@@ -279,19 +292,6 @@ class Experiment(object):
                             torch.save(checkpoint_data, saved_path)
                             if self.epoch_start > 0:
                                 torch.save(checkpoint_data, saved_path_start)
-
-            # Save checkpoint
-            if self.recorder is not None:
-                saved_path = os.path.join(self.recorder.checkpoint_path, 'checkpoint.pth')
-
-                checkpoint_data = {
-                    'model': self.model.state_dict(),
-                    'optimizer': self.trainer.optimizer.state_dict(),
-                    'epoch': epoch,
-                }
-                if self.trainer.fp16_scaler is not None:
-                    checkpoint_data['fp16_scaler'] = self.trainer.fp16_scaler.state_dict()
-                torch.save(checkpoint_data, saved_path)
 
                 # Logging best results
                 if best_val_result is not None:

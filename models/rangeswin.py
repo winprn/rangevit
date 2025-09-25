@@ -126,7 +126,8 @@ class RangeSwinUPerNet(nn.Module):
             features_only=swin_features_only,
             in_chans=in_channels,   # timm supports in_chans param
             img_size=(32, 384),
-            out_indices=swin_features_out_indices
+            out_indices=swin_features_out_indices,
+            dynamic_img_size=True,
         )
         if hasattr(self.backbone, 'patch_embed'):
             self.backbone.patch_embed.img_size = (32, 384)
