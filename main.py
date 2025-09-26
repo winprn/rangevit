@@ -257,6 +257,12 @@ class Experiment(object):
                 if self.trainer.fp16_scaler is not None:
                     checkpoint_data['fp16_scaler'] = self.trainer.fp16_scaler.state_dict()
                 torch.save(checkpoint_data, saved_path)
+                
+                # Save checkpoint every 2 epochs
+                if (epoch + 1) % 2 == 0:
+                    epoch_checkpoint_path = os.path.join(self.recorder.checkpoint_path, f'checkpoint_epoch_{epoch+1}.pth')
+                    torch.save(checkpoint_data, epoch_checkpoint_path)
+                    self.recorder.logger.info(f'Saved checkpoint for epoch {epoch+1} at {epoch_checkpoint_path}')
 
             # Run validation
             if (epoch % self.settings.val_frequency == 0 or
