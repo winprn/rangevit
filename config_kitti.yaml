@@ -107,7 +107,7 @@ augmentation:
 sensor:
   name: 'HDL64'
   type: 'spherical'
-  scan_proj: true
+  scan_proj: false
   proj_h: 64
   proj_w: 2048
   fov_up: 3.
