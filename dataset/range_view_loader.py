@@ -135,43 +135,23 @@ class RangeViewLoader(Dataset):
         sem_label = self.dataset.labelMapping(sem_label)
 
         if self.is_train and (self.scan_proj is False):
-            pointcloud = self.augmentor.doAugmentation(pointcloud)
-
+            pointcloud = self.augmentor.doAugmentation(pointcloud)  # n, 4
         proj_pointcloud, proj_range, proj_idx, proj_mask = self.projection.doProjection(pointcloud)
-        H, W = proj_idx.shape
+        px, py = self.projection.cached_data['px'], self.projection.cached_data['py']
 
-        # === Build per-point pixel coords (cols=x, rows=y) aligned to original indices ===
-        rows, cols = np.where(proj_idx >= 0)                     # pixels that have an assigned point
-        pidx = proj_idx[rows, cols]                              # original point indices, shape (M,)
-        px_per_point = np.full(points_xyz.shape[0], np.nan, dtype=np.float32)
-        py_per_point = np.full(points_xyz.shape[0], np.nan, dtype=np.float32)
-        px_per_point[pidx] = cols.astype(np.float32)
-        py_per_point[pidx] = rows.astype(np.float32)
-
-        # Keep only points that were projected
-        keep = ~np.isnan(px_per_point)
-        px = px_per_point[keep]                                  # shape (M,)
-        py = py_per_point[keep]
-        points_xyz = points_xyz[keep, :]                         # shape (M, 3)
-        sem_label = sem_label[keep]                              # shape (M,)
-
-        # (Optional) if you still want per-pixel semantic labels for 2D supervision:
         proj_mask_tensor = torch.from_numpy(proj_mask)
-        mask = proj_idx >= 0                                     # NOTE: >= 0, not > 0
-        proj_sem_label = np.zeros((H, W), dtype=np.float32)
-        proj_sem_label[mask] = self.dataset.labelMapping(sem_label= self.dataset.labelMapping # avoid double mapping below
-            (self.dataset.loadDataByIndex(index)[1]))[proj_idx[mask]]  # or keep your original logic if cached
-        proj_sem_label_tensor = torch.from_numpy(proj_sem_label) * proj_mask_tensor.float()
+        mask = proj_idx > 0
+        proj_sem_label = np.zeros((proj_mask.shape[0], proj_mask.shape[1]), dtype=np.float32)
+        proj_sem_label[mask] = sem_label[proj_idx[mask]]
+        proj_sem_label_tensor = torch.from_numpy(proj_sem_label)
+        proj_sem_label_tensor = proj_sem_label_tensor * proj_mask_tensor.float()
 
-        # Build proj_feature_tensor as before…
         proj_range_tensor = torch.from_numpy(proj_range)
         proj_xyz_tensor = torch.from_numpy(proj_pointcloud[..., :3])
         proj_intensity_tensor = torch.from_numpy(proj_pointcloud[..., 3])
         proj_intensity_tensor = proj_intensity_tensor.ne(-1).float() * proj_intensity_tensor
         proj_feature_tensor = torch.cat(
-            [proj_range_tensor.unsqueeze(0),
-            proj_xyz_tensor.permute(2, 0, 1),
-            proj_intensity_tensor.unsqueeze(0)], 0)
+            [proj_range_tensor.unsqueeze(0), proj_xyz_tensor.permute(2, 0, 1), proj_intensity_tensor.unsqueeze(0)], 0)
 
         proj_feature_tensor = (proj_feature_tensor - self.proj_img_mean[:, None, None]) / self.proj_img_stds[:, None, None]
         proj_feature_tensor = proj_feature_tensor * proj_mask_tensor.unsqueeze(0).float()
@@ -197,6 +177,7 @@ class RangeViewLoader(Dataset):
             proj_sem_label_tensor2.unsqueeze(0),
             proj_mask_tensor2.float().unsqueeze(0)), dim=0)
 
+        scan_augmentor.ScanAugmentor.range_mix(proj_tensor[1:4], proj_tensor[4], proj_tensor2[1:4], proj_tensor2[4])
         if self.is_train:
             proj_tensor, px, py, points_xyz, sem_label = crop_inputs(
                 proj_tensor, px, py, points_xyz, sem_label,
@@ -205,7 +186,6 @@ class RangeViewLoader(Dataset):
             proj_tensor2, px2, py2, points_xyz2, sem_label2 = crop_inputs(
                 proj_tensor2, px2, py2, points_xyz2, sem_label2,
                 self.crop_size, center_crop=False, p_hflip=self.proj_p_hflip)
-            scan_augmentor.ScanAugmentor.range_mix(proj_tensor[1:4], proj_tensor[4], proj_tensor2[1:4], proj_tensor2[4])
         else:
             _, h, w = proj_tensor.shape
 
