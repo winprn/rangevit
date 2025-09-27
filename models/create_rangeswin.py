@@ -42,6 +42,9 @@ class RangeSwin_KPConv(nn.Module):
         self.kpclassifier = kpclassifier
         self.n_cls = n_cls
 
+        # Add swin_encoder attribute for compatibility with train.py validation check
+        self.swin_encoder = backbone
+
         # metadata to keep parity with RangeViT_KPConv
         self.patch_size = (4, 4)     # Swin patch embed default
         self.patch_stride = (4, 4)
@@ -102,6 +105,9 @@ class RangeSwin_noKPConv(nn.Module):
         self.out_channels = out_channels
         self.in_channels = in_channels
         self.n_cls = n_cls
+
+        # Add swin_encoder attribute for compatibility with train.py validation check
+        self.swin_encoder = backbone_decoder
 
         # metadata so other code expecting RangeViT fields doesn't break
         # patch_size: Swin patch size (timm's default is 4 for many variants)
