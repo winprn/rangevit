@@ -156,7 +156,7 @@ class RangeViewLoader(Dataset):
         proj_feature_tensor = (proj_feature_tensor - self.proj_img_mean[:, None, None]) / self.proj_img_stds[:, None, None]
         proj_feature_tensor = proj_feature_tensor * proj_mask_tensor.unsqueeze(0).float()
 
-        return proj_feature_tensor, proj_sem_label_tensor, proj_mask_tensor, px, py, proj_range, points_xyz
+        return sem_label, proj_feature_tensor, proj_sem_label_tensor, proj_mask_tensor, px, py, proj_range, points_xyz
 
     def get_item_for_kpconv(self, index):
         '''
@@ -164,8 +164,8 @@ class RangeViewLoader(Dataset):
         proj_sem_label_tensor: HxW
         proj_mask_tensor: HxW
         '''
-        proj_feature_tensor, proj_sem_label_tensor, proj_mask_tensor, px, py, proj_range, points_xyz = self._get_proj(index)
-        proj_feature_tensor2, proj_sem_label_tensor2, proj_mask_tensor2, px2, py2, proj_range2, points_xyz2 = self._get_proj(index + 20)
+        sem_label, proj_feature_tensor, proj_sem_label_tensor, proj_mask_tensor, px, py, proj_range, points_xyz = self._get_proj(index)
+        sem_label2, proj_feature_tensor2, proj_sem_label_tensor2, proj_mask_tensor2, px2, py2, proj_range2, points_xyz2 = self._get_proj(index + 20)
 
         proj_tensor = torch.cat(
             (proj_feature_tensor,
