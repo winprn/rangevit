@@ -118,6 +118,12 @@ class RangeSwinUPerNet(nn.Module):
         self.in_channels = in_channels
         self.n_cls = n_cls
         self.out_channels = out_channels
+        self.dataset = "Semantic-kitti" # TODO: change to depend on dataset
+        if self.dataset == "Semantic-kitti":
+            self.range_image_size = (64, 384)
+        else:
+            self.range_image_size = (32, 384)
+
 
         # Create timm swin backbone (features_only gives list of feature maps)
         self.backbone = timm.create_model(
@@ -125,11 +131,11 @@ class RangeSwinUPerNet(nn.Module):
             pretrained=False,   # we will optionally load custom checkpoint manually
             features_only=swin_features_only,
             in_chans=in_channels,   # timm supports in_chans param
-            img_size=(32, 384),
+            img_size=self.range_image_size,
             out_indices=swin_features_out_indices
         )
         if hasattr(self.backbone, 'patch_embed'):
-            self.backbone.patch_embed.img_size = (32, 384)
+            self.backbone.patch_embed.img_size = self.range_image_size
 
 
         # timm returns feature channels in backbone.feature_info.channels

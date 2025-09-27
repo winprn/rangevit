@@ -14,7 +14,7 @@ def create_rangeswin(model_cfg, use_kpconv=False):
     out_ch = model_cfg.get('out_channels', 256)
     pretrained_path = model_cfg.get('pretrained_path', None)
 
-    swin_encoder = RangeSwinUPerNet(
+    backbone = RangeSwinUPerNet(
         in_channels=in_ch,
         n_cls=n_cls,
         swin_name=swin_name,
@@ -28,17 +28,17 @@ def create_rangeswin(model_cfg, use_kpconv=False):
             out_channels=out_ch,
             num_classes=n_cls
         )
-        model = RangeSwin_KPConv(swin_encoder, kpclassifier, n_cls=n_cls)
+        model = RangeSwin_KPConv(backbone, kpclassifier, n_cls=n_cls)
     else:
-        model = RangeSwin_noKPConv(swin_encoder, out_channels=out_ch, in_channels=in_ch, n_cls=n_cls)
+        model = RangeSwin_noKPConv(backbone, out_channels=out_ch, in_channels=in_ch, n_cls=n_cls)
 
     return model
 
 
 class RangeSwin_KPConv(nn.Module):
-    def __init__(self, swin_encoder: RangeSwinUPerNet, kpclassifier: KPClassifier, n_cls: int):
+    def __init__(self, backbone: RangeSwinUPerNet, kpclassifier: KPClassifier, n_cls: int):
         super().__init__()
-        self.swin_encoder = swin_encoder   # produces [B, D_h, H, W]
+        self.backbone = backbone   # produces [B, D_h, H, W]
         self.kpclassifier = kpclassifier
         self.n_cls = n_cls
 
@@ -50,7 +50,7 @@ class RangeSwin_KPConv(nn.Module):
         """
         Produce 2D dense features [B, D_h, H, W] from Swin+UPerNet.
         """
-        feats = self.swin_encoder(im, return_features=True)
+        feats = self.backbone(im, return_features=True)
         return feats
 
     def counter_model_parameters(self):

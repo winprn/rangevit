@@ -26,28 +26,6 @@ import utils.tools as tools
 from models.model_utils import resize_pos_embed
 import models
 
-
-# def build_rangevit_model(settings, pretrained_path=None):
-#     model = models.RangeViT(
-#         in_channels=settings.in_channels,
-#         n_cls=settings.n_classes,
-#         backbone=settings.vit_backbone,
-#         image_size=settings.image_size,
-#         pretrained_path=pretrained_path,
-#         new_patch_size=settings.patch_size,
-#         new_patch_stride=settings.patch_stride,
-#         reuse_pos_emb=settings.reuse_pos_emb,
-#         reuse_patch_emb=settings.reuse_patch_emb,
-#         conv_stem=settings.conv_stem,
-#         stem_base_channels=settings.stem_base_channels,
-#         stem_hidden_dim=settings.D_h,
-#         skip_filters=settings.skip_filters,
-#         decoder=settings.decoder,
-#         up_conv_d_decoder=settings.D_h,
-#         up_conv_scale_factor=settings.patch_stride,
-#         use_kpconv=settings.use_kpconv)
-#     return model
-
 def build_range_model(settings, pretrained_path=None):
     if 'swin' in settings.vit_backbone.lower():
         # build a config dict compatible with create_rangeswin()
@@ -98,6 +76,7 @@ class Experiment(object):
         torch.manual_seed(self.settings.seed)
         torch.cuda.manual_seed(self.settings.seed)
         np.random.seed(self.settings.seed)
+        print(f"[debug] current using gpu: ${self.settings.gpu}")
         torch.cuda.set_device(self.settings.gpu)
         torch.backends.cudnn.benchmark = True
 
