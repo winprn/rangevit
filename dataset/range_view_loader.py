@@ -19,7 +19,7 @@ import torchvision.transforms as T
 import torchvision.transforms.functional as TF
 from scipy.spatial.ckdtree import cKDTree as kdtree
 
-from .preprocess import augmentor, projection
+from .preprocess import augmentor, projection, scan_augmentor
 from .preprocess.range_augmentor import RangeImageAugmentor
 
 
@@ -129,12 +129,7 @@ class RangeViewLoader(Dataset):
                               self.config['original_image_size'][1]))
             ])
 
-    def get_item_for_kpconv(self, index):
-        '''
-        proj_feature_tensor: CxHxW
-        proj_sem_label_tensor: HxW
-        proj_mask_tensor: HxW
-        '''
+    def _get_proj(self, index):
         pointcloud, sem_label, inst_label = self.dataset.loadDataByIndex(index)
         points_xyz = pointcloud[:, :3]
         sem_label = self.dataset.labelMapping(sem_label)
@@ -161,15 +156,36 @@ class RangeViewLoader(Dataset):
         proj_feature_tensor = (proj_feature_tensor - self.proj_img_mean[:, None, None]) / self.proj_img_stds[:, None, None]
         proj_feature_tensor = proj_feature_tensor * proj_mask_tensor.unsqueeze(0).float()
 
+        return proj_feature_tensor, proj_sem_label_tensor, proj_mask_tensor, px, py, proj_range, points_xyz
+
+    def get_item_for_kpconv(self, index):
+        '''
+        proj_feature_tensor: CxHxW
+        proj_sem_label_tensor: HxW
+        proj_mask_tensor: HxW
+        '''
+        proj_feature_tensor, proj_sem_label_tensor, proj_mask_tensor, px, py, proj_range, points_xyz = self._get_proj(index)
+        proj_feature_tensor2, proj_sem_label_tensor2, proj_mask_tensor2, px2, py2, proj_range2, points_xyz2 = self._get_proj(index + 20)
+
         proj_tensor = torch.cat(
             (proj_feature_tensor,
             proj_sem_label_tensor.unsqueeze(0),
             proj_mask_tensor.float().unsqueeze(0)), dim=0)
+        
+        proj_tensor2 = torch.cat(
+            (proj_feature_tensor2,
+            proj_sem_label_tensor2.unsqueeze(0),
+            proj_mask_tensor2.float().unsqueeze(0)), dim=0)
 
         if self.is_train:
             proj_tensor, px, py, points_xyz, sem_label = crop_inputs(
                 proj_tensor, px, py, points_xyz, sem_label,
                 self.crop_size, center_crop=False, p_hflip=self.proj_p_hflip)
+            
+            proj_tensor2, px2, py2, points_xyz2, sem_label2 = crop_inputs(
+                proj_tensor2, px2, py2, points_xyz2, sem_label2,
+                self.crop_size, center_crop=False, p_hflip=self.proj_p_hflip)
+            scan_augmentor.ScanAugmentor.range_mix(proj_tensor[1:4], proj_tensor[4], proj_tensor2[1:4], proj_tensor2[4])
         else:
             _, h, w = proj_tensor.shape
 

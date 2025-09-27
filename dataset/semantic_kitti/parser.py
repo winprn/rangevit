@@ -138,6 +138,7 @@ class SemanticKitti(object):
         return sem_label, inst_label
 
     def loadDataByIndex(self, index):
+        index = index % len(self.pointcloud_files)
         pointcloud = self.readPCD(self.pointcloud_files[index])
         if self.has_label:
             sem_label, inst_label = self.readLabel(self.label_files[index])
