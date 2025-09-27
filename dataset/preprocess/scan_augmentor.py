@@ -19,53 +19,80 @@ class ScanAugmentor:
     @staticmethod
     @torch.no_grad()
     def range_mix(
-        xa: Tensor, ya: Tensor,
-        xb: Tensor, yb: Tensor,
+        xa: torch.Tensor, ya: torch.Tensor,
+        xb: torch.Tensor, yb: torch.Tensor,
         *,
         kmix: Optional[int] = None,
-        bin_select: str = "random",    # {"random","alternate"}
+        bin_select: str = "random",      # {"random","alternate"}
         channels_last: bool = False
-    ) -> Tuple[Tensor, Tensor]:
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         RangeMix: split the vertical (inclination) axis into k equal bins and
         replace the corresponding rows in (xa, ya) with those from (xb, yb).
-        - kmix: if None, sample from {2,3,4,5,6} as in the paper.
+
+        - kmix: if None, sample from {2,3,4,5,6}
         - bin_select:
-            "random"   -> independently choose each bin with p=0.5 to replace
-            "alternate"-> replace every other bin starting from a random offset
+            "random"    -> independently choose each bin with p=0.5 to replace
+            "alternate" -> replace every other bin starting from a random offset
+
         Shapes:
         xa, xb : (H, W, C) if channels_last else (C, H, W)
-        ya, yb : (H, W)   integer labels
+        ya, yb : (H, W)    (any dtype); will be row-swapped to stay consistent.
+
+        Notes:
+        * Operates IN-PLACE on xa/ya, so passing views like proj_tensor[1:4] is fine.
+        * Returns (xa, ya) for convenience, but caller may ignore.
         """
-        # Put features to (H, W, C)
-        xa_hw, _cl = _ensure_hw_first(xa, channels_last)
-        xb_hw, _   = _ensure_hw_first(xb, channels_last)
-        H, W, C = xa_hw.shape
-        assert xb_hw.shape == (H, W, C)
-        assert ya.shape == (H, W) and yb.shape == (H, W)
+        # Determine layout and sizes
+        if channels_last:
+            H, W, C = xa.shape
+            assert xb.shape == (H, W, C), f"xb shape {xb.shape} != {(H, W, C)}"
+            vdim = 0  # vertical dimension (rows)
+        else:
+            C, H, W = xa.shape
+            assert xb.shape == (C, H, W), f"xb shape {xb.shape} != {(C, H, W)}"
+            vdim = 1
+
+        assert ya.shape == (H, W), f"ya shape {ya.shape} != {(H, W)}"
+        assert yb.shape == (H, W), f"yb shape {yb.shape} != {(H, W)}"
+
+        dev = xa.device
 
         # Sample kmix per paper
         if kmix is None:
-            kmix = int(torch.tensor([2,3,4,5,6])[torch.randint(0, 5, (1,))])
+            kmix = [2, 3, 4, 5, 6][int(torch.randint(0, 5, (1,), device=dev))]
 
-        # Compute vertical bin edges (equal-span inclination ranges)
+        # Compute vertical bin edges
+        # (Use CPU int64 for indexing, values are small; that’s OK even if tensors are on GPU)
         edges = torch.linspace(0, H, kmix + 1, dtype=torch.int64)
-        xa_out = xa_hw.clone()
-        ya_out = ya.clone()
 
+        # Choose which bins to take from xb/yb
         if bin_select == "random":
-            take = torch.rand(kmix) < 0.5
+            take = (torch.rand(kmix, device=dev) < 0.5)
         elif bin_select == "alternate":
-            start = int(torch.randint(0, 2, (1,)))
-            take = torch.zeros(kmix, dtype=torch.bool)
+            start = int(torch.randint(0, 2, (1,), device=dev))
+            take = torch.zeros(kmix, dtype=torch.bool, device=dev)
             take[start::2] = True
         else:
             raise ValueError("bin_select must be 'random' or 'alternate'.")
 
+        # Ensure at least one bin is swapped
+        if not bool(take.any()):
+            take[int(torch.randint(0, kmix, (1,), device=dev))] = True
+
+        # Do the row-wise swaps IN-PLACE
         for i in range(kmix):
             if take[i]:
-                r0, r1 = int(edges[i]), int(edges[i+1])
-                xa_out[r0:r1, :, :] = xb_hw[r0:r1, :, :]
-                ya_out[r0:r1, :]    = yb[r0:r1, :]
+                r0 = int(edges[i].item())
+                r1 = int(edges[i + 1].item())
+                if r1 <= r0:
+                    continue  # safety, though edges should be strictly increasing
 
-        return _restore_layout(xa_out, channels_last), ya_out
+                if channels_last:
+                    xa[r0:r1, :, :] = xb[r0:r1, :, :]
+                else:
+                    xa[:, r0:r1, :] = xb[:, r0:r1, :]
+
+                ya[r0:r1, :] = yb[r0:r1, :]
+
+        return xa, ya
