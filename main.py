@@ -64,8 +64,7 @@ class Experiment(object):
         torch.manual_seed(self.settings.seed)
         torch.cuda.manual_seed(self.settings.seed)
         np.random.seed(self.settings.seed)
-        torch.cuda.set_device(self.settings.gpu)
-        # torch.cuda.set_device("cuda:0")
+        # Device is already set in init_distributed_mode
 
         torch.backends.cudnn.benchmark = True
 
