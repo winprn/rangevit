@@ -6,8 +6,8 @@ class ScanAugmentor:
     def range_mix(pcdA, lblA, pcdB, lblB, h = 64, w = 192):
         pcdA_, lblA_ = pcdA.clone(), lblA.clone()
         x, y, z = pcdA_
-        theta = torch.atan2(y, x) 
-        phi = torch.atan2(z, torch.sqrt(x*x + y*y))
+        theta = np.arctan2(y, x) 
+        phi = np.arctan2(z, torch.sqrt(x*x + y*y))
         mix_h, mix_w = int(h / phi), int(w / theta)
         for i in range(1, mix_h):
             for j in range(1, mix_w):
