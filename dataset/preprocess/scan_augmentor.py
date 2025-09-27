@@ -4,7 +4,7 @@ class ScanAugmentor:
     @staticmethod
     def range_mix(pcdA, lblA, pcdB, lblB, h = 64, w = 192):
         pcdA_, lblA_ = pcdA.clone(), lblA.clone()
-        x, y, z = pcdA_[1:3]
+        x, y, z = pcdA_
         theta = np.arctan2(y, x) 
         phi = np.arctan2(z/np.sqrt(x**2 + y**2))
         mix_h, mix_w = int(h / phi), int(w / theta)
