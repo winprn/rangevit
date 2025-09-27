@@ -85,8 +85,6 @@ class ScanAugmentor:
             if take[i]:
                 r0 = int(edges[i].item())
                 r1 = int(edges[i + 1].item())
-                if r1 <= r0:
-                    continue  # safety, though edges should be strictly increasing
 
                 if channels_last:
                     xa[r0:r1, :, :] = xb[r0:r1, :, :]
