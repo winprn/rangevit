@@ -177,7 +177,6 @@ class RangeViewLoader(Dataset):
             proj_sem_label_tensor2.unsqueeze(0),
             proj_mask_tensor2.float().unsqueeze(0)), dim=0)
 
-        scan_augmentor.ScanAugmentor.range_mix(proj_tensor[1:4], proj_tensor[4], proj_tensor2[1:4], proj_tensor2[4])
         if self.is_train:
             proj_tensor, px, py, points_xyz, sem_label = crop_inputs(
                 proj_tensor, px, py, points_xyz, sem_label,
@@ -186,6 +185,7 @@ class RangeViewLoader(Dataset):
             proj_tensor2, px2, py2, points_xyz2, sem_label2 = crop_inputs(
                 proj_tensor2, px2, py2, points_xyz2, sem_label2,
                 self.crop_size, center_crop=False, p_hflip=self.proj_p_hflip)
+            scan_augmentor.ScanAugmentor.range_mix(proj_tensor[1:4], proj_tensor[4], proj_tensor2[1:4], proj_tensor2[4])
         else:
             _, h, w = proj_tensor.shape
 

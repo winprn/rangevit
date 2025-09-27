@@ -241,19 +241,19 @@ class Augmentor(object):
             rot_yaw = 0
         pointcloud = self.rotation(pointcloud, rot_roll, rot_pitch, rot_yaw)
 
-        # noise augment
-        rand = random.uniform(0, 1)
-        if rand < self.parmas.p_noise:
-            pointcloud = self.add_noise(pointcloud, self.parmas.noise_std)
+        # # noise augment
+        # rand = random.uniform(0, 1)
+        # if rand < self.parmas.p_noise:
+        #     pointcloud = self.add_noise(pointcloud, self.parmas.noise_std)
 
-        # dropout augment
-        rand = random.uniform(0, 1)
-        if rand < self.parmas.p_dropout:
-            pointcloud = self.dropout_points(pointcloud, self.parmas.dropout_ratio)
+        # # dropout augment
+        # rand = random.uniform(0, 1)
+        # if rand < self.parmas.p_dropout:
+        #     pointcloud = self.dropout_points(pointcloud, self.parmas.dropout_ratio)
 
-        # intensity scaling augment
-        rand = random.uniform(0, 1)
-        if rand < self.parmas.p_intensity_scale:
-            pointcloud = self.scale_intensity(pointcloud, self.parmas.intensity_scale_min, self.parmas.intensity_scale_max)
+        # # intensity scaling augment
+        # rand = random.uniform(0, 1)
+        # if rand < self.parmas.p_intensity_scale:
+        #     pointcloud = self.scale_intensity(pointcloud, self.parmas.intensity_scale_min, self.parmas.intensity_scale_max)
 
         return pointcloud
