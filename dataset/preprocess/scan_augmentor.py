@@ -7,11 +7,12 @@ class ScanAugmentor:
         pcdA_, lblA_ = pcdA.clone(), lblA.clone()
         x, y, z = pcdA_
         print(x, y, z)
-        theta = np.arctan2(y, x)
+        theta = torch.atan2(y, x)
         print(theta)
-        phi = np.arctan2(z, torch.sqrt(x*x + y*y))
+        phi = torch.atan2(z, torch.sqrt(x*x + y*y))
         print(phi)
-        mix_h, mix_w = int(h / phi), int(w / theta)
+        # Use mean values for mixing dimensions since phi and theta are tensors
+        mix_h, mix_w = int(h / phi.mean().item()), int(w / theta.mean().item())
         for i in range(1, mix_h):
             for j in range(1, mix_w):
                 pcdA_[:, i-1:i, j-1:j] = pcdB[:, i-1:i, j-1:j]
