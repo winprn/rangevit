@@ -3,7 +3,7 @@ import numpy as np
 class ScanAugmentor:
     @staticmethod
     def range_mix(pcdA, lblA, pcdB, lblB, h = 64, w = 192):
-        pcdA_, lblA_ = pcdA.copy(), lblA.copy()
+        pcdA_, lblA_ = pcdA.clone(), lblA.clone()
         x, y, z = pcdA_[1:3]
         theta = np.arctan2(y, x) 
         phi = np.arctan2(z/np.sqrt(x**2 + y**2))
