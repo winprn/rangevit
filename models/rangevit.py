@@ -272,6 +272,13 @@ class RangeViT(nn.Module):
             dropout = 0.0
             drop_path_rate = 0.1
             d_model = 384
+        elif backbone == 'vit_tiny_p16_384':
+            n_heads = 6
+            n_layers = 12
+            patch_size = 16
+            dropout = 0.0
+            drop_path_rate = 0.1
+            d_model = 192
         elif backbone == 'vit_base_patch16_384':
             n_heads = 12
             n_layers = 12
@@ -350,6 +357,8 @@ class RangeViT(nn.Module):
         if pretrained_path is not None:
             print(f'Loading pretrained parameters from {pretrained_path}')
             if pretrained_path == 'timmImageNet21k':
+                # assert
+                raise NotImplementedError('[rangevit.py][timmImageNet21k] Not expected to go here.')
                 vit_imagenet = timm.create_model(backbone, pretrained=True) #.cuda()
                 pretrained_state_dict = vit_imagenet.state_dict() # nb keys: 152
                 all_keys = list(pretrained_state_dict.keys())
@@ -357,17 +366,26 @@ class RangeViT(nn.Module):
                     pretrained_state_dict['encoder.'+key] = pretrained_state_dict.pop(key)
             else:
                 pretrained_state_dict = torch.load(pretrained_path, map_location='cpu')
-                all_keys = list(pretrained_state_dict['state_dict'].keys())
+                # print(f'[Debug] Pretrained keys: {pretrained_state_dict.keys()}')
+                # print(f'[Debug] Pretrained keys [meta]: {pretrained_state_dict["meta"].keys()}')
+                # print(f'[Debug] Pretrained keys [state_dict]: {pretrained_state_dict["state_dict"].keys()}')
+                
+                all_keys = list(pretrained_state_dict["state_dict"].keys())
                 for key in all_keys:
                     if key.startswith('backbone.'):
                         new_key = key.replace('backbone.', '')
                         pretrained_state_dict['state_dict'][new_key] = pretrained_state_dict['state_dict'].pop(key)
+
                 if 'model' in pretrained_state_dict:
                     pretrained_state_dict = pretrained_state_dict['model']
                 elif 'pos_embed' in pretrained_state_dict['state_dict'].keys():
                     all_keys = list(pretrained_state_dict['state_dict'].keys())
+                elif 'pos_embed' in pretrained_state_dict['state_dict'].keys():
+                    all_keys = list(pretrained_state_dict['state_dict'].keys())
                     for key in all_keys:
                         pretrained_state_dict['encoder.'+key] = pretrained_state_dict['state_dict'].pop(key)
+                        # pretrained_state_dict['encoder.'+key] = pretrained_state_dict.pop(key)
+                        
 
             # Reuse pre-trained positional embeddings
             if reuse_pos_emb:
@@ -397,6 +415,8 @@ class RangeViT(nn.Module):
                 reshaped_weight = F.interpolate(reshaped_weight, size=(gs_new_h, gs_new_w), mode='bilinear')
                 pretrained_state_dict['encoder.patch_embed.proj.weight'] = reshaped_weight
             else:
+                # del pretrained_state_dict['encoder.patch_embed.proj.weight'] # remove patch embedding layers
+                # del pretrained_state_dict['encoder.patch_embed.proj.bias'] # remove patch embedding layers
                 del pretrained_state_dict['encoder.patch_embed.projection.weight'] # remove patch embedding layers
                 del pretrained_state_dict['encoder.patch_embed.projection.bias'] # remove patch embedding layers
 

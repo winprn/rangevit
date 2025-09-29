@@ -26,10 +26,13 @@ def tensorboard_logger(epoch,
 
     recorder.tensorboard.add_scalar(
         tag='{}_Loss'.format(mode), scalar_value=loss_meter_avg, global_step=epoch)
-    recorder.tensorboard.add_scalar(
-        tag='{}_LossSoftmax'.format(mode), scalar_value=loss_focal.item(), global_step=epoch)
-    recorder.tensorboard.add_scalar(
-        tag='{}_LossLovasz'.format(mode), scalar_value=loss_lovasz.item(), global_step=epoch)
+    # Check if loss tensors are valid before logging
+    if loss_focal.numel() > 0 and not torch.isnan(loss_focal) and not torch.isinf(loss_focal):
+        recorder.tensorboard.add_scalar(
+            tag='{}_LossSoftmax'.format(mode), scalar_value=loss_focal.item(), global_step=epoch)
+    if loss_lovasz.numel() > 0 and not torch.isnan(loss_lovasz) and not torch.isinf(loss_lovasz):
+        recorder.tensorboard.add_scalar(
+            tag='{}_LossLovasz'.format(mode), scalar_value=loss_lovasz.item(), global_step=epoch)
     
     recorder.tensorboard.add_scalar(
         tag='{}_meanAcc'.format(mode), scalar_value=mean_acc.item(), global_step=epoch)

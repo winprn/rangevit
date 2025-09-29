@@ -54,20 +54,19 @@ class Experiment(object):
         self.settings = settings
 
         # Init gpu
-
-        # tools.init_distributed_mode(self.settings)
-        # torch.distributed.barrier()
+        tools.init_distributed_mode(self.settings)
+        if self.settings.distributed:
+            torch.distributed.barrier()
 
         self.settings.check_path()
 
         # Set random seed
         torch.manual_seed(self.settings.seed)
-        torch.cuda.manual_seed(self.settings.seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed(self.settings.seed)
+            torch.cuda.set_device(self.settings.gpu)
+            torch.backends.cudnn.benchmark = True
         np.random.seed(self.settings.seed)
-        # torch.cuda.set_device(self.settings.gpu)
-        torch.cuda.set_device("cuda:0")
-
-        torch.backends.cudnn.benchmark = True
 
         # Init checkpoint
         self.recorder = None
@@ -212,6 +211,28 @@ class Experiment(object):
 
             # Run one epoch
             self.trainer.run(epoch, mode='Train')
+            
+            # Save checkpoint right after training (before validation)
+            if self.recorder is not None:
+                saved_path = os.path.join(self.recorder.checkpoint_path, 'checkpoint.pth')
+
+                checkpoint_data = {
+                    'model': self.model.state_dict(),
+                    'optimizer': self.trainer.optimizer.state_dict(),
+                    'epoch': epoch,
+                }
+                if self.trainer.fp16_scaler is not None:
+                    checkpoint_data['fp16_scaler'] = self.trainer.fp16_scaler.state_dict()
+                torch.save(checkpoint_data, saved_path)
+
+                # Save checkpoint at even epochs as checkpoint_k_epochs.pth
+                if (epoch + 1) % 2 == 0:  # epoch+1 because epoch is 0-indexed
+                    epoch_checkpoint_path = os.path.join(
+                        self.recorder.checkpoint_path, f'checkpoint_{epoch+1}_epochs.pth')
+                    torch.save(checkpoint_data, epoch_checkpoint_path)
+                    self.recorder.logger.info(f'Saved checkpoint at epoch {epoch+1}: {epoch_checkpoint_path}')
+
+
 
             # Run validation
             if (epoch % self.settings.val_frequency == 0 or
@@ -249,17 +270,17 @@ class Experiment(object):
                                 torch.save(checkpoint_data, saved_path_start)
 
             # Save checkpoint
-            if self.recorder is not None:
-                saved_path = os.path.join(self.recorder.checkpoint_path, 'checkpoint.pth')
+            # if self.recorder is not None:
+            #     saved_path = os.path.join(self.recorder.checkpoint_path, 'checkpoint.pth')
 
-                checkpoint_data = {
-                    'model': self.model.state_dict(),
-                    'optimizer': self.trainer.optimizer.state_dict(),
-                    'epoch': epoch,
-                }
-                if self.trainer.fp16_scaler is not None:
-                    checkpoint_data['fp16_scaler'] = self.trainer.fp16_scaler.state_dict()
-                torch.save(checkpoint_data, saved_path)
+            #     checkpoint_data = {
+            #         'model': self.model.state_dict(),
+            #         'optimizer': self.trainer.optimizer.state_dict(),
+            #         'epoch': epoch,
+            #     }
+            #     if self.trainer.fp16_scaler is not None:
+            #         checkpoint_data['fp16_scaler'] = self.trainer.fp16_scaler.state_dict()
+            #     torch.save(checkpoint_data, saved_path)
 
                 # Logging best results
                 if best_val_result is not None:

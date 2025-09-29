@@ -37,7 +37,7 @@ class Trainer(object):
         # Init params
         self.settings = settings
         self.recorder = recorder
-        self.model = model.cuda()
+        self.model = model.cuda() if torch.cuda.is_available() else model
         self.remain_time = tools.RemainTime(self.settings.n_epochs)
 
         # Init data loader
@@ -50,10 +50,14 @@ class Trainer(object):
         self.optimizer = self._initOptimizer()
 
         if tools.is_dist_avail_and_initialized():
-            self.model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(self.model).cuda()
-            self.model = nn.parallel.DistributedDataParallel(
-                	self.model, device_ids=[self.settings.gpu],
-                    find_unused_parameters=True)
+            if torch.cuda.is_available():
+                self.model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(self.model).cuda()
+                self.model = nn.parallel.DistributedDataParallel(
+                    	self.model, device_ids=[self.settings.gpu],
+                        find_unused_parameters=True)
+            else:
+                self.model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(self.model)
+                self.model = nn.parallel.DistributedDataParallel(self.model)
 
         # Get metrics
         self.metrics = utils.metrics.IOUEval(
@@ -258,6 +262,8 @@ class Trainer(object):
 
         # Init metrics
         loss_meter = tools.AverageMeter()
+        loss_focal_meter = tools.AverageMeter()
+        loss_lovasz_meter = tools.AverageMeter()
         self.metrics.reset()
 
         total_iter = len(dataloader)
@@ -275,7 +281,7 @@ class Trainer(object):
 
             # Forward propagation
             if mode == 'Train':
-                with torch.cuda.amp.autocast(self.fp16_scaler is not None):
+                with torch.cuda.amp.autocast(enabled=self.fp16_scaler is not None):
                     output = self.model(input_feature)
                     output_softmax = F.softmax(output, dim=1)
 
@@ -301,7 +307,7 @@ class Trainer(object):
 
                     # Validation
                     im_meta = dict(flip=False)
-                    with torch.cuda.amp.autocast(self.fp16_scaler is not None):
+                    with torch.cuda.amp.autocast(enabled=self.fp16_scaler is not None):
                         lidar_pred = inference(
                             model_without_ddp.rangevit,
                             [input_feature],
@@ -327,6 +333,8 @@ class Trainer(object):
                 self.metrics.addBatch(argmax, input_label) # 2D predictions
 
             loss_meter.update(loss.item(), input_feature.size(0))
+            loss_focal_meter.update(loss_focal.item() if loss_focal.numel() > 0 else 0.0, input_feature.size(0))
+            loss_lovasz_meter.update(loss_lovasz.item() if loss_lovasz.numel() > 0 else 0.0, input_feature.size(0))
 
             # Timer logger
             t_process_end = time.time()
@@ -371,8 +379,8 @@ class Trainer(object):
 
         loss_dict = {
                 'loss_meter_avg': loss_meter.avg,
-                'loss_focal': loss_focal,
-                'loss_lovasz': loss_lovasz,
+                'loss_focal': torch.tensor(loss_focal_meter.avg),
+                'loss_lovasz': torch.tensor(loss_lovasz_meter.avg),
             }
 
         # Print results
@@ -440,6 +448,8 @@ class Trainer(object):
 
         # Init metrics
         loss_meter = tools.AverageMeter()
+        loss_focal_meter = tools.AverageMeter()
+        loss_lovasz_meter = tools.AverageMeter()
         self.metrics.reset()
 
         total_iter = len(dataloader)
@@ -464,7 +474,7 @@ class Trainer(object):
 
             # Forward propagation
             if mode == 'Train':
-                with torch.cuda.amp.autocast(self.fp16_scaler is not None):
+                with torch.cuda.amp.autocast(enabled=self.fp16_scaler is not None):
                     output3d = self.model(input_feature, px, py, pxyz, knns, num_points)
 
                     output3d_softmax = F.softmax(output3d, dim=1)
@@ -491,7 +501,7 @@ class Trainer(object):
 
                     # Validation
                     im_meta = dict(flip=False)
-                    with torch.cuda.amp.autocast(self.fp16_scaler is not None):
+                    with torch.cuda.amp.autocast(enabled=self.fp16_scaler is not None):
                         output_features2d = inference(
                             model_without_ddp.rangevit,
                             [input_feature],
@@ -521,6 +531,8 @@ class Trainer(object):
                 self.metrics.addBatch(argmax3d, labels3d) # 3D predictions
 
             loss_meter.update(loss.item(), input_feature.size(0))
+            loss_focal_meter.update(loss_focal.item() if loss_focal.numel() > 0 else 0.0, input_feature.size(0))
+            loss_lovasz_meter.update(loss_lovasz.item() if loss_lovasz.numel() > 0 else 0.0, input_feature.size(0))
 
             # Save the predictions
             if (mode == 'Validation' and save_results_path is not None):
@@ -597,8 +609,8 @@ class Trainer(object):
 
         loss_dict = {
                 'loss_meter_avg': loss_meter.avg,
-                'loss_focal': loss_focal,
-                'loss_lovasz': loss_lovasz,
+                'loss_focal': torch.tensor(loss_focal_meter.avg),
+                'loss_lovasz': torch.tensor(loss_lovasz_meter.avg),
             }
 
         # Print results

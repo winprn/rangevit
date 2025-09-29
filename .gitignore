@@ -5,4 +5,7 @@ save_path/*
 !save_path/README.md
 
 pretrained_model/*
-!pretrained_model/README.md
+!pretrained_model/README.md.claude/*
+save_path*
+save_results/*
+save_eval*
