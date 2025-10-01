@@ -434,7 +434,7 @@ def count_parameters(model):
 
 
 if __name__ == '__main__':
-    model = RangeViT(in_channels=6,
+    model = RangeViT(in_channels=5,
                      n_cls=17,
                      backbone='vit_small_patch16_384',
                      decoder='linear',
