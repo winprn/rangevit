@@ -43,7 +43,7 @@ use_kpconv: true
 
 # Checkpoint model
 checkpoint: null
-pretrained_model: "/path_to_pretrained_model/model.pth"
+pretrained_model: "pretrained_model/vit_base_patch16_384.pth"
 
 # Loading pre-trained patch and positional embeddings
 reuse_pos_emb: true
