@@ -55,17 +55,20 @@ def init_distributed_mode(args):
         args.rank = int(os.environ['RANK'])
         args.world_size = int(os.environ['WORLD_SIZE'])
         args.gpu = int(os.environ['LOCAL_RANK'])
+        args.distributed = True
     elif 'SLURM_PROCID' in os.environ:
         args.rank = int(os.environ['SLURM_PROCID'])
         args.gpu = args.rank % torch.cuda.device_count()
-    elif hasattr(args, 'rank'):
-        pass
+        args.distributed = True
     else:
         print('Not using distributed mode')
         args.distributed = False
+        args.rank = 0
+        args.world_size = 1
+        args.gpu = 0
+        setup_for_distributed(is_master=True)
         return
 
-    args.distributed = True
     args.dist_backend = 'nccl'
     print('| distributed init (rank {}): {}'.format(args.rank, args.dist_url), flush=True)
     torch.distributed.init_process_group(
@@ -74,6 +77,7 @@ def init_distributed_mode(args):
         world_size=args.world_size,
         rank=args.rank,
     )
+    setup_for_distributed(args.rank == 0)
 
 def setup_logger_for_distributed(is_master, logger):
     '''

@@ -264,6 +264,11 @@ class Trainer(object):
         t_start = time.time()
 
         for i, (input_feature, input_label, input_mask) in enumerate(dataloader):
+            # [TESTING] Early exit option for testing (limit iterations per epoch)
+            if self.settings.max_iters_per_epoch is not None and i >= self.settings.max_iters_per_epoch:
+                print(f'[TESTING PIPELIONE] Reached max_iters_per_epoch={self.settings.max_iters_per_epoch}, stopping epoch early')
+                break
+
             t_process_start = time.time()
 
             # Feature: range, x, y, z, intensity
@@ -396,28 +401,35 @@ class Trainer(object):
                              dataloader=self.val_range_loader,
                              print_data_distribution=True)
 
-            # Tensorboard logger
-            tensorboard_logger(epoch=epoch,
-                               mode=mode,
-                               recorder=self.recorder,
-                               metrics_dict=metrics_dict,
-                               loss_dict=loss_dict,
-                               lr=lr,
-                               mapped_cls_name=self.mapped_cls_name)
+            # Tensorboard logger (skip for test split - no labels available)
+            if not self.settings.test_split:
+                tensorboard_logger(epoch=epoch,
+                                   mode=mode,
+                                   recorder=self.recorder,
+                                   metrics_dict=metrics_dict,
+                                   loss_dict=loss_dict,
+                                   lr=lr,
+                                   mapped_cls_name=self.mapped_cls_name)
 
-            # Results at the end of the epoch
-            log_str = '>>> {} Loss {:0.4f} Acc {:0.4f} IOU {:0.4F} Recall {:0.4f}'.format(
-                mode, loss_meter.avg, mean_acc.item(), mean_iou.item(), mean_recall.item())
-            self.recorder.logger.info(log_str)
+                # Results at the end of the epoch
+                log_str = '>>> {} Loss {:0.4f} Acc {:0.4f} IOU {:0.4F} Recall {:0.4f}'.format(
+                    mode, loss_meter.avg, mean_acc.item(), mean_iou.item(), mean_recall.item())
+                self.recorder.logger.info(log_str)
+            else:
+                self.recorder.logger.info(f'>>> {mode} on test split completed - predictions saved')
 
 
-        result_metrics = {
-            'Acc': mean_acc.item(),
-            'IOU': mean_iou.item(),
-            'Recall': mean_recall.item()
-        }
-
-        return result_metrics
+        # Return metrics only if labels are available
+        if not self.settings.test_split:
+            result_metrics = {
+                'Acc': mean_acc.item(),
+                'IOU': mean_iou.item(),
+                'Recall': mean_recall.item()
+            }
+            return result_metrics
+        else:
+            # Test split has no labels, return None or dummy metrics
+            return None
 
     # Method for training and validation when using the KPConv layer
     def run_with_kpconv(self, epoch, mode='Train', print_results=False, save_results_path=None):
@@ -446,6 +458,11 @@ class Trainer(object):
         t_start = time.time()
 
         for i, batch_dict in enumerate(dataloader):
+            # Early exit for testing (limit iterations per epoch)
+            if self.settings.max_iters_per_epoch is not None and i >= self.settings.max_iters_per_epoch:
+                print(f'[TESTING PIPELINE] Reached max_iters_per_epoch={self.settings.max_iters_per_epoch}, stopping epoch early')
+                break
+
             t_process_start = time.time()
 
             # 2D inputs
@@ -622,25 +639,32 @@ class Trainer(object):
                              dataloader=self.val_range_loader,
                              print_data_distribution=True)
 
-            # Tensorboard logger
-            tensorboard_logger(epoch=epoch,
-                               mode=mode,
-                               recorder=self.recorder,
-                               metrics_dict=metrics_dict,
-                               loss_dict=loss_dict,
-                               lr=lr,
-                               mapped_cls_name=self.mapped_cls_name)
+            # Tensorboard logger (skip for test split - no labels available)
+            if not self.settings.test_split:
+                tensorboard_logger(epoch=epoch,
+                                   mode=mode,
+                                   recorder=self.recorder,
+                                   metrics_dict=metrics_dict,
+                                   loss_dict=loss_dict,
+                                   lr=lr,
+                                   mapped_cls_name=self.mapped_cls_name)
 
-            # Results at the end of the epoch
-            log_str = '>>> {} Loss {:0.4f} Acc {:0.4f} IOU {:0.4F} Recall {:0.4f}'.format(
-                mode, loss_meter.avg, mean_acc.item(), mean_iou.item(), mean_recall.item())
-            self.recorder.logger.info(log_str)
+                # Results at the end of the epoch
+                log_str = '>>> {} Loss {:0.4f} Acc {:0.4f} IOU {:0.4F} Recall {:0.4f}'.format(
+                    mode, loss_meter.avg, mean_acc.item(), mean_iou.item(), mean_recall.item())
+                self.recorder.logger.info(log_str)
+            else:
+                self.recorder.logger.info(f'>>> {mode} on test split completed - predictions saved')
 
 
-        result_metrics = {
-            'Acc': mean_acc.item(),
-            'IOU': mean_iou.item(),
-            'Recall': mean_recall.item()
-        }
-
-        return result_metrics
+        # Return metrics only if labels are available
+        if not self.settings.test_split:
+            result_metrics = {
+                'Acc': mean_acc.item(),
+                'IOU': mean_iou.item(),
+                'Recall': mean_recall.item()
+            }
+            return result_metrics
+        else:
+            # Test split has no labels, return None or dummy metrics
+            return None

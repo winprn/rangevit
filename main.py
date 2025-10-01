@@ -28,6 +28,21 @@ from models.model_utils import resize_pos_embed
 
 
 def build_rangevit_model(settings, pretrained_path=None):
+    print('==> Building RangeViT model ...')
+    print(f"settings.in_channels = {settings.in_channels}")
+    print(f"settings.vit_backbone = {settings.vit_backbone}")
+    print(f"settings.image_size = {settings.image_size}")
+    print(f"settings.patch_size = {settings.patch_size}")
+    print(f"settings.patch_stride = {settings.patch_stride}")
+    print(f"settings.reuse_pos_emb = {settings.reuse_pos_emb}")
+    print(f"settings.reuse_patch_emb = {settings.reuse_patch_emb}")
+    print(f"settings.conv_stem = {settings.conv_stem}")
+    print(f"settings.stem_base_channels = {settings.stem_base_channels}")
+    print(f"settings.D_h = {settings.D_h}")
+    print(f"settings.skip_filters = {settings.skip_filters}")
+    print(f"settings.decoder = {settings.decoder}")
+    print(f"settings.use_kpconv = {settings.use_kpconv}")
+    print(f"pretrained_path = {pretrained_path}")
     model = models.RangeViT(
         in_channels=settings.in_channels,
         n_cls=settings.n_classes,
@@ -55,16 +70,18 @@ class Experiment(object):
 
         # Init gpu
         tools.init_distributed_mode(self.settings)
-        torch.distributed.barrier()
+        if torch.cuda.is_available() and self.settings.distributed:
+            torch.distributed.barrier()
 
         self.settings.check_path()
 
         # Set random seed
         torch.manual_seed(self.settings.seed)
-        torch.cuda.manual_seed(self.settings.seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed(self.settings.seed)
+            torch.cuda.set_device(self.settings.gpu)
+            torch.backends.cudnn.benchmark = True
         np.random.seed(self.settings.seed)
-        torch.cuda.set_device(self.settings.gpu)
-        torch.backends.cudnn.benchmark = True
 
         # Init checkpoint
         self.recorder = None
@@ -129,8 +146,10 @@ class Experiment(object):
 
 
         if self.recorder is not None:
-            self.recorder.logger.info(f'model = {model}')
+            # Print the model architecture
+            # self.recorder.logger.info(f'model = {model}')
 
+            # Count the number of model parameters
             stats = model.counter_model_parameters()
             if hasattr(model, 'counter_model_parameters'):
                 self.recorder.logger.info(f'Number of model parameters:')
@@ -216,8 +235,8 @@ class Experiment(object):
                 epoch == self.epoch_start):
                 val_result = self.trainer.run(epoch, mode='Validation')
 
-                # Save the best result
-                if self.recorder is not None:
+                # Save the best result (skip if test_split - no metrics available)
+                if self.recorder is not None and val_result is not None:
                     self.recorder.logger.info(f'---- Best result after Epoch {epoch+1} ----')
                     if best_val_result is None:
                         best_val_result = val_result
@@ -303,7 +322,6 @@ if __name__ == '__main__':
 
     settings.id = args.id if args.id is not None else settings.id
     settings.pretrained_model = args.pretrained_model if args.pretrained_model is not None else settings.pretrained_model
-
     if args.checkpoint is not None:
         settings.checkpoint = args.checkpoint
         settings.pretrained_model = None
