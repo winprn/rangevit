@@ -222,7 +222,7 @@ class Augmentor(object):
         Returns:
             Mixed range image and labels
         """
-        print("Apply rangemix")
+        # print("Apply rangemix")
         if isinstance(xa, torch.Tensor):
             xa_ = xa.clone()
             ya_ = ya.clone()
