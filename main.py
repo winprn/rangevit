@@ -55,7 +55,8 @@ class Experiment(object):
 
         # Init gpu
 
-        # tools.init_distributed_mode(self.settings)
+        if tools.is_dist_avail_and_initialized():
+            tools.init_distributed_mode(self.settings)
         # torch.distributed.barrier()
 
         self.settings.check_path()
@@ -65,7 +66,7 @@ class Experiment(object):
         torch.cuda.manual_seed(self.settings.seed)
         np.random.seed(self.settings.seed)
         # torch.cuda.set_device(self.settings.gpu)
-        torch.cuda.set_device("cuda:0")
+        # torch.cuda.set_device("cuda:0")
 
         torch.backends.cudnn.benchmark = True
 
@@ -286,7 +287,7 @@ if __name__ == '__main__':
                         help='path to save the file, type: string')
     parser.add_argument('--id', type=str,
                         help='name to identify the run')
-    parser.add_argument('--num_workers', type=int, default=4,
+    parser.add_argument('--num_workers', type=int, default=2,
                         help='number of threads used for data loading, type: int')
     parser.add_argument('--pretrained_model', type=str,
                         help='path of pre-trained model to initialize the ViT encoder backbone, type: string')
