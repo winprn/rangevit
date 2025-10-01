@@ -272,14 +272,14 @@ class RangeViewLoader(Dataset):
 
                 # Reconstruct proj_tensor with mixed features and labels
                 proj_tensor = torch.cat(
-                    (proj_feature_mixed,
+                    (proj_feature_mixed[:5],
                      proj_label_mixed.unsqueeze(0),
                      proj_tensor[7].unsqueeze(0)), dim=0)
 
             # Data augmentation
             proj_tensor = self.aug_ops(proj_tensor)
 
-            return proj_tensor[0:6], proj_tensor[6], proj_tensor[7]
+            return proj_tensor[0:5], proj_tensor[6], proj_tensor[7]
 
     def __len__(self):
         if self.data_len > 0 and self.data_len < len(self.dataset):

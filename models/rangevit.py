@@ -243,7 +243,7 @@ class RangeViT_noKPConv(nn.Module):
 class RangeViT(nn.Module):
     def __init__(
         self,
-        in_channels=6,
+        in_channels=5,
         n_cls=17,
         backbone='vit_small_patch16_384',
         image_size=(32, 384),
