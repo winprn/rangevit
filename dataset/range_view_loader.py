@@ -185,7 +185,7 @@ class RangeViewLoader(Dataset):
 
                 # Reconstruct proj_tensor with mixed features and labels
                 proj_tensor = torch.cat(
-                    (proj_feature_mixed[:5],
+                    (proj_feature_mixed,
                      proj_label_mixed.unsqueeze(0),
                      proj_tensor[7].unsqueeze(0)), dim=0)
 
