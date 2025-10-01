@@ -49,6 +49,8 @@ class Trainer(object):
         # Init optimizer
         self.optimizer = self._initOptimizer()
 
+        print(f"Rank {self.settings.rank}: is_dist_avail_and_initialized={tools.is_dist_avail_and_initialized()}")
+        print(f"Rank {self.settings.rank}: is_master={tools.is_main_process()}")
         if tools.is_dist_avail_and_initialized():
             self.model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(self.model).cuda()
             self.model = nn.parallel.DistributedDataParallel(
