@@ -144,4 +144,4 @@ class Option(object):
                 print('WARNING: Directory exist: {}'.format(self.save_path))
 
             if not os.path.isdir(self.save_path):
-                os.makedirs(self.save_path)
+                os.makedirs(self.save_path, exist_ok=True)
