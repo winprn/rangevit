@@ -1,6 +1,7 @@
 import numpy as np
 from scipy.spatial.transform import Rotation as R
 import random
+import torch
 
 
 class AugmentParams(object):
@@ -88,6 +89,9 @@ class AugmentParams(object):
         self.p_rot_yaw = p_rot_yaw
         self.rot_yawmin = rot_yawmin
         self.rot_yawmax = rot_yawmax
+
+    def setRangeMixParams(self, p_rangemix):
+        self.p_rangemix = p_rangemix
 
     def __str__(self):
         print('=== Augmentor parameters ===')
@@ -204,3 +208,55 @@ class Augmentor(object):
         pointcloud = self.rotation(pointcloud, rot_roll, rot_pitch, rot_yaw)
 
         return pointcloud
+    
+    @staticmethod
+    def rangemix(xa, ya, xb, yb, kmix_list=[2, 3, 4, 5, 6]):
+        """
+        RangeMix augmentation: Mix two range images along inclination and azimuth directions
+        Args:
+            xa: range image features [C, H, W]
+            ya: range image labels [H, W]
+            xb: second range image features [C, H, W]
+            yb: second range image labels [H, W]
+            kmix_list: list of possible grid divisions
+        Returns:
+            Mixed range image and labels
+        """
+        if isinstance(xa, torch.Tensor):
+            xa_ = xa.clone()
+            ya_ = ya.clone()
+        else:
+            xa_ = xa.copy()
+            ya_ = ya.copy()
+
+        # Sample kmix (number of divisions)
+        kmix = random.choice(kmix_list)
+
+        # Generate mixing strategies (phi for vertical, theta for horizontal)
+        phi = random.randint(2, kmix)
+        theta = random.randint(2, kmix)
+
+        # Get dimensions
+        if isinstance(xa, torch.Tensor):
+            _, h, w = xa.shape
+        else:
+            _, h, w = xa.shape
+
+        # Calculate grid cell size
+        mix_h = h // phi
+        mix_w = w // theta
+
+        # Mix grid cells - alternate between original and mixed
+        for i in range(1, phi + 1):
+            for j in range(1, theta + 1):
+                if (i + j) % 2 == 0:  # Checkerboard pattern
+                    h_start = (i - 1) * mix_h
+                    h_end = i * mix_h if i < phi else h
+                    w_start = (j - 1) * mix_w
+                    w_end = j * mix_w if j < theta else w
+
+                    xa_[:, h_start:h_end, w_start:w_end] = xb[:, h_start:h_end, w_start:w_end]
+                    ya_[h_start:h_end, w_start:w_end] = yb[h_start:h_end, w_start:w_end]
+
+        return xa_, ya_
+

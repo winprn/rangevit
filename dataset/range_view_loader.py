@@ -58,9 +58,16 @@ class RangeViewLoader(Dataset):
                     scale_min=augment_config['scale_min'],
                     scale_max=augment_config['scale_max'])
                 print(f'Adding scaling augmentation with range [{augment_params.scale_min}, {augment_params.scale_max}] and probability {augment_params.p_scale}')
+            if 'p_rangemix' in augment_config:
+                augment_params.setRangeMixParams(augment_config['p_rangemix'])
+                self.p_rangemix = augment_config['p_rangemix']
+                print(f'Adding RangeMix augmentation with probability {self.p_rangemix}')
+            else:
+                self.p_rangemix = 0.0
             self.augmentor = augmentor.Augmentor(augment_params)
         else:
             self.augmentor = None
+            self.p_rangemix = 0.0
 
         self.proj_p_hflip = augment_config.get('p_hflip', 0.0)
         if self.proj_p_hflip > 0.0:
@@ -123,8 +130,9 @@ class RangeViewLoader(Dataset):
         proj_xyz_tensor = torch.from_numpy(proj_pointcloud[..., :3])
         proj_intensity_tensor = torch.from_numpy(proj_pointcloud[..., 3])
         proj_intensity_tensor = proj_intensity_tensor.ne(-1).float() * proj_intensity_tensor
+        proj_existence_tensor = proj_mask_tensor.float()
         proj_feature_tensor = torch.cat(
-            [proj_range_tensor.unsqueeze(0), proj_xyz_tensor.permute(2, 0, 1), proj_intensity_tensor.unsqueeze(0)], 0)
+            [proj_range_tensor.unsqueeze(0), proj_xyz_tensor.permute(2, 0, 1), proj_intensity_tensor.unsqueeze(0), proj_existence_tensor.unsqueeze(0)], 0)
 
         proj_feature_tensor = (proj_feature_tensor - self.proj_img_mean[:, None, None]) / self.proj_img_stds[:, None, None]
         proj_feature_tensor = proj_feature_tensor * proj_mask_tensor.unsqueeze(0).float()
@@ -149,9 +157,9 @@ class RangeViewLoader(Dataset):
         _, knns = tree.query(points_xyz, k=7)
 
         output = {
-            'input2d': proj_tensor[:5],
-            'label2d': proj_tensor[5],
-            'mask2d': proj_tensor[6],
+            'input2d': proj_tensor[:6],
+            'label2d': proj_tensor[6],
+            'mask2d': proj_tensor[7],
             'px': torch.from_numpy(px).float(),
             'py': torch.from_numpy(py).float(),
             'points_xyz': torch.from_numpy(points_xyz).float(),
@@ -197,8 +205,9 @@ class RangeViewLoader(Dataset):
         proj_xyz_tensor = torch.from_numpy(proj_pointcloud[..., :3])
         proj_intensity_tensor = torch.from_numpy(proj_pointcloud[..., 3])
         proj_intensity_tensor = proj_intensity_tensor.ne(-1).float() * proj_intensity_tensor
+        proj_existence_tensor = proj_mask_tensor.float()
         proj_feature_tensor = torch.cat(
-            [proj_range_tensor.unsqueeze(0), proj_xyz_tensor.permute(2, 0, 1), proj_intensity_tensor.unsqueeze(0)], 0)
+            [proj_range_tensor.unsqueeze(0), proj_xyz_tensor.permute(2, 0, 1), proj_intensity_tensor.unsqueeze(0), proj_existence_tensor.unsqueeze(0)], 0)
 
         proj_feature_tensor = (proj_feature_tensor - self.proj_img_mean[:, None, None]) / self.proj_img_stds[:, None,
                                                                                           None]
@@ -220,10 +229,57 @@ class RangeViewLoader(Dataset):
                 proj_sem_label_tensor.unsqueeze(0),
                 proj_mask_tensor.float().unsqueeze(0)), dim=0)
 
+            # RangeMix augmentation
+            if self.is_train and np.random.uniform() < self.p_rangemix:
+                # Load a random second sample
+                mix_index = np.random.randint(0, len(self.dataset))
+                pointcloud_b, sem_label_b, _ = self.dataset.loadDataByIndex(mix_index)
+
+                # Apply point cloud augmentation to second sample
+                pointcloud_b = self.augmentor.doAugmentation(pointcloud_b)
+
+                # Project second sample
+                proj_pointcloud_b, proj_range_b, proj_idx_b, proj_mask_b = self.projection.doProjection(pointcloud_b)
+
+                # Create tensors for second sample
+                proj_mask_tensor_b = torch.from_numpy(proj_mask_b)
+                mask_b = proj_idx_b > 0
+                proj_sem_label_b = np.zeros((proj_mask_b.shape[0], proj_mask_b.shape[1]), dtype=np.float32)
+                proj_sem_label_b[mask_b] = self.dataset.labelMapping(sem_label_b[proj_idx_b[mask_b]])
+                proj_sem_label_tensor_b = torch.from_numpy(proj_sem_label_b)
+                proj_sem_label_tensor_b = proj_sem_label_tensor_b * proj_mask_tensor_b.float()
+
+                proj_range_tensor_b = torch.from_numpy(proj_range_b)
+                proj_xyz_tensor_b = torch.from_numpy(proj_pointcloud_b[..., :3])
+                proj_intensity_tensor_b = torch.from_numpy(proj_pointcloud_b[..., 3])
+                proj_intensity_tensor_b = proj_intensity_tensor_b.ne(-1).float() * proj_intensity_tensor_b
+                proj_existence_tensor_b = proj_mask_tensor_b.float()
+                proj_feature_tensor_b = torch.cat(
+                    [proj_range_tensor_b.unsqueeze(0), proj_xyz_tensor_b.permute(2, 0, 1),
+                     proj_intensity_tensor_b.unsqueeze(0), proj_existence_tensor_b.unsqueeze(0)], 0)
+
+                proj_feature_tensor_b = (proj_feature_tensor_b - self.proj_img_mean[:, None, None]) / self.proj_img_stds[:, None, None]
+                proj_feature_tensor_b = proj_feature_tensor_b * proj_mask_tensor_b.unsqueeze(0).float()
+
+                proj_tensor_b = torch.cat(
+                    (proj_feature_tensor_b,
+                     proj_sem_label_tensor_b.unsqueeze(0),
+                     proj_mask_tensor_b.float().unsqueeze(0)), dim=0)
+
+                # Apply RangeMix
+                proj_feature_mixed, proj_label_mixed = augmentor.Augmentor.rangemix(
+                    proj_tensor[:6], proj_tensor[6], proj_tensor_b[:6], proj_tensor_b[6])
+
+                # Reconstruct proj_tensor with mixed features and labels
+                proj_tensor = torch.cat(
+                    (proj_feature_mixed,
+                     proj_label_mixed.unsqueeze(0),
+                     proj_tensor[7].unsqueeze(0)), dim=0)
+
             # Data augmentation
             proj_tensor = self.aug_ops(proj_tensor)
 
-            return proj_tensor[0:5], proj_tensor[5], proj_tensor[6]
+            return proj_tensor[0:6], proj_tensor[6], proj_tensor[7]
 
     def __len__(self):
         if self.data_len > 0 and self.data_len < len(self.dataset):

@@ -243,7 +243,7 @@ class RangeViT_noKPConv(nn.Module):
 class RangeViT(nn.Module):
     def __init__(
         self,
-        in_channels=5,
+        in_channels=6,
         n_cls=17,
         backbone='vit_small_patch16_384',
         image_size=(32, 384),
@@ -265,7 +265,14 @@ class RangeViT(nn.Module):
 
         self.n_cls = n_cls
 
-        if backbone == 'vit_small_patch16_384':
+        if backbone == 'vit_tiny_patch16_384':
+            n_heads = 6
+            n_layers = 12
+            patch_size = 16
+            dropout = 0.0
+            drop_path_rate = 0.1
+            d_model = 192
+        elif backbone == 'vit_small_patch16_384':
             n_heads = 6
             n_layers = 12
             patch_size = 16
@@ -427,7 +434,7 @@ def count_parameters(model):
 
 
 if __name__ == '__main__':
-    model = RangeViT(in_channels=5,
+    model = RangeViT(in_channels=6,
                      n_cls=17,
                      backbone='vit_small_patch16_384',
                      decoder='linear',
