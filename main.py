@@ -55,9 +55,9 @@ class Experiment(object):
 
         # Init gpu
 
+        tools.init_distributed_mode(self.settings)
         print(f"Are we distributed? {tools.is_dist_avail_and_initialized()}")
         if self.settings.distributed:
-            tools.init_distributed_mode(self.settings)
             torch.distributed.barrier()
 
         self.settings.check_path()
