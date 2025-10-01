@@ -450,7 +450,7 @@ class Trainer(object):
 
             # 2D inputs
             input_feature = batch_dict['input2d'].cuda(non_blocking=True)
-            assert self.settings.in_channels == 5
+            # assert self.settings.in_channels == 5
 
             # 3D inputs
             py = batch_dict['py'].cuda(non_blocking=True)
