@@ -65,13 +65,12 @@ def init_distributed_mode(args):
         args.distributed = False
         return
     
+    torch.cuda.set_device(args.gpu)
     print(f"Setting gpu {args.gpu} for this thread (rank {args.rank}) with world size {args.world_size}")
     print(f"CUDA_VISIBLE_DEVICES={os.environ.get('CUDA_VISIBLE_DEVICES', 'Not set')}")
     print(f"Available CUDA devices: {torch.cuda.device_count()}")
     print(f"Current device name: {torch.cuda.get_device_name(args.gpu)}")
     print(f"Am i master process? {is_main_process()}")
-
-    torch.cuda.set_device(args.gpu)
     args.distributed = True
     args.dist_backend = 'nccl'
     print('| distributed init (rank {}): {}'.format(args.rank, args.dist_url), flush=True)
