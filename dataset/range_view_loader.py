@@ -108,6 +108,8 @@ class RangeViewLoader(Dataset):
                               self.config['original_image_size'][1]))
             ])
 
+        # self.get_item_for_kpconv(0)
+
     def get_item_for_kpconv(self, index):
         '''
         proj_feature_tensor: CxHxW
@@ -150,7 +152,8 @@ class RangeViewLoader(Dataset):
             save_path = os.getenv('AUG_VIS_PATH', './aug_visualizations')
             if np.random.uniform() < self.p_rangemix:
                 # Load a random second sample
-                mix_index = np.random.randint(0, len(self.dataset))
+                mix_index = torch.randint(0, len(self.dataset), (1,)).item()
+                # print(f"{len(self.dataset)}, mix is {mix_index}")
                 pointcloud_b, sem_label_b, _ = self.dataset.loadDataByIndex(mix_index)
 
                 # Apply point cloud augmentation to second sample
@@ -296,7 +299,7 @@ class RangeViewLoader(Dataset):
             # RangeMix augmentation
             if self.is_train and np.random.uniform() < self.p_rangemix:
                 # Load a random second sample
-                mix_index = np.random.randint(0, len(self.dataset))
+                mix_index = torch.randint(0, len(self.dataset), (1,)).item()
                 pointcloud_b, sem_label_b, _ = self.dataset.loadDataByIndex(mix_index)
 
                 # Apply point cloud augmentation to second sample
