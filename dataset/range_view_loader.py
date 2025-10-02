@@ -18,6 +18,10 @@ from torch.utils.data import Dataset
 import torchvision.transforms as T
 import torchvision.transforms.functional as TF
 from scipy.spatial.ckdtree import cKDTree as kdtree
+import os
+import cv2
+import sys
+import yaml
 
 from .preprocess import augmentor, projection
 
@@ -143,6 +147,7 @@ class RangeViewLoader(Dataset):
             proj_mask_tensor.float().unsqueeze(0)), dim=0)
 
         if self.is_train:
+            save_path = os.getenv('AUG_VIS_PATH', './aug_visualizations')
             if np.random.uniform() < self.p_rangemix:
                 # Load a random second sample
                 mix_index = np.random.randint(0, len(self.dataset))
@@ -183,15 +188,24 @@ class RangeViewLoader(Dataset):
                 proj_feature_mixed, proj_label_mixed = augmentor.Augmentor.rangemix(
                     proj_tensor[:6], proj_tensor[6], proj_tensor_b[:6], proj_tensor_b[6])
 
-                # Reconstruct proj_tensor with mixed features and labels
+                # Reconstruct proj_tensor with mixed features and labels (5 channels + label + mask)
+                # Ignore existence channel (channel 5) after RangeMix to maintain C=5
                 proj_tensor = torch.cat(
-                    (proj_feature_mixed,
+                    (proj_feature_mixed[:5],
                      proj_label_mixed.unsqueeze(0),
                      proj_tensor[7].unsqueeze(0)), dim=0)
+                # proj_tensor_b = torch.cat(
+                #     (proj_feature_tensor_b[:5],
+                #      proj_sem_label_tensor_b.unsqueeze(0),
+                #      proj_mask_tensor_b.float().unsqueeze(0)), dim=0)
 
-            # Data augmentation
+            # Save to image for testing
+            # if True:
+            #     print(f'index: {index}, mix: {mix_index}')
+            #     save_proj_tensor_as_images(proj_tensor, index, save_path)
+            #     save_proj_tensor_as_images(proj_tensor_b, mix_index, save_path)
+            #     sys.exit()
             proj_tensor = self.aug_ops(proj_tensor)
-
             # return proj_tensor[0:5], proj_tensor[6], proj_tensor[7]
             proj_tensor, px, py, points_xyz, sem_label = crop_inputs(
                 proj_tensor, px, py, points_xyz, sem_label,
@@ -320,7 +334,8 @@ class RangeViewLoader(Dataset):
                 proj_feature_mixed, proj_label_mixed = augmentor.Augmentor.rangemix(
                     proj_tensor[:6], proj_tensor[6], proj_tensor_b[:6], proj_tensor_b[6])
 
-                # Reconstruct proj_tensor with mixed features and labels
+                # Reconstruct proj_tensor with mixed features and labels (5 channels + label + mask)
+                # Ignore existence channel (channel 5) after RangeMix to maintain C=5
                 proj_tensor = torch.cat(
                     (proj_feature_mixed[:5],
                      proj_label_mixed.unsqueeze(0),
@@ -329,6 +344,10 @@ class RangeViewLoader(Dataset):
             # Data augmentation
             proj_tensor = self.aug_ops(proj_tensor)
 
+            # if self.is_train and os.getenv('SAVE_AUG_VIS'):
+            #     save_path = os.getenv('AUG_VIS_PATH', './aug_visualizations')
+            #     save_proj_tensor_as_images(proj_tensor, index, save_path)
+
             return proj_tensor[0:5], proj_tensor[6], proj_tensor[7]
 
     def __len__(self):
@@ -336,6 +355,129 @@ class RangeViewLoader(Dataset):
             return self.data_len
         else:
             return len(self.dataset)
+
+
+def load_color_map():
+    """Load color map from SemanticKITTI config or use default nuScenes colors."""
+    color_map = None
+
+    # Try to load SemanticKITTI color map
+    kitti_config_path = os.path.join(
+        os.path.dirname(os.path.realpath(__file__)),
+        'semantic_kitti/semantic-kitti.yaml'
+    )
+
+    if os.path.exists(kitti_config_path):
+        try:
+            with open(kitti_config_path, 'r') as f:
+                kitti_config = yaml.safe_load(f)
+                if 'learning_map_inv' in kitti_config and 'color_map' in kitti_config:
+                    # Create color map for learning labels (0-19)
+                    learning_map_inv = kitti_config['learning_map_inv']
+                    color_map_orig = kitti_config['color_map']
+                    color_map = {}
+                    for learning_id, orig_id in learning_map_inv.items():
+                        if orig_id in color_map_orig:
+                            color_map[learning_id] = color_map_orig[orig_id]
+                    print(f'Loaded SemanticKITTI color map with {len(color_map)} classes')
+        except Exception as e:
+            print(f'Warning: Could not load SemanticKITTI color map: {e}')
+
+    # Default nuScenes color map (if SemanticKITTI not available)
+    if color_map is None:
+        color_map = {
+            0: [255, 255, 255],  # ignore - white
+            1: [255, 120, 50],   # barrier - orange
+            2: [255, 192, 203],  # bicycle - pink
+            3: [255, 0, 0],      # bus - red
+            4: [0, 150, 245],    # car - blue
+            5: [0, 255, 255],    # construction_vehicle - cyan
+            6: [255, 0, 255],    # motorcycle - magenta
+            7: [255, 255, 0],    # pedestrian - yellow
+            8: [255, 128, 0],    # traffic_cone - orange
+            9: [255, 240, 150],  # trailer - light yellow
+            10: [135, 60, 0],    # truck - brown
+            11: [128, 64, 128],  # driveable_surface - purple
+            12: [244, 35, 232],  # other_flat - magenta
+            13: [107, 142, 35],  # sidewalk - olive
+            14: [70, 70, 70],    # terrain - gray
+            15: [102, 102, 156], # manmade - light purple
+            16: [107, 142, 35],  # vegetation - green
+        }
+        print(f'Using default nuScenes color map with {len(color_map)} classes')
+
+    return color_map
+
+
+def save_proj_tensor_as_images(proj_tensor, index, save_path, color_map=None):
+    """
+    Save proj_tensor channels as visualizable images.
+    proj_tensor shape: [8, H, W] where channels are:
+        0: range
+        1-3: xyz
+        4: intensity
+        5: existence
+        6: semantic label
+        7: mask
+    """
+    os.makedirs(save_path, exist_ok=True)
+
+    # Load color map if not provided
+    if color_map is None:
+        color_map = load_color_map()
+
+    # Convert to numpy and move channels to last dimension
+    tensor_np = proj_tensor.numpy()  # [8, H, W]
+
+    # Helper function to normalize to 0-255 range
+    def normalize_to_uint8(data):
+        data_min = data.min()
+        data_max = data.max()
+        if data_max - data_min > 1e-6:
+            normalized = (data - data_min) / (data_max - data_min) * 255
+        else:
+            normalized = np.zeros_like(data)
+        return normalized.astype(np.uint8)
+
+    # Helper function to apply color map to labels
+    def apply_color_map(labels, color_map):
+        h, w = labels.shape
+        colored = np.zeros((h, w, 3), dtype=np.uint8)
+        for label_id, color in color_map.items():
+            mask = labels == label_id
+            # color_map is in BGR format (from YAML)
+            colored[mask] = color
+        return colored
+
+    # Save each channel
+    channel_names = ['range', 'x', 'y', 'z', 'intensity', 'semantic_label', 'mask']
+
+    for ch_idx, ch_name in enumerate(channel_names):
+        channel_data = tensor_np[ch_idx]
+
+        if ch_name == 'semantic_label':
+            # For semantic labels, use the dataset-specific color map
+            label_img = channel_data.astype(np.int32)
+            label_colored = apply_color_map(label_img, color_map)
+            cv2.imwrite(f'{save_path}/sample_{index:06d}_{ch_name}.png', label_colored)
+        elif ch_name == 'mask' or ch_name == 'existence':
+            # Binary masks - save as black/white
+            mask_img = (channel_data * 255).astype(np.uint8)
+            cv2.imwrite(f'{save_path}/sample_{index:06d}_{ch_name}.png', mask_img)
+        else:
+            # For continuous values (range, xyz, intensity), normalize and apply colormap
+            normalized = normalize_to_uint8(channel_data)
+            colored = cv2.applyColorMap(normalized, cv2.COLORMAP_VIRIDIS)
+            cv2.imwrite(f'{save_path}/sample_{index:06d}_{ch_name}.png', colored)
+
+    # Also save RGB composite of xyz
+    xyz_data = tensor_np[1:4].transpose(1, 2, 0)  # [H, W, 3]
+    xyz_normalized = np.zeros_like(xyz_data)
+    for i in range(3):
+        xyz_normalized[:, :, i] = normalize_to_uint8(xyz_data[:, :, i])
+    cv2.imwrite(f'{save_path}/sample_{index:06d}_xyz_composite.png', xyz_normalized.astype(np.uint8))
+
+    print(f'Saved augmented visualizations for sample {index} to {save_path}/')
 
 
 def count_num_of_valid_points(py, px, offset_y, offset_x, h, w):

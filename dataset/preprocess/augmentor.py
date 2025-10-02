@@ -211,53 +211,29 @@ class Augmentor(object):
     
     @staticmethod
     def rangemix(xa, ya, xb, yb, kmix_list=[2, 3, 4, 5, 6]):
-        """
-        RangeMix augmentation: Mix two range images along inclination and azimuth directions
-        Args:
-            xa: range image features [C, H, W]
-            ya: range image labels [H, W]
-            xb: second range image features [C, H, W]
-            yb: second range image labels [H, W]
-            kmix_list: list of possible grid divisions
-        Returns:
-            Mixed range image and labels
-        """
-        # print("Apply rangemix")
-        if isinstance(xa, torch.Tensor):
-            xa_ = xa.clone()
-            ya_ = ya.clone()
-        else:
-            xa_ = xa.copy()
-            ya_ = ya.copy()
+        xa_, ya_ = xa.clone(), ya.clone()
+        _, H, W = xa.shape
 
-        # Sample kmix (number of divisions)
-        kmix = random.choice(kmix_list)
+        k_mix = None
+        if k_mix is None:
+            k_mix = kmix_list[torch.randint(0, len(kmix_list), (1,)).item()]
 
-        # Generate mixing strategies (phi for vertical, theta for horizontal)
-        phi = random.randint(2, kmix)
-        theta = random.randint(2, kmix)
+        # equal-height vertical bands
+        edges = [round(i * H / k_mix) for i in range(k_mix + 1)]
 
-        # Get dimensions
-        if isinstance(xa, torch.Tensor):
-            _, h, w = xa.shape
-        else:
-            _, h, w = xa.shape
+        # choose subset of bands to copy
+        take = torch.rand(k_mix) < 0.7
+        # ensure at least one band and not all, for a real "mix"
+        if take.sum() == 0:
+            take[torch.randint(0, k_mix, (1,)).item()] = True
+        if take.sum() == k_mix:
+            take[torch.randint(0, k_mix, (1,)).item()] = False
 
-        # Calculate grid cell size
-        mix_h = h // phi
-        mix_w = w // theta
-
-        # Mix grid cells - alternate between original and mixed
-        for i in range(1, phi + 1):
-            for j in range(1, theta + 1):
-                if (i + j) % 2 == 0:  # Checkerboard pattern
-                    h_start = (i - 1) * mix_h
-                    h_end = i * mix_h if i < phi else h
-                    w_start = (j - 1) * mix_w
-                    w_end = j * mix_w if j < theta else w
-
-                    xa_[:, h_start:h_end, w_start:w_end] = xb[:, h_start:h_end, w_start:w_end]
-                    ya_[h_start:h_end, w_start:w_end] = yb[h_start:h_end, w_start:w_end]
+        for i in range(k_mix):
+            if take[i]:
+                r0, r1 = edges[i], edges[i+1]
+                xa_[:, r0:r1, :] = xb[:, r0:r1, :].clone()
+                ya_[r0:r1, :]    = yb[r0:r1, :].clone()
 
         return xa_, ya_
 
