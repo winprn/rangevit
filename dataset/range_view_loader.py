@@ -191,7 +191,7 @@ class RangeViewLoader(Dataset):
                 # Reconstruct proj_tensor with mixed features and labels (5 channels + label + mask)
                 # Ignore existence channel (channel 5) after RangeMix to maintain C=5
                 proj_tensor = torch.cat(
-                    (proj_feature_mixed,
+                    (proj_feature_mixed[:5],
                      proj_label_mixed.unsqueeze(0),
                      proj_tensor[7].unsqueeze(0)), dim=0)
                 # proj_tensor_b = torch.cat(
@@ -222,8 +222,8 @@ class RangeViewLoader(Dataset):
 
         output = {
             'input2d': proj_tensor[:5],
-            'label2d': proj_tensor[6],
-            'mask2d': proj_tensor[7],
+            'label2d': proj_tensor[5],
+            'mask2d': proj_tensor[6],
             'px': torch.from_numpy(px).float(),
             'py': torch.from_numpy(py).float(),
             'points_xyz': torch.from_numpy(points_xyz).float(),
