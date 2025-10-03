@@ -32,9 +32,24 @@ class RangeProjection(object):
         self.cached_data = {}
 
     def doProjection(self, pointcloud: np.ndarray):
+        """
+        Project 3D point cloud to 2D range image using spherical projection.
+
+        Args:
+            pointcloud: Array of shape [N, 4+] containing (x, y, z, intensity, ...)
+
+        Returns:
+            proj_range: Projected range image [proj_h, proj_w]
+            proj_pointcloud: Projected point features [proj_h, proj_w, n_features]
+            proj_idx: Indices mapping range pixels to original points [proj_h, proj_w]
+        """
         self.cached_data = {}
         # get depth of all points
         depth = np.linalg.norm(pointcloud[:, :3], 2, axis=1)
+
+        # Avoid division by zero for depth
+        depth = np.maximum(depth, 1e-8)
+
         # get point cloud components
         x = pointcloud[:, 0]
         y = pointcloud[:, 1]
@@ -42,7 +57,7 @@ class RangeProjection(object):
 
         # get angles of all points
         yaw = -np.arctan2(y, x)
-        pitch = np.arcsin(z / depth)
+        pitch = np.arcsin(np.clip(z / depth, -1.0, 1.0))  # clip to valid arcsin range
 
         # get projection in image coords
         proj_x = (yaw + abs(self.fov_left)) / self.fov_h

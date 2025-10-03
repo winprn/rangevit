@@ -109,33 +109,62 @@ class Option(object):
         # There is no skip connection if no convolutional stem is used or the linear decoder is used.
         # (If no convolutional stem is used, then we use PatchEmbedding istead).
         if self.conv_stem == 'none' or self.decoder == 'linear':
-            assert self.skip_filters == 0
+            if self.skip_filters != 0:
+                raise ValueError(
+                    f"skip_filters must be 0 when conv_stem='none' or decoder='linear', "
+                    f"got skip_filters={self.skip_filters}"
+                )
 
         # If there is a skip connection, it's channel dim has to be D_h.
         if self.skip_filters > 0:
-            assert self.skip_filters == self.D_h
+            if self.skip_filters != self.D_h:
+                raise ValueError(
+                    f"skip_filters must equal D_h when using skip connections, "
+                    f"got skip_filters={self.skip_filters}, D_h={self.D_h}"
+                )
 
         # If a convolutional stem is used, patch_size = patch_stride and there is no patch embedding
         # so we can't load pre-trained weights in the patch embeddings.
         if self.conv_stem != 'none':
-            assert self.patch_size == self.patch_stride
-            assert self.reuse_patch_emb == False
+            if self.patch_size != self.patch_stride:
+                raise ValueError(
+                    f"patch_size must equal patch_stride when using ConvStem, "
+                    f"got patch_size={self.patch_size}, patch_stride={self.patch_stride}"
+                )
+            if self.reuse_patch_emb:
+                raise ValueError(
+                    "Cannot reuse_patch_emb when using ConvStem (no patch embedding exists)"
+                )
 
         # When using the KPConv layer, the decoder has to be up_conv.
         if self.use_kpconv:
-            assert self.decoder == 'up_conv'
+            if self.decoder != 'up_conv':
+                raise ValueError(
+                    f"decoder must be 'up_conv' when use_kpconv=True, got decoder='{self.decoder}'"
+                )
 
         # The following hyperparameters have to be tuples or lists with two elements.
-        tuple_list = [self.patch_size, self.patch_stride,
-                      self.image_size, self.window_size, self.window_stride,
-                      self.original_image_size]
-        for i in tuple_list:
-            assert isinstance(i, (list, tuple))
-            assert len(i) == 2
+        tuple_list = [
+            ('patch_size', self.patch_size),
+            ('patch_stride', self.patch_stride),
+            ('image_size', self.image_size),
+            ('window_size', self.window_size),
+            ('window_stride', self.window_stride),
+            ('original_image_size', self.original_image_size)
+        ]
+        for name, value in tuple_list:
+            if not isinstance(value, (list, tuple)):
+                raise ValueError(f"{name} must be a list or tuple, got {type(value)}")
+            if len(value) != 2:
+                raise ValueError(f"{name} must have exactly 2 elements, got {len(value)}")
 
         # No patch and positional embeddings are loaded when training from scratch.
         if self.pretrained_model == None:
-            assert self.reuse_patch_emb == self.reuse_pos_emb == False
+            if self.reuse_patch_emb or self.reuse_pos_emb:
+                raise ValueError(
+                    "Cannot reuse embeddings when pretrained_model=None. "
+                    f"Got reuse_patch_emb={self.reuse_patch_emb}, reuse_pos_emb={self.reuse_pos_emb}"
+                )
 
 
     def check_path(self):

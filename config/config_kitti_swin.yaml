@@ -18,7 +18,7 @@ lr: 0.0004
 train_result_frequency: 100
 
 # Model config
-vit_backbone: 'swin_tiny_patch4_window7_224'   # switched from ViT to Swin
+vit_backbone: 'swinv2_tiny_window8_256'   # SwinV2 Tiny with window=8 (divides 64 evenly)
 in_channels: 5
 image_size: [64, 384]        # random crop at train
 window_size: [64, 384]       # sliding window size
@@ -74,8 +74,8 @@ augmentation:
   rot_pitchmin: -5
   rot_pitchmax: 5
   p_rot_yaw: 0.5
-  rot_yawmin: 5
-  rot_yawmax: -5
+  rot_yawmin: -5
+  rot_yawmax: 5
 
 sensor:
   name: 'HDL64'

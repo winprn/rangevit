@@ -27,6 +27,16 @@ from models.model_utils import resize_pos_embed
 import models
 
 def build_range_model(settings, pretrained_path=None):
+    """
+    Build RangeViT or RangeSwin model based on backbone configuration.
+
+    Args:
+        settings: Option object containing model configuration
+        pretrained_path: Path to pretrained weights (optional)
+
+    Returns:
+        Model instance (RangeViT or RangeSwin with optional KPConv)
+    """
     if 'swin' in settings.vit_backbone.lower():
         # build a config dict compatible with create_rangeswin()
         model_cfg = {
@@ -76,7 +86,7 @@ class Experiment(object):
         torch.manual_seed(self.settings.seed)
         torch.cuda.manual_seed(self.settings.seed)
         np.random.seed(self.settings.seed)
-        print(f"[debug] current using gpu: ${self.settings.gpu}")
+        print(f"[debug] current using gpu: {self.settings.gpu}")
         torch.cuda.set_device(self.settings.gpu)
         torch.backends.cudnn.benchmark = True
 

@@ -13,18 +13,11 @@
 # limitations under the License.
 
 import torch
-import os
 import torch.nn as nn
 import torch.nn.functional as F
 
 from .model_utils import padding, unpadding
 from .kpconv.blocks import KPConv
-
-
-def resample_grid(predictions, py, px):
-    pypx = torch.stack([px, py], dim=3)
-    resampled = F.grid_sample(predictions, pypx)
-    return resampled
 
 
 class KPClassifier(nn.Module):
@@ -57,11 +50,11 @@ class KPClassifier(nn.Module):
         offset = 0
         batch_size = x.shape[0]
         for i in range(batch_size):
-            len = num_points[i]
-            px_i = px[offset:(offset+len)].unsqueeze(0).unsqueeze(1).contiguous()
-            py_i = py[offset:(offset+len)].unsqueeze(0).unsqueeze(1).contiguous()
-            points = pxyz[offset:(offset+len)].contiguous()
-            pknn_i = pknn[offset:(offset+len)].contiguous()
+            n_points = num_points[i]
+            px_i = px[offset:(offset+n_points)].unsqueeze(0).unsqueeze(1).contiguous()
+            py_i = py[offset:(offset+n_points)].unsqueeze(0).unsqueeze(1).contiguous()
+            points = pxyz[offset:(offset+n_points)].contiguous()
+            pknn_i = pknn[offset:(offset+n_points)].contiguous()
             resampled = F.grid_sample(
                 x[i].unsqueeze(0), torch.stack([px_i, py_i], dim=3),
                 align_corners=False, padding_mode='border')
@@ -75,7 +68,7 @@ class KPClassifier(nn.Module):
             else:
                 feats = self.kpconv(points, points, pknn_i, feats)
             res.append(feats)
-            offset += len
+            offset += n_points
 
         assert offset == px.shape[0]
         res = torch.cat(res, axis=0).unsqueeze(2).unsqueeze(3)

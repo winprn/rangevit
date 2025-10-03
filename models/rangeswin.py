@@ -8,17 +8,21 @@ from .model_utils import adapt_input_conv, padding, unpadding, init_weights
 
 # A compact UPer-like head (sufficient for fusing multi-scale Swin features).
 class SimpleUPerHead(nn.Module):
-    def __init__(self, in_channels, channels=256, num_classes=256, pool_scales=(1,2,3,6), norm_layer=nn.BatchNorm2d):
+    def __init__(self, in_channels, channels=256, num_classes=256, pool_scales=(1,2,3,6),
+                 norm_layer=nn.BatchNorm2d, dropout=0.1):
         """
         in_channels: list of channels from backbone (C1..C4)
         channels: internal FPN channel
         num_classes: final output channels (we'll set to D_h)
+        pool_scales: scales for pyramid pooling
+        dropout: dropout rate for regularization
         """
         super().__init__()
         self.in_channels = in_channels
         self.channels = channels
         self.num_classes = num_classes
         self.pool_scales = pool_scales
+        self.dropout = dropout
 
         # lateral convs to unify channels
         self.lateral_convs = nn.ModuleList()
@@ -29,13 +33,14 @@ class SimpleUPerHead(nn.Module):
                 nn.ReLU(inplace=True)
             ))
 
-        # FPN convs after fusion
+        # FPN convs after fusion (add light dropout for regularization)
         self.fpn_convs = nn.ModuleList()
         for _ in in_channels:
             self.fpn_convs.append(nn.Sequential(
                 nn.Conv2d(channels, channels, kernel_size=3, padding=1, bias=False),
                 norm_layer(channels),
-                nn.ReLU(inplace=True)
+                nn.ReLU(inplace=True),
+                nn.Dropout2d(dropout * 0.5) if dropout > 0 else nn.Identity()  # lighter dropout in FPN
             ))
 
         # Simple PPM on the last stage
@@ -60,6 +65,7 @@ class SimpleUPerHead(nn.Module):
             nn.Conv2d(channels * len(in_channels), channels, kernel_size=3, padding=1, bias=False),
             norm_layer(channels),
             nn.ReLU(inplace=True),
+            nn.Dropout2d(dropout) if dropout > 0 else nn.Identity(),  # Add dropout
             nn.Conv2d(channels, num_classes, kernel_size=1)
         )
 
@@ -118,24 +124,19 @@ class RangeSwinUPerNet(nn.Module):
         self.in_channels = in_channels
         self.n_cls = n_cls
         self.out_channels = out_channels
-        self.dataset = "Semantic-kitti" # TODO: change to depend on dataset
-        if self.dataset == "Semantic-kitti":
-            self.range_image_size = (64, 384)
-        else:
-            self.range_image_size = (32, 384)
+        # Image size will be set dynamically based on input or from timm model config
+        self.range_image_size = None
 
 
         # Create timm swin backbone (features_only gives list of feature maps)
+        # Note: img_size will be set to input size dynamically during forward pass
         self.backbone = timm.create_model(
             swin_name,
             pretrained=False,   # we will optionally load custom checkpoint manually
             features_only=swin_features_only,
             in_chans=in_channels,   # timm supports in_chans param
-            img_size=self.range_image_size,
             out_indices=swin_features_out_indices
         )
-        if hasattr(self.backbone, 'patch_embed'):
-            self.backbone.patch_embed.img_size = self.range_image_size
 
 
         # timm returns feature channels in backbone.feature_info.channels
@@ -164,8 +165,43 @@ class RangeSwinUPerNet(nn.Module):
         ####################
 
 
-        # UPer head that produces out_channels (D_h)
-        self.decode_head = SimpleUPerHead(in_channels=feat_channels, channels=max(64, out_channels), num_classes=out_channels)
+        # UPer head that produces feature maps with out_channels (D_h)
+        # Note: For non-KPConv mode, we need a classification head to map D_h -> n_cls
+        # Use smaller decoder channels for better parameter efficiency (similar to RangeViT)
+        decoder_channels = min(256, out_channels * 2)  # Use 256 for D_h=128, scale up for larger D_h
+
+        self.decode_head = SimpleUPerHead(
+            in_channels=feat_channels,
+            channels=decoder_channels,
+            num_classes=out_channels,  # Output D_h features (for KPConv compatibility)
+            dropout=0.1  # Regularization
+        )
+
+        # Add classification head for direct semantic segmentation (non-KPConv mode)
+        # This converts D_h features to n_classes logits
+        self.classifier = nn.Conv2d(out_channels, n_cls, kernel_size=1)
+        # Initialize classifier with smaller weights for better convergence
+        nn.init.normal_(self.classifier.weight, std=0.01)
+        if self.classifier.bias is not None:
+            nn.init.constant_(self.classifier.bias, 0)
+
+        # Optional auxiliary classifier on C3 (1/16 resolution) for deep supervision
+        # This helps train the backbone better, especially early layers
+        self.aux_classifier = None
+        if len(feat_channels) >= 3:  # Only if we have C3 features
+            self.aux_classifier = nn.Sequential(
+                nn.Conv2d(feat_channels[2], out_channels // 2, kernel_size=3, padding=1, bias=False),
+                nn.BatchNorm2d(out_channels // 2),
+                nn.ReLU(inplace=True),
+                nn.Dropout2d(0.1),
+                nn.Conv2d(out_channels // 2, n_cls, kernel_size=1)
+            )
+            # Initialize auxiliary classifier
+            for m in self.aux_classifier.modules():
+                if isinstance(m, nn.Conv2d):
+                    nn.init.normal_(m.weight, std=0.01)
+                    if m.bias is not None:
+                        nn.init.constant_(m.bias, 0)
 
         # optionally load pretrained checkpoint and adapt first conv
         if pretrained_path is not None:
@@ -223,60 +259,62 @@ class RangeSwinUPerNet(nn.Module):
         msg = self.backbone.load_state_dict(sd_to_load, strict=False)
         print('Swin preload:', msg)
 
-    def forward(self, im, return_features=False):
+    def forward(self, im, return_features=False, return_aux=False):
         """
-        im: [B, in_channels, H, W]
-        returns: [B, out_channels, H, W] (upsampled to original padded H,W)
-        """
-        #### VERSION 1 ####
-        
-        # B, C, H, W = im.shape
-        # im_padded = padding(im, (4, 4))  # just ensure compatibility, Patch sizes differ; but padding accepts patch_size param - using (4,4) safe
-        # H_pad, W_pad = im_padded.shape[2], im_padded.shape[3]
+        Forward pass through Swin backbone and UPerNet decoder.
 
-        # feats = self.backbone(im_padded)   # list of 4 feature maps
-        # # decode head -> produces [B, out_channels, H/4, W/4] (depends on swin config)
-        # seg_feat = self.decode_head(feats)
+        Args:
+            im: Input tensor [B, in_channels, H, W]
+            return_features: If True, return D_h features; else return class logits
+            return_aux: If True and aux_classifier exists, return auxiliary logits for training
 
-        # # upsample to the padded resolution
-        # seg_feat_up = F.interpolate(seg_feat, size=(H_pad, W_pad), mode='bilinear', align_corners=False)
-        # seg_feat_up = unpadding(seg_feat_up, (H, W))  # bring back to original
-        # if return_features:
-        #     return seg_feat_up  # [B, out_channels, H, W]
-        # else:
-        #     # for compatibility with RangeViT_noKPConv / KPConv flows, return final features
-        #     return seg_feat_up
-
-        #### VERSION 2 ####
-        """
-        im: [B, in_channels, H, W]
-        returns: [B, out_channels, H, W]
+        Returns:
+            If return_features=True: [B, out_channels, H, W] features (for KPConv)
+            If return_features=False and return_aux=False: [B, n_cls, H, W] class logits
+            If return_features=False and return_aux=True: tuple of (main_logits, aux_logits)
         """
         B, C, H, W = im.shape
 
-        # make sure patch_embed expects the right size
+        # Set image size for patch embedding (done dynamically to handle variable input sizes)
         if hasattr(self.backbone, "patch_embed"):
             self.backbone.patch_embed.img_size = (H, W)
 
-        # forward through Swin backbone
-        feats = self.backbone(im)  # list of feature maps
+        # Forward through Swin backbone - returns list of multi-scale feature maps
+        # Note: timm Swin with features_only=True outputs NHWC format (not NCHW!)
+        # Shapes: [B, H/4, W/4, C1], [B, H/8, W/8, C2], [B, H/16, W/16, C3], [B, H/32, W/32, C4]
+        feats = self.backbone(im)
 
-        # ensure format is [B, C, H, W]
+        # Convert all features from NHWC to NCHW format
+        # timm Swin with features_only=True outputs features in NHWC format
         proc_feats = []
         for f in feats:
-            if f.ndim == 4 and f.shape[1] < f.shape[-1]:  # looks like NHWC
-                f = f.permute(0, 3, 1, 2).contiguous()
-            proc_feats.append(f)
+            if f.ndim == 4:
+                # Convert from NHWC [B, H, W, C] to NCHW [B, C, H, W]
+                f_nchw = f.permute(0, 3, 1, 2).contiguous()
+                proc_feats.append(f_nchw)
+            else:
+                proc_feats.append(f)
 
-        # decode with UPerNet-like head
-        seg_feat = self.decode_head(proc_feats)  # [B, out_channels, h', w']
+        # Decode with UPerNet-like head -> [B, D_h, H/4, W/4]
+        seg_feat = self.decode_head(proc_feats)
 
-        # upsample back to original H, W
+        # Upsample to original input size
         seg_feat_up = F.interpolate(
             seg_feat, size=(H, W), mode="bilinear", align_corners=False
         )
 
+        # Return features for KPConv mode, or class logits for direct segmentation
         if return_features:
             return seg_feat_up  # [B, out_channels, H, W]
         else:
-            return seg_feat_up
+            # Apply classification head to get class logits
+            logits = self.classifier(seg_feat_up)  # [B, n_cls, H, W]
+
+            # Optionally return auxiliary logits for deep supervision during training
+            if return_aux and self.aux_classifier is not None and self.training:
+                # Apply auxiliary classifier on C3 features (1/16 resolution)
+                aux_logits = self.aux_classifier(proc_feats[2])  # [B, n_cls, H/16, W/16]
+                aux_logits = F.interpolate(aux_logits, size=(H, W), mode="bilinear", align_corners=False)
+                return logits, aux_logits
+            else:
+                return logits

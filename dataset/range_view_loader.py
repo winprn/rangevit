@@ -240,19 +240,34 @@ def count_num_of_valid_points(py, px, offset_y, offset_x, h, w):
 
 
 def crop_inputs(proj_tensor, px, py, points_xyz, labels, crop_size, center_crop=False, p_hflip=0.0):
+    """
+    Crop range projection and corresponding point cloud data.
+
+    Args:
+        proj_tensor: Range projection tensor [C, H, W]
+        px, py: Point cloud coordinates in normalized image space
+        points_xyz: 3D point cloud coordinates
+        labels: Point-wise labels
+        crop_size: Tuple (H, W) for crop size
+        center_crop: If True, crop center; otherwise random crop
+        p_hflip: Probability of horizontal flip
+
+    Returns:
+        Tuple of (cropped_proj, px, py, points_xyz, labels)
+    """
     if center_crop:
         _, h, w = proj_tensor.shape
         assert h == crop_size[0] and w == crop_size[1]
         offset_y, offset_x = 0, 0
     else:
-        MIN_NUM_POINTS = 1
+        MIN_NUM_POINTS = 100  # Increased from 1 to ensure meaningful crops
         NUM_ITERS = 10
         for _ in range(NUM_ITERS):
             offset_y, offset_x, h, w = T.RandomCrop.get_params(proj_tensor, crop_size)
             num_valid_points = count_num_of_valid_points(py, px, offset_y, offset_x, h, w)
             if num_valid_points > MIN_NUM_POINTS:
                 break
-            print(f'num_valid_points = {num_valid_points}')
+            # Removed print to avoid I/O bottleneck during training
         assert h == crop_size[0] and w == crop_size[1]
     proj_tensor = TF.crop(proj_tensor, offset_y, offset_x, h, w)
 

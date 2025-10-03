@@ -276,12 +276,34 @@ class Trainer(object):
             # Forward propagation
             if mode == 'Train':
                 with torch.amp.autocast('cuda', enabled=self.fp16_scaler is not None):
-                    output = self.model(input_feature)
-                    output_softmax = F.softmax(output, dim=1)
+                    # Check if model supports auxiliary loss (RangeSwin with aux_classifier)
+                    model_to_check = model_without_ddp
+                    supports_aux = (hasattr(model_to_check, 'swin_encoder') and
+                                    hasattr(model_to_check.swin_encoder, 'aux_classifier') and
+                                    model_to_check.swin_encoder.aux_classifier is not None)
 
-                    # Loss calculation
-                    total_loss, loss_lovasz, loss_focal = self.compute_losses(
-                        output, output_softmax, input_label, input_mask)
+                    if supports_aux:
+                        # RangeSwin with auxiliary loss
+                        output, aux_output = self.model(input_feature)  # Returns tuple
+                        output_softmax = F.softmax(output, dim=1)
+                        aux_output_softmax = F.softmax(aux_output, dim=1)
+
+                        # Main loss
+                        total_loss, loss_lovasz, loss_focal = self.compute_losses(
+                            output, output_softmax, input_label, input_mask)
+
+                        # Auxiliary loss (weighted by 0.4 as in standard UPerNet)
+                        aux_loss, _, _ = self.compute_losses(
+                            aux_output, aux_output_softmax, input_label, input_mask)
+                        total_loss = total_loss + 0.4 * aux_loss
+                    else:
+                        # Standard forward without auxiliary loss
+                        output = self.model(input_feature)
+                        output_softmax = F.softmax(output, dim=1)
+
+                        # Loss calculation
+                        total_loss, loss_lovasz, loss_focal = self.compute_losses(
+                            output, output_softmax, input_label, input_mask)
 
                 # Backward
                 self.optimizer.zero_grad()

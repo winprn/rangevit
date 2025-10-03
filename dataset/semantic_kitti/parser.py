@@ -48,15 +48,27 @@ class SemanticKitti(object):
 
             # get file list from path
             pointcloud_path = os.path.join(self.root, seq, 'velodyne')
-            pointcloud_files = [
-                os.path.join(pointcloud_path, f)
-                for f in os.listdir(pointcloud_path) if '.bin' in f]
+            if not os.path.isdir(pointcloud_path):
+                raise ValueError(f'Point cloud directory not found: {pointcloud_path}')
+
+            try:
+                pointcloud_files = [
+                    os.path.join(pointcloud_path, f)
+                    for f in os.listdir(pointcloud_path) if '.bin' in f]
+            except OSError as e:
+                raise IOError(f'Error reading point cloud directory {pointcloud_path}: {str(e)}')
 
             if self.has_label:
                 label_path = os.path.join(self.root, seq, 'labels')
-                label_files = [
-                    os.path.join(label_path, f)
-                    for f in os.listdir(label_path) if '.label' in f]
+                if not os.path.isdir(label_path):
+                    raise ValueError(f'Label directory not found: {label_path}')
+
+                try:
+                    label_files = [
+                        os.path.join(label_path, f)
+                        for f in os.listdir(label_path) if '.label' in f]
+                except OSError as e:
+                    raise IOError(f'Error reading label directory {label_path}: {str(e)}')
 
             if self.has_label:
                 assert (len(pointcloud_files) == len(label_files))
@@ -107,15 +119,25 @@ class SemanticKitti(object):
 
     @staticmethod
     def readPCD(path):
-        pcd = np.fromfile(path, dtype=np.float32).reshape(-1, 4)
-        return pcd
+        try:
+            pcd = np.fromfile(path, dtype=np.float32).reshape(-1, 4)
+            if pcd.size == 0:
+                raise ValueError(f"Empty point cloud file: {path}")
+            return pcd
+        except Exception as e:
+            raise IOError(f"Error reading point cloud file {path}: {str(e)}")
 
     @staticmethod
     def readLabel(path):
-        label = np.fromfile(path, dtype=np.int32)
-        sem_label = label & 0xFFFF  # semantic label in lower half
-        inst_label = label >> 16  # instance id in upper half
-        return sem_label, inst_label
+        try:
+            label = np.fromfile(path, dtype=np.int32)
+            if label.size == 0:
+                raise ValueError(f"Empty label file: {path}")
+            sem_label = label & 0xFFFF  # semantic label in lower half
+            inst_label = label >> 16  # instance id in upper half
+            return sem_label, inst_label
+        except Exception as e:
+            raise IOError(f"Error reading label file {path}: {str(e)}")
 
     def parsePathInfoByIndex(self, index):
         path = self.pointcloud_files[index]

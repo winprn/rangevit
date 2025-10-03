@@ -47,7 +47,7 @@ class AugmentParams(object):
         self.scale_min = scale_min
         self.scale_max = scale_max
 
-    def sefScaleParams(self, p_scale, scale_min, scale_max):
+    def setScaleParams(self, p_scale, scale_min, scale_max):
         self.p_scale = p_scale
         self.scale_min = scale_min
         self.scale_max = scale_max
@@ -109,7 +109,7 @@ class AugmentParams(object):
 
 class Augmentor(object):
     def __init__(self, params: AugmentParams):
-        self.parmas = params
+        self.params = params
 
     @staticmethod
     def flipX(pointcloud: np.ndarray):
@@ -137,7 +137,7 @@ class Augmentor(object):
 
     @staticmethod
     def randomRotation(pointcloud: np.ndarray):
-        rot_matrix = R.random(random_state=1234).as_matrix()
+        rot_matrix = R.random().as_matrix()
         pointcloud[:, :3] = np.matmul(pointcloud[:, :3], rot_matrix.T)
         return pointcloud
 
@@ -149,56 +149,56 @@ class Augmentor(object):
     def doAugmentation(self, pointcloud):
         # flip augment
         rand = random.uniform(0, 1)
-        if rand < self.parmas.p_flipx:
+        if rand < self.params.p_flipx:
             pointcloud = self.flipX(pointcloud)
 
         rand = random.uniform(0, 1)
-        if rand < self.parmas.p_flipy:
+        if rand < self.params.p_flipy:
             pointcloud = self.flipY(pointcloud)
 
         # scale augment
         rand = random.uniform(0, 1)
-        if rand < self.parmas.p_scale:
-            pointcloud = self.scale_cloud(pointcloud, self.parmas.scale_min, self.parmas.scale_max)
+        if rand < self.params.p_scale:
+            pointcloud = self.scale_cloud(pointcloud, self.params.scale_min, self.params.scale_max)
 
         # translation
         rand = random.uniform(0, 1)
-        if rand < self.parmas.p_transx:
+        if rand < self.params.p_transx:
             trans_x = random.uniform(
-                self.parmas.trans_xmin, self.parmas.trans_xmax)
+                self.params.trans_xmin, self.params.trans_xmax)
         else:
             trans_x = 0
         rand = random.uniform(0, 1)
-        if rand < self.parmas.p_transy:
+        if rand < self.params.p_transy:
             trans_y = random.uniform(
-                self.parmas.trans_ymin, self.parmas.trans_ymax)
+                self.params.trans_ymin, self.params.trans_ymax)
         else:
             trans_y = 0
         rand = random.uniform(0, 1)
-        if rand < self.parmas.p_transz:
+        if rand < self.params.p_transz:
             trans_z = random.uniform(
-                self.parmas.trans_zmin, self.parmas.trans_zmax)
+                self.params.trans_zmin, self.params.trans_zmax)
         else:
             trans_z = 0
         pointcloud = self.translation(pointcloud, trans_x, trans_y, trans_z)
 
         # rotation
         rand = random.uniform(0, 1)
-        if rand < self.parmas.p_rot_roll:
+        if rand < self.params.p_rot_roll:
             rot_roll = random.uniform(
-                self.parmas.rot_rollmin, self.parmas.rot_rollmax)
+                self.params.rot_rollmin, self.params.rot_rollmax)
         else:
             rot_roll = 0
         rand = random.uniform(0, 1)
-        if rand < self.parmas.p_rot_pitch:
+        if rand < self.params.p_rot_pitch:
             rot_pitch = random.uniform(
-                self.parmas.rot_pitchmin, self.parmas.rot_pitchmax)
+                self.params.rot_pitchmin, self.params.rot_pitchmax)
         else:
             rot_pitch = 0
         rand = random.uniform(0, 1)
-        if rand < self.parmas.p_rot_yaw:
+        if rand < self.params.p_rot_yaw:
             rot_yaw = random.uniform(
-                self.parmas.rot_yawmin, self.parmas.rot_yawmax)
+                self.params.rot_yawmin, self.params.rot_yawmax)
         else:
             rot_yaw = 0
         pointcloud = self.rotation(pointcloud, rot_roll, rot_pitch, rot_yaw)

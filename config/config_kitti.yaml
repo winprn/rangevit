@@ -77,8 +77,8 @@ augmentation:
   rot_pitchmin: -5
   rot_pitchmax: 5
   p_rot_yaw: 0.5
-  rot_yawmin: 5
-  rot_yawmax: -5
+  rot_yawmin: -5
+  rot_yawmax: 5
 
 sensor:
   name: 'HDL64'

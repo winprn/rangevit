@@ -96,7 +96,12 @@ def inference(
             if use_kpconv:
                 seg_maps = model.forward_2d_features(crops) # shape = [n_windows, d_decoder, wsize_h, wsize_w]
             else:
-                seg_maps = model.forward(crops) # shape = [n_windows, n_classes, wsize_h, wsize_w]
+                output = model.forward(crops) # shape = [n_windows, n_classes, wsize_h, wsize_w]
+                # Handle tuple outputs (model might return aux during training, but we're in eval mode)
+                if isinstance(output, tuple):
+                    seg_maps = output[0]  # Take main logits only
+                else:
+                    seg_maps = output
         windows['seg_maps'] = seg_maps
         im_seg_map = merge_windows(windows, window_size, ori_shape) # shape = [n_classes or d_decoder, ori_shape[0], ori_shape[1]]
 
