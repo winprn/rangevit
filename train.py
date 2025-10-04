@@ -53,7 +53,7 @@ class Trainer(object):
             self.model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(self.model).cuda()
             self.model = nn.parallel.DistributedDataParallel(
                 	self.model, device_ids=[self.settings.gpu],
-                    find_unused_parameters=True)
+                    find_unused_parameters=False)
 
         # Get metrics
         self.metrics = utils.metrics.IOUEval(
@@ -280,7 +280,7 @@ class Trainer(object):
 
             # Forward propagation
             if mode == 'Train':
-                with torch.cuda.amp.autocast(self.fp16_scaler is not None):
+                with torch.amp.autocast('cuda', enabled=self.fp16_scaler is not None):
                     output = self.model(input_feature)
                     output_softmax = F.softmax(output, dim=1)
 
@@ -293,20 +293,21 @@ class Trainer(object):
                 if self.fp16_scaler is None:
                     total_loss.backward()
                     self.optimizer.step()
+                    # Update lr after optimizer step (required by pytorch)
+                    self.scheduler.step()
                 else:
                     self.fp16_scaler.scale(total_loss).backward()
                     self.fp16_scaler.step(self.optimizer)
+                    # Update lr after optimizer step (required by pytorch)
+                    self.scheduler.step()
                     self.fp16_scaler.update()
-
-                # Update lr after backward (required by pytorch)
-                self.scheduler.step()
             else:
                 with torch.no_grad():
                     assert input_feature.shape[0] == 1 # validation batch size has to be 1
 
                     # Validation
                     im_meta = dict(flip=False)
-                    with torch.cuda.amp.autocast(self.fp16_scaler is not None):
+                    with torch.amp.autocast('cuda', enabled=self.fp16_scaler is not None):
                         lidar_pred = inference(
                             model_without_ddp.rangevit,
                             [input_feature],
@@ -481,7 +482,7 @@ class Trainer(object):
 
             # Forward propagation
             if mode == 'Train':
-                with torch.cuda.amp.autocast(self.fp16_scaler is not None):
+                with torch.amp.autocast('cuda', enabled=self.fp16_scaler is not None):
                     output3d = self.model(input_feature, px, py, pxyz, knns, num_points)
 
                     output3d_softmax = F.softmax(output3d, dim=1)
@@ -495,20 +496,21 @@ class Trainer(object):
                 if self.fp16_scaler is None:
                     total_loss.backward()
                     self.optimizer.step()
+                    # Update lr after optimizer step (required by pytorch)
+                    self.scheduler.step()
                 else:
                     self.fp16_scaler.scale(total_loss).backward()
                     self.fp16_scaler.step(self.optimizer)
+                    # Update lr after optimizer step (required by pytorch)
+                    self.scheduler.step()
                     self.fp16_scaler.update()
-
-                # Update lr after backward (required by pytorch)
-                self.scheduler.step()
             else:
                 with torch.no_grad():
                     assert input_feature.shape[0] == 1 # validation batch size has to be 1
 
                     # Validation
                     im_meta = dict(flip=False)
-                    with torch.cuda.amp.autocast(self.fp16_scaler is not None):
+                    with torch.amp.autocast('cuda', enabled=self.fp16_scaler is not None):
                         output_features2d = inference(
                             model_without_ddp.rangevit,
                             [input_feature],
