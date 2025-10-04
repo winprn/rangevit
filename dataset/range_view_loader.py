@@ -117,7 +117,6 @@ class RangeViewLoader(Dataset):
         proj_mask_tensor: HxW
         '''
         pointcloud, sem_label, inst_label = self.dataset.loadDataByIndex(index)
-        points_xyz = pointcloud[:, :3]
         sem_label = self.dataset.labelMapping(sem_label)
 
         if self.is_train and (self.scan_proj is False):
@@ -126,6 +125,8 @@ class RangeViewLoader(Dataset):
             # print(f'PolaMix 0, {mix_index}')
             pointcloud, sem_label = self.augmentor.polarmix(pointcloud, sem_label, pointcloud_b, sem_label_b)
             pointcloud = self.augmentor.doAugmentation(pointcloud)  # n, 4
+
+        points_xyz = pointcloud[:, :3]
         proj_pointcloud, proj_range, proj_idx, proj_mask = self.projection.doProjection(pointcloud)
         px, py = self.projection.cached_data['px'], self.projection.cached_data['py']
 
