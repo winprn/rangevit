@@ -122,6 +122,7 @@ class RangeViewLoader(Dataset):
         if self.is_train and (self.scan_proj is False):
             mix_index = torch.randint(0, len(self.dataset), (1,)).item()
             pointcloud_b, sem_label_b, _ = self.dataset.loadDataByIndex(mix_index)
+            sem_label_b = self.dataset.labelMapping(sem_label_b)
             # print(f'PolaMix 0, {mix_index}')
             pointcloud, sem_label = self.augmentor.polarmix(pointcloud, sem_label, pointcloud_b, sem_label_b)
             pointcloud = self.augmentor.doAugmentation(pointcloud)  # n, 4
@@ -525,6 +526,10 @@ def crop_inputs(proj_tensor, px, py, points_xyz, labels, crop_size, center_crop=
     px = px[valid]
     py = py[valid]
     points_xyz = points_xyz[valid, :]
+
+    # Clamp labels to valid range [0, 19] for SemanticKITTI
+    labels = np.clip(labels, 0, 19)
+
     px = 2.0 * (px - 0.5)
     py = 2.0 * (py - 0.5)
 
