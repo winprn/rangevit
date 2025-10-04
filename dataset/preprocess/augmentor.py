@@ -214,7 +214,8 @@ class Augmentor(object):
         xa_, ya_ = xa.clone(), ya.clone()
         _, H, W = xa.shape
 
-        k_mix = None
+        # return xa_, ya_
+        k_mix = 4
         if k_mix is None:
             k_mix = kmix_list[torch.randint(0, len(kmix_list), (1,)).item()]
 
@@ -222,7 +223,7 @@ class Augmentor(object):
         edges = [round(i * H / k_mix) for i in range(k_mix + 1)]
 
         # choose subset of bands to copy
-        take = torch.rand(k_mix) < 0.7
+        take = torch.rand(k_mix) < 0.5
         # ensure at least one band and not all, for a real "mix"
         if take.sum() == 0:
             take[torch.randint(0, k_mix, (1,)).item()] = True
@@ -237,3 +238,10 @@ class Augmentor(object):
 
         return xa_, ya_
 
+    @staticmethod
+    def polarmix(pca, lba, pcb, lbb):
+        alpha = (np.random.random() - 1) * np.pi
+        beta = alpha + np.pi
+        print(f"alpha {alpha}, beta {beta}")
+        from .polarmix import polarmix
+        return polarmix(pca, lba, pcb, lbb, alpha, beta)

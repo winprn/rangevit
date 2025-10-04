@@ -121,6 +121,10 @@ class RangeViewLoader(Dataset):
         sem_label = self.dataset.labelMapping(sem_label)
 
         if self.is_train and (self.scan_proj is False):
+            mix_index = torch.randint(0, len(self.dataset), (1,)).item()
+            pointcloud_b, sem_label_b, _ = self.dataset.loadDataByIndex(mix_index)
+            # print(f'PolaMix 0, {mix_index}')
+            pointcloud, sem_label = self.augmentor.polarmix(pointcloud, sem_label, pointcloud_b, sem_label_b)
             pointcloud = self.augmentor.doAugmentation(pointcloud)  # n, 4
         proj_pointcloud, proj_range, proj_idx, proj_mask = self.projection.doProjection(pointcloud)
         px, py = self.projection.cached_data['px'], self.projection.cached_data['py']
@@ -137,8 +141,10 @@ class RangeViewLoader(Dataset):
         proj_intensity_tensor = torch.from_numpy(proj_pointcloud[..., 3])
         proj_intensity_tensor = proj_intensity_tensor.ne(-1).float() * proj_intensity_tensor
         proj_existence_tensor = proj_mask_tensor.float()
+        # proj_feature_tensor = torch.cat(
+        #     [proj_range_tensor.unsqueeze(0), proj_xyz_tensor.permute(2, 0, 1), proj_intensity_tensor.unsqueeze(0), proj_existence_tensor.unsqueeze(0)], 0)
         proj_feature_tensor = torch.cat(
-            [proj_range_tensor.unsqueeze(0), proj_xyz_tensor.permute(2, 0, 1), proj_intensity_tensor.unsqueeze(0), proj_existence_tensor.unsqueeze(0)], 0)
+            [proj_range_tensor.unsqueeze(0), proj_xyz_tensor.permute(2, 0, 1), proj_intensity_tensor.unsqueeze(0)], 0)
 
         proj_feature_tensor = (proj_feature_tensor - self.proj_img_mean[:, None, None]) / self.proj_img_stds[:, None, None]
         proj_feature_tensor = proj_feature_tensor * proj_mask_tensor.unsqueeze(0).float()
@@ -150,63 +156,66 @@ class RangeViewLoader(Dataset):
 
         if self.is_train:
             save_path = os.getenv('AUG_VIS_PATH', './aug_visualizations')
-            if np.random.uniform() < self.p_rangemix:
-                # Load a random second sample
-                mix_index = torch.randint(0, len(self.dataset), (1,)).item()
-                # print(f"{len(self.dataset)}, mix is {mix_index}")
-                pointcloud_b, sem_label_b, _ = self.dataset.loadDataByIndex(mix_index)
+            # if True or np.random.uniform() < self.p_rangemix:
+            #     # Load a random second sample
+            #     mix_index = 3583
+            #     # print(f"{len(self.dataset)}, mix is {mix_index}")
+            #     pointcloud_b, sem_label_b, _ = self.dataset.loadDataByIndex(mix_index)
 
-                # Apply point cloud augmentation to second sample
-                pointcloud_b = self.augmentor.doAugmentation(pointcloud_b)
+            #     # Apply point cloud augmentation to second sample
+            #     # pointcloud_b = self.augmentor.doAugmentation(pointcloud_b)
 
-                # Project second sample
-                proj_pointcloud_b, proj_range_b, proj_idx_b, proj_mask_b = self.projection.doProjection(pointcloud_b)
+            #     # Project second sample
+            #     proj_pointcloud_b, proj_range_b, proj_idx_b, proj_mask_b = self.projection.doProjection(pointcloud_b)
 
-                # Create tensors for second sample
-                proj_mask_tensor_b = torch.from_numpy(proj_mask_b)
-                mask_b = proj_idx_b > 0
-                proj_sem_label_b = np.zeros((proj_mask_b.shape[0], proj_mask_b.shape[1]), dtype=np.float32)
-                proj_sem_label_b[mask_b] = self.dataset.labelMapping(sem_label_b[proj_idx_b[mask_b]])
-                proj_sem_label_tensor_b = torch.from_numpy(proj_sem_label_b)
-                proj_sem_label_tensor_b = proj_sem_label_tensor_b * proj_mask_tensor_b.float()
+            #     # Create tensors for second sample
+            #     proj_mask_tensor_b = torch.from_numpy(proj_mask_b)
+            #     mask_b = proj_idx_b > 0
+            #     proj_sem_label_b = np.zeros((proj_mask_b.shape[0], proj_mask_b.shape[1]), dtype=np.float32)
+            #     proj_sem_label_b[mask_b] = self.dataset.labelMapping(sem_label_b[proj_idx_b[mask_b]])
+            #     proj_sem_label_tensor_b = torch.from_numpy(proj_sem_label_b)
+            #     proj_sem_label_tensor_b = proj_sem_label_tensor_b * proj_mask_tensor_b.float()
 
-                proj_range_tensor_b = torch.from_numpy(proj_range_b)
-                proj_xyz_tensor_b = torch.from_numpy(proj_pointcloud_b[..., :3])
-                proj_intensity_tensor_b = torch.from_numpy(proj_pointcloud_b[..., 3])
-                proj_intensity_tensor_b = proj_intensity_tensor_b.ne(-1).float() * proj_intensity_tensor_b
-                proj_existence_tensor_b = proj_mask_tensor_b.float()
-                proj_feature_tensor_b = torch.cat(
-                    [proj_range_tensor_b.unsqueeze(0), proj_xyz_tensor_b.permute(2, 0, 1),
-                     proj_intensity_tensor_b.unsqueeze(0), proj_existence_tensor_b.unsqueeze(0)], 0)
+            #     proj_range_tensor_b = torch.from_numpy(proj_range_b)
+            #     proj_xyz_tensor_b = torch.from_numpy(proj_pointcloud_b[..., :3])
+            #     proj_intensity_tensor_b = torch.from_numpy(proj_pointcloud_b[..., 3])
+            #     proj_intensity_tensor_b = proj_intensity_tensor_b.ne(-1).float() * proj_intensity_tensor_b
+            #     proj_existence_tensor_b = proj_mask_tensor_b.float()
+            #     proj_feature_tensor_b = torch.cat(
+            #         [proj_range_tensor_b.unsqueeze(0), proj_xyz_tensor_b.permute(2, 0, 1),
+            #          proj_intensity_tensor_b.unsqueeze(0), proj_existence_tensor_b.unsqueeze(0)], 0)
 
-                proj_feature_tensor_b = (proj_feature_tensor_b - self.proj_img_mean[:, None, None]) / self.proj_img_stds[:, None, None]
-                proj_feature_tensor_b = proj_feature_tensor_b * proj_mask_tensor_b.unsqueeze(0).float()
+            #     proj_feature_tensor_b = (proj_feature_tensor_b - self.proj_img_mean[:, None, None]) / self.proj_img_stds[:, None, None]
+            #     proj_feature_tensor_b = proj_feature_tensor_b * proj_mask_tensor_b.unsqueeze(0).float()
 
-                proj_tensor_b = torch.cat(
-                    (proj_feature_tensor_b,
-                     proj_sem_label_tensor_b.unsqueeze(0),
-                     proj_mask_tensor_b.float().unsqueeze(0)), dim=0)
+            #     proj_tensor_b = torch.cat(
+            #         (proj_feature_tensor_b,
+            #          proj_sem_label_tensor_b.unsqueeze(0),
+            #          proj_mask_tensor_b.float().unsqueeze(0)), dim=0)
 
-                # Apply RangeMix
-                proj_feature_mixed, proj_label_mixed = augmentor.Augmentor.rangemix(
-                    proj_tensor[:6], proj_tensor[6], proj_tensor_b[:6], proj_tensor_b[6])
+            #     save_proj_tensor_as_images(torch.cat(
+            #         (proj_feature_tensor_b[:5],
+            #          proj_sem_label_tensor_b.unsqueeze(0),
+            #          proj_mask_tensor_b.float().unsqueeze(0)), dim=0), mix_index, save_path)
+            #     # Apply RangeMix
+            #     proj_feature_mixed, proj_label_mixed = augmentor.Augmentor.rangemix(
+            #         proj_tensor[:6], proj_tensor[6], proj_tensor_b[:6], proj_tensor_b[6])
 
-                # Reconstruct proj_tensor with mixed features and labels (5 channels + label + mask)
-                # Ignore existence channel (channel 5) after RangeMix to maintain C=5
-                proj_tensor = torch.cat(
-                    (proj_feature_mixed[:5],
-                     proj_label_mixed.unsqueeze(0),
-                     proj_tensor[7].unsqueeze(0)), dim=0)
-                # proj_tensor_b = torch.cat(
-                #     (proj_feature_tensor_b[:5],
-                #      proj_sem_label_tensor_b.unsqueeze(0),
-                #      proj_mask_tensor_b.float().unsqueeze(0)), dim=0)
+            #     # Reconstruct proj_tensor with mixed features and labels (5 channels + label + mask)
+            #     # Ignore existence channel (channel 5) after RangeMix to maintain C=5
+            #     proj_tensor = torch.cat(
+            #         (proj_feature_mixed[:5],
+            #          proj_label_mixed.unsqueeze(0),
+            #          proj_tensor[7].unsqueeze(0)), dim=0)
+            #     proj_tensor_b = torch.cat(
+            #         (proj_feature_tensor_b[:5],
+            #          proj_sem_label_tensor_b.unsqueeze(0),
+            #          proj_mask_tensor_b.float().unsqueeze(0)), dim=0)
 
             # Save to image for testing
             # if True:
             #     print(f'index: {index}, mix: {mix_index}')
             #     save_proj_tensor_as_images(proj_tensor, index, save_path)
-            #     save_proj_tensor_as_images(proj_tensor_b, mix_index, save_path)
             #     sys.exit()
             proj_tensor = self.aug_ops(proj_tensor)
             # return proj_tensor[0:5], proj_tensor[6], proj_tensor[7]
