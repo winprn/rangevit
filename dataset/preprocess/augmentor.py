@@ -242,6 +242,6 @@ class Augmentor(object):
     def polarmix(pca, lba, pcb, lbb):
         alpha = (np.random.random() - 1) * np.pi
         beta = alpha + np.pi
-        print(f"alpha {alpha}, beta {beta}")
+        # print(f"alpha {alpha}, beta {beta}")
         from .polarmix import polarmix
         return polarmix(pca, lba, pcb, lbb, alpha, beta)
