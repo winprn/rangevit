@@ -220,7 +220,7 @@ class RangeViewLoader(Dataset):
             #     print(f'index: {index}, mix: {mix_index}')
             #     save_proj_tensor_as_images(proj_tensor, index, save_path)
             #     sys.exit()
-            proj_tensor = self.aug_ops(proj_tensor)
+            # proj_tensor = self.aug_ops(proj_tensor)
             # return proj_tensor[0:5], proj_tensor[6], proj_tensor[7]
             proj_tensor, px, py, points_xyz, sem_label = crop_inputs(
                 proj_tensor, px, py, points_xyz, sem_label,
