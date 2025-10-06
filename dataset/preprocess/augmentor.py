@@ -245,7 +245,7 @@ class Augmentor(object):
 
     def polarmix(self, pca, lba, pcb, lbb):
         p = random.uniform(0, 1)
-        if p > self.p_polarmix:
+        if p > self.parmas.p_polarmix:
             return pca, lba
 
         alpha = (np.random.random() - 1) * np.pi
