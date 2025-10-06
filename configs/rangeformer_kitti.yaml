@@ -1,0 +1,144 @@
+# RangeFormer Configuration for SemanticKITTI
+# Compatible with RangeViT config structure
+
+# General config
+num_workers: 4
+id: 'rangeformer_base_kitti'
+
+# Model type selector
+model_type: 'rangeformer'  # 'rangevit' or 'rangeformer'
+
+# Data config
+dataset: 'SemanticKITTI'
+n_classes: 20  # 19 + 1(ignored)
+use_trainval: false
+has_label: true
+
+# Train config
+val_frequency: 5
+n_epochs: 50
+warmup_epochs: 5
+batch_size: 8
+batch_size_val: 1
+lr: 0.001
+train_result_frequency: 100
+use_fp16: False  # Mixed precision training
+
+# Image/Range View Settings
+in_channels: 6  # [x, y, z, depth, intensity, existence] - RangeFormer uses 6 channels
+image_size: [64, 1024]  # Training crop size
+window_size: [64, 1024]  # Sliding window size (for inference)
+window_stride: [64, 512]  # Sliding window stride
+original_image_size: [64, 2048]  # Full resolution
+
+# RangeFormer specific settings
+rangeformer:
+  depths: [2, 2, 6, 2]  # Number of transformer blocks per stage
+  stage_channels: [128, 128, 320, 512]  # Channel dimensions per stage
+  heads: [3, 4, 6, 3]  # Number of attention heads per stage
+  decoder_unify_ch: 256  # Unified channel dimension in decoder
+  mlp_ratio: 4.0  # MLP expansion ratio
+  aux_loss_weight: 0.4  # Weight for auxiliary losses
+
+# RangeViT compatibility fields (unused for RangeFormer but kept for compatibility)
+vit_backbone: 'vit_small_patch16_384'  # Not used by RangeFormer
+patch_size: [2, 8]  # Not used by RangeFormer
+patch_stride: [2, 8]  # Not used by RangeFormer
+conv_stem: 'none'  # RangeFormer uses REM instead
+stem_base_channels: 32  # Not used by RangeFormer
+D_h: 256  # Not used by RangeFormer
+decoder: 'up_conv'  # Not used by RangeFormer
+skip_filters: 0  # Not used by RangeFormer
+use_kpconv: false  # KPConv not supported yet for RangeFormer
+
+# Freeze encoder (for fine-tuning)
+freeze_vit_encoder: false
+unfreeze_layernorm: false
+unfreeze_attn: false
+unfreeze_ffn: false
+
+# Checkpoint model
+checkpoint: null
+pretrained_model: null  # RangeFormer doesn't use ImageNet pre-training
+finetune_pretrained_model: false
+reuse_pos_emb: false  # Not applicable to RangeFormer
+reuse_patch_emb: false  # Not applicable to RangeFormer
+
+# Data augmentation config
+augmentation:
+  # 3D Point Cloud Augmentations (before projection)
+  p_flipx: 0.0
+  p_flipy: 0.5
+
+  p_transx: 0.0
+  trans_xmin: -5.0
+  trans_xmax: 5.0
+  p_transy: 0.0
+  trans_ymin: -3.0
+  trans_ymax: 3.0
+  p_transz: 0.0
+  trans_zmin: -1.0
+  trans_zmax: 0.0
+
+  p_rot_roll: 0.0
+  rot_rollmin: -5.0
+  rot_rollmax: 5.0
+  p_rot_pitch: 0.0
+  rot_pitchmin: -5.0
+  rot_pitchmax: 5.0
+  p_rot_yaw: 0.5
+  rot_yawmin: -180.0
+  rot_yawmax: 180.0
+
+  p_scale: 0.0
+  scale_min: 0.95
+  scale_max: 1.05
+
+  # 2D Range Image Augmentations (RangeFormer-specific)
+  use_range_aug: true
+  range_aug_prob: 0.5  # Probability of applying RangeAug
+  p_range_shift: 0.5
+  p_range_mix: 0.3
+  p_range_union: 0.2
+  p_range_paste: 0.1
+  range_paste_classes: [1, 2, 3, 4, 5, 6, 7, 8]  # Rare classes for RangePaste
+
+  # Standard 2D augmentations
+  p_hflip: 0.0  # Horizontal flip of range view
+
+# Sensor configuration for range projection
+sensor:
+  name: 'HDL64'
+  type: 'spherical'
+  scan_proj: false  # Use angular projection (not scan-based)
+  proj_h: 64
+  proj_w: 2048
+  fov_up: 3.0
+  fov_down: -25.0
+  fov_left: -180.0
+  fov_right: 180.0
+
+  # Normalization (for 6 channels: [depth, x, y, z, intensity, existence])
+  img_mean: [12.12, 10.88, 0.23, -1.04, 0.21, 0.5]
+  img_stds: [12.32, 11.47, 6.91, 0.86, 0.16, 0.5]
+
+# Loss function
+loss:
+  type: 'crossentropy'  # or 'lovasz', 'focal'
+  ignore_index: 0
+  aux_loss_weight: 0.4  # Weight for auxiliary losses
+
+# Inference settings
+inference:
+  use_range_post: true  # Use RangePost strategy
+  num_sub: 4  # Number of subclouds for RangePost
+  use_knn: true  # Use KNN post-processing
+  knn_params:
+    k: 7
+    search: 7
+    sigma: 1.0
+    cutoff: 2.0
+
+# Save settings
+save_frequency: 5  # Save checkpoint every N epochs
+keep_checkpoints: 5  # Keep last N checkpoints
