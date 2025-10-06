@@ -48,6 +48,8 @@ class AugmentParams(object):
         self.scale_min = scale_min
         self.scale_max = scale_max
 
+        self.p_polarmix = 0.23
+
     def sefScaleParams(self, p_scale, scale_min, scale_max):
         self.p_scale = p_scale
         self.scale_min = scale_min
@@ -92,6 +94,9 @@ class AugmentParams(object):
 
     def setRangeMixParams(self, p_rangemix):
         self.p_rangemix = p_rangemix
+
+    def setPolarMixParams(self, p_polarmix):
+        self.p_polarmix = p_polarmix
 
     def __str__(self):
         print('=== Augmentor parameters ===')
@@ -238,8 +243,11 @@ class Augmentor(object):
 
         return xa_, ya_
 
-    @staticmethod
-    def polarmix(pca, lba, pcb, lbb):
+    def polarmix(self, pca, lba, pcb, lbb):
+        p = random.uniform(0, 1)
+        if p > self.p_polarmix:
+            return pca, lba
+
         alpha = (np.random.random() - 1) * np.pi
         beta = alpha + np.pi
         # print(f"alpha {alpha}, beta {beta}")

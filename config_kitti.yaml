@@ -79,6 +79,7 @@ augmentation:
 
   # advance augmentation
   p_rangemix: 0.9
+  p_polarmix: 0.23
 
 sensor:
   name: "HDL64"

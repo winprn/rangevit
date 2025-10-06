@@ -66,8 +66,9 @@ class RangeViewLoader(Dataset):
                 augment_params.setRangeMixParams(augment_config['p_rangemix'])
                 self.p_rangemix = augment_config['p_rangemix']
                 print(f'Adding RangeMix augmentation with probability {self.p_rangemix}')
-            else:
-                self.p_rangemix = 0.0
+            if 'p_polarmix' in augment_config:
+                augment_params.setPolarMixParams(augment_config['p_polarmix'])
+                print(f'Adding PolarMix with probability {augment_params.p_polarmix}')
             self.augmentor = augmentor.Augmentor(augment_params)
         else:
             self.augmentor = None
