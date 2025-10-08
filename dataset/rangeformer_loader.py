@@ -136,23 +136,32 @@ class RangeFormerLoader(RangeViewLoader):
         # Project second point cloud
         proj_pointcloud_b, proj_range_b, proj_idx_b, proj_mask_b = self.projection.doProjection(pointcloud_b)
 
-        # Create second range view
-        H, W = rv_np.shape[1], rv_np.shape[2]
-        rv_b = np.zeros((6, H, W), dtype=np.float32)
-        rv_b[0] = proj_pointcloud_b[:, :, 0]  # x
-        rv_b[1] = proj_pointcloud_b[:, :, 1]  # y
-        rv_b[2] = proj_pointcloud_b[:, :, 2]  # z
-        rv_b[3] = proj_range_b                 # depth
-        rv_b[4] = proj_pointcloud_b[:, :, 3]   # intensity
-        rv_b[5] = proj_mask_b                  # existence
-
-        # Create label map for second sample
-        label_b = np.zeros((H, W), dtype=np.int32)
-        mask_b = proj_idx_b > 0
-        label_b[mask_b] = sem_label_b[proj_idx_b[mask_b]]
-
+        # Determine slice window for second sample (match selected view if provided)
         if view_slice is not None:
-            rv_b, label_b = self._slice_view(rv_b, label_b, view_slice)
+            start, end = view_slice
+        else:
+            start, end = 0, proj_pointcloud_b.shape[1]
+
+        H = rv_np.shape[1]
+        slice_width = end - start
+
+        # Create second range view cropped to the same slice
+        rv_b = np.zeros((6, H, slice_width), dtype=np.float32)
+        rv_b[0] = proj_pointcloud_b[:, start:end, 0]  # x
+        rv_b[1] = proj_pointcloud_b[:, start:end, 1]  # y
+        rv_b[2] = proj_pointcloud_b[:, start:end, 2]  # z
+        rv_b[3] = proj_range_b[:, start:end]          # depth
+        rv_b[4] = proj_pointcloud_b[:, start:end, 3]  # intensity
+        rv_b[5] = proj_mask_b[:, start:end]           # existence
+
+        # Create label map for second sample (same slice)
+        label_b = np.zeros((H, slice_width), dtype=np.int32)
+        mask_b = proj_idx_b[:, start:end] > 0
+        label_b[mask_b] = sem_label_b[proj_idx_b[:, start:end][mask_b]]
+
+        # Slice current sample if needed (ensures same width)
+        if view_slice is not None:
+            rv_np, label_np = self._slice_view(rv_np, label_np, (0, slice_width))
 
         rv_aug = rv_np.copy()
         label_aug = label_np.copy()

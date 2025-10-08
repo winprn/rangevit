@@ -261,23 +261,14 @@ class RangeFormerInference:
         if N == 0:
             return final_pred
 
-        # STR-based azimuth partitioning
-        angles = np.mod(np.arctan2(pointcloud[:, 1], pointcloud[:, 0]) + 2 * np.pi, 2 * np.pi)
-        sector_width = 2 * np.pi / max(1, self.num_sub)
-
+        # Paper RangePost: split scan into equal-interval sub-clouds (every Z-th point)
         for view_idx in range(self.num_sub):
-            lower = view_idx * sector_width
-            upper = (view_idx + 1) * sector_width
-            if view_idx == self.num_sub - 1:
-                mask = (angles >= lower) & (angles <= upper)
-            else:
-                mask = (angles >= lower) & (angles < upper)
-
-            idxs = np.where(mask)[0]
+            idxs = np.arange(view_idx, N, self.num_sub, dtype=np.int32)
             if idxs.size == 0:
                 continue
 
             subcloud = pointcloud[idxs]
+
             knn_state = self.use_knn
             self.use_knn = False
             sub_pred = self.predict(subcloud)

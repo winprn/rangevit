@@ -22,7 +22,8 @@ class BoundaryLoss(nn.Module):
     def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
         probs = torch.softmax(logits, dim=1)
         num_classes = probs.shape[1]
-        kernel = self.laplacian_kernel.repeat(num_classes, 1, 1, 1)
+        device = probs.device
+        kernel = self.laplacian_kernel.to(device).repeat(num_classes, 1, 1, 1)
 
         targets_clamped = targets.clone()
         if self.ignore_index is not None:
@@ -31,10 +32,10 @@ class BoundaryLoss(nn.Module):
         target_one_hot = F.one_hot(
             targets_clamped.long(),
             num_classes=num_classes
-        ).permute(0, 3, 1, 2).float()
+        ).permute(0, 3, 1, 2).float().to(device)
 
         if self.ignore_index is not None:
-            valid_mask = (targets != self.ignore_index).unsqueeze(1).float()
+            valid_mask = (targets != self.ignore_index).unsqueeze(1).float().to(device)
             probs = probs * valid_mask
             target_one_hot = target_one_hot * valid_mask
 
