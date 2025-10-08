@@ -35,7 +35,7 @@ class Recorder(object):
         # init logger
         self.logger = self._initLogger()
         # save code and settings
-        self._saveConfig()
+        # self._saveConfig()
 
     def _initLogger(self):
         logger = logging.getLogger('console')

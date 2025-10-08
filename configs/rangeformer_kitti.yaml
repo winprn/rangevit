@@ -18,11 +18,12 @@ has_label: true
 val_frequency: 5
 n_epochs: 50
 warmup_epochs: 5
-batch_size: 8
+batch_size: 1
 batch_size_val: 1
 lr: 0.001
 train_result_frequency: 100
 use_fp16: False  # Mixed precision training
+seed: 42
 
 # Image/Range View Settings
 in_channels: 6  # [x, y, z, depth, intensity, existence] - RangeFormer uses 6 channels
@@ -35,7 +36,7 @@ original_image_size: [64, 2048]  # Full resolution
 rangeformer:
   depths: [2, 2, 6, 2]  # Number of transformer blocks per stage
   stage_channels: [128, 128, 320, 512]  # Channel dimensions per stage
-  heads: [3, 4, 6, 3]  # Number of attention heads per stage
+  heads: [4, 4, 8, 16]  # Number of attention heads per stage (must divide channels)
   decoder_unify_ch: 256  # Unified channel dimension in decoder
   mlp_ratio: 4.0  # MLP expansion ratio
   aux_loss_weight: 0.4  # Weight for auxiliary losses
@@ -96,11 +97,11 @@ augmentation:
 
   # 2D Range Image Augmentations (RangeFormer-specific)
   use_range_aug: true
-  range_aug_prob: 0.5  # Probability of applying RangeAug
-  p_range_shift: 0.5
-  p_range_mix: 0.3
+  range_aug_prob: 1.0  # Probability of applying RangeAug
+  p_range_shift: 1.0
+  p_range_mix: 0.9
   p_range_union: 0.2
-  p_range_paste: 0.1
+  p_range_paste: 0.9
   range_paste_classes: [1, 2, 3, 4, 5, 6, 7, 8]  # Rare classes for RangePaste
 
   # Standard 2D augmentations

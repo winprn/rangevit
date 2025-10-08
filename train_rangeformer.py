@@ -73,8 +73,9 @@ class RangeFormerTrainer(object):
         # For mixed precision training
         self.fp16_scaler = None
         if self.settings.use_fp16:
-            self.fp16_scaler = torch.cuda.amp.GradScaler()
             print('Using mixed precision training (FP16)')
+            raise NotImplementedError("[train_rangeformer] Mixed precision training is not implemented in current snippet.")
+            self.fp16_scaler = torch.cuda.amp.GradScaler()
 
         # Auxiliary loss weight
         self.aux_loss_weight = self.settings.config.get('loss', {}).get('aux_loss_weight', 0.4)
@@ -96,14 +97,14 @@ class RangeFormerTrainer(object):
         # SemanticKITTI dataset
         if self.settings.dataset == 'SemanticKITTI':
             print('----Using SemanticKITTI dataset----')
-            from dataset.semantic_kitti.parser import SemanticKITTI
+            from dataset.semantic_kitti.parser import SemanticKitti
 
-            trainset = SemanticKITTI(
+            trainset = SemanticKitti(
                 root=self.settings.data_root,
                 sequences=['00', '01', '02', '03', '04', '05', '06', '07', '09', '10'],
                 config_path='dataset/semantic_kitti/semantic-kitti.yaml')
 
-            valset = SemanticKITTI(
+            valset = SemanticKitti(
                 root=self.settings.data_root,
                 sequences=['08'],
                 config_path='dataset/semantic_kitti/semantic-kitti.yaml')
@@ -115,6 +116,7 @@ class RangeFormerTrainer(object):
 
         # nuScenes dataset
         elif self.settings.dataset == 'nuScenes':
+            raise NotImplementedError("[trained_rangeformer] nuScenes dataset support is not implemented in current snippet.")
             print('----Using nuScenes dataset----')
             version = 'v1.0-mini' if self.settings.use_mini_version else 'v1.0-trainval'
 

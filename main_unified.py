@@ -2,6 +2,7 @@
 # Supports both architectures with automatic model selection
 
 import argparse
+from html import parser
 import os
 import sys
 import yaml
@@ -24,6 +25,7 @@ def create_model(settings):
         model: PyTorch model (RangeViT or RangeFormer)
     """
     model_type = settings.config.get('model_type', 'rangevit')
+    print(f'\nModel type: {model_type}')
 
     if model_type == 'rangeformer':
         print('Creating RangeFormer model...')
@@ -32,6 +34,7 @@ def create_model(settings):
 
     elif model_type == 'rangevit':
         print('Creating RangeViT model...')
+        raise NotImplementedError("[main-unified] RangeViT model creation is not implemented in this snippet.")
         from models.rangevit import RangeViT
 
         # RangeViT model configuration
@@ -64,7 +67,6 @@ def create_model(settings):
     else:
         raise ValueError(f'Unknown model type: {model_type}')
 
-    print(f'\nModel type: {model_type}')
     return model
 
 
@@ -87,6 +89,7 @@ def create_trainer(settings, model, recorder):
         trainer = RangeFormerTrainer(settings, model, recorder)
 
     elif model_type == 'rangevit':
+        raise NotImplementedError("[main-unified] RangeViT model trainer creation is not implemented in this snippet.")
         from train import Trainer
         trainer = Trainer(settings, model, recorder)
 
@@ -117,7 +120,10 @@ def main():
                         help='URL for distributed training')
     parser.add_argument('--dist-backend', type=str, default='nccl',
                         help='Distributed backend')
-
+    parser.add_argument('--save_path', type=str, required=True,
+                        help='path to save the file, type: string')
+    parser.add_argument('--seed', type=int, default=1, help='random seed')
+    
     args = parser.parse_args()
 
     # Initialize settings
@@ -163,11 +169,12 @@ def main():
         print(f'Distributed training initialized: rank {settings.rank}/{settings.world_size}')
 
     # Set seed
-    tools.set_seed(settings.seed)
+    # tools.set_seed(settings.seed)
 
     # Create recorder (for logging and checkpoints)
     if tools.is_main_process():
-        recorder = Recorder(settings, rank=settings.rank)
+        # recorder = Recorder(settings, rank=settings.rank)
+        recorder = Recorder(settings, save_path=args.save_path, use_tensorboard=True)
     else:
         recorder = None
 
@@ -189,13 +196,13 @@ def main():
     trainer = create_trainer(settings, model, recorder)
 
     # Run training or validation
-    if settings.val_only:
+    if settings.val_only: # Validation only
         print('\nRunning validation only...')
         val_metrics = trainer.validate(epoch=0)
         print(f'\nValidation Results:')
         print(f'  mIoU: {val_metrics["miou"]:.4f}')
         print(f'  Accuracy: {val_metrics["acc"]:.4f}')
-    else:
+    else: # Full training
         print('\nStarting training...')
         trainer.train()
 

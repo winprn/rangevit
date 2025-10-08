@@ -17,7 +17,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import copy
 import timm
-from timm.models.layers import trunc_normal_
+from timm.layers import trunc_normal_
 
 from .blocks import Block
 from .model_utils import adapt_input_conv, padding, unpadding, resize_pos_embed, init_weights

@@ -20,7 +20,7 @@ max_iters_per_epoch: 10  # only run 10 iterations per epoch for quick testing
 
 
 # Model config
-vit_backbone: 'vit_base_patch16_384'
+vit_backbone: 'vit_small_patch16_384'
 in_channels: 5
 patch_size: [2, 8]
 patch_stride: [2, 8]
@@ -43,7 +43,7 @@ use_kpconv: true
 
 
 # Checkpoint model
-pretrained_model: "../pretrained_model/vit_base_p16_384.pth"
+pretrained_model: "../pretrained_model/vit_small_p16_384.pth"
 
 # Loading pre-trained patch and positional embeddings
 reuse_pos_emb: true

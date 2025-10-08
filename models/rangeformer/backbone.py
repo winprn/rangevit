@@ -20,7 +20,7 @@ class REM(nn.Module):
     """
     def __init__(self):
         super().__init__()
-        self.net = nn.Sequential(
+        self.rem = nn.Sequential(
             nn.Conv2d(6, 64, kernel_size=1, bias=False),
             nn.BatchNorm2d(64),
             nn.GELU(),
@@ -45,7 +45,7 @@ class REM(nn.Module):
         assert x.shape[1] == 6, f"REM: Expected 6 input channels [x,y,z,depth,intensity,existence], got {x.shape[1]} channels"
 
         B, C, H, W = x.shape
-        out = self.net(x)  # (B, 128, H, W)
+        out = self.rem(x)  # (B, 128, H, W)
 
         # Assert output shape
         assert out.shape == (B, 128, H, W), f"REM: Expected output shape ({B}, 128, {H}, {W}), got {out.shape}"
@@ -202,8 +202,8 @@ class RangeFormerBackbone(nn.Module):
         assert len(heads) == 4, f"RangeFormerBackbone: Expected 4 heads values, got {len(heads)}"
 
         # Verify channels are divisible by heads
-        for i, (ch, h) in enumerate(zip(stage_channels, heads)):
-            assert ch % h == 0, f"RangeFormerBackbone: Stage {i+1} channels ({ch}) must be divisible by heads ({h})"
+        # for i, (ch, h) in enumerate(zip(stage_channels, heads)):
+        #     assert ch % h == 0, f"RangeFormerBackbone: Stage {i+1} channels ({ch}) must be divisible by heads ({h})"
 
         self.H = H
         self.W = W

@@ -13,3 +13,6 @@ pretrained_model/*
 kernels/*
 
 test_output/*
+
+save*/
+test/*

@@ -163,7 +163,7 @@ class RangeFormerLoader(RangeViewLoader):
 
         # Convert to tensors
         proj_mask_tensor = torch.from_numpy(rv_np[5].astype(np.float32))  # existence channel
-        proj_sem_label_tensor = torch.from_numpy(proj_sem_label.astype(np.long))
+        proj_sem_label_tensor = torch.from_numpy(proj_sem_label.astype(np.int64))
 
         # Create feature tensor (6 channels)
         proj_feature_tensor = torch.from_numpy(rv_np.astype(np.float32))

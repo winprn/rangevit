@@ -110,8 +110,7 @@ class RangeFormer(nn.Module):
         logits, auxs = self.head(features)
 
         # Assert final output shapes
-        assert logits.shape == (B, self.num_classes, H, W), \
-            f"RangeFormer: Main output shape mismatch, expected ({B}, {self.num_classes}, {H}, {W}), got {logits.shape}"
+        assert logits.shape == (B, self.num_classes, H, W), f"RangeFormer: Main output shape mismatch, expected ({B}, {self.num_classes}, {H}, {W}), got {logits.shape}"
         assert isinstance(auxs, list), f"RangeFormer: Auxiliary outputs should be list, got {type(auxs)}"
         assert len(auxs) == 4, f"RangeFormer: Expected 4 auxiliary outputs, got {len(auxs)}"
 

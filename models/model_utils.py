@@ -11,7 +11,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import math
-from timm.models.layers import trunc_normal_
+from timm.layers import trunc_normal_
 
 
 def resize_pos_embed(posemb, grid_old_shape, grid_new_shape, num_extra_tokens):
