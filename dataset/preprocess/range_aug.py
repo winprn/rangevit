@@ -4,110 +4,101 @@
 
 import numpy as np
 import random
-from typing import Tuple, List
+from typing import List
 
 
 def range_mix(xa: np.ndarray, ya: np.ndarray, xb: np.ndarray, yb: np.ndarray,
-              mix_strategy: Tuple[int, int]):
+              kmix: int):
     """
-    RangeMix per paper pseudo-code (grid mixing).
+    RangeMix: exchange inclination bands between two scans.
 
     Args:
         xa, xb: rv arrays (C, H, W)
         ya, yb: label maps (H, W)
-        mix_strategy: tuple (phi, theta) dividing H and W into blocks
-
-    Returns:
-        xa_: mixed range image
-        ya_: mixed label map
+        kmix: number of inclination partitions
     """
     xa_ = xa.copy()
     ya_ = ya.copy()
-    phi, theta = mix_strategy
-    mix_h = int(xa.shape[1] / phi)
-    mix_w = int(xa.shape[2] / theta)
-    for i in range(1, mix_h + 1):
-        for j in range(1, mix_w + 1):
-            r0 = (i - 1) * phi
-            c0 = (j - 1) * theta
-            r1 = min(i * phi, xa.shape[1])
-            c1 = min(j * theta, xa.shape[2])
+
+    H, W = xa.shape[1], xa.shape[2]
+    band_height = max(1, H // kmix)
+    band_indices = list(range(kmix))
+    num_exchange = random.randint(1, max(1, kmix - 1))
+    exchange_groups = random.sample(band_indices, num_exchange)
+
+    # Optional azimuthal subdivisions to avoid harsh seams
+    azimuth_splits = random.choice([1, 2, 4])
+    column_width = W // azimuth_splits
+
+    for band in exchange_groups:
+        r0 = band * band_height
+        r1 = H if band == kmix - 1 else min(H, (band + 1) * band_height)
+        if r1 <= r0:
+            continue
+        for split in range(azimuth_splits):
+            c0 = split * column_width
+            c1 = W if split == azimuth_splits - 1 else min(W, (split + 1) * column_width)
+            if c1 <= c0:
+                continue
             xa_[:, r0:r1, c0:c1] = xb[:, r0:r1, c0:c1]
             ya_[r0:r1, c0:c1] = yb[r0:r1, c0:c1]
+
     return xa_, ya_
 
 
 def range_union(xa: np.ndarray, ya: np.ndarray, xb: np.ndarray, yb: np.ndarray,
                 kunion: float = 0.5):
     """
-    RangeUnion: fill void pixels (existence channel = 0) in A with B
-
-    Args:
-        xa, xb: rv arrays (C, H, W)
-        ya, yb: label maps (H, W)
-        kunion: fraction of void pixels to fill
-
-    Returns:
-        xa_: augmented range image
-        ya_: augmented label map
+    RangeUnion: fill void pixels (existence channel = 0) in A with valid pixels from B.
     """
     xa_ = xa.copy()
     ya_ = ya.copy()
-    mask = xa_[-1, :, :]  # existence channel (last channel)
-    void = mask == 0
-    # choose random subset of voids (kunion fraction)
-    void_coords = np.stack(np.where(void), axis=1)
-    if void_coords.shape[0] == 0:
+    existence_a = xa_[-1]
+    existence_b = xb[-1]
+    void = existence_a == 0
+    candidates = np.where(void & (existence_b > 0))
+    if candidates[0].size == 0:
         return xa_, ya_
-    K = int(void_coords.shape[0] * kunion)
-    pick_idx = np.random.choice(void_coords.shape[0], size=K, replace=False)
-    chosen = void_coords[pick_idx]
-    for (r, c) in chosen:
-        xa_[:, r, c] = xb[:, r, c]
-        ya_[r, c] = yb[r, c]
+
+    total_candidates = candidates[0].size
+    K = max(1, int(total_candidates * kunion))
+    pick_idx = np.random.choice(total_candidates, size=K, replace=False)
+    rows = candidates[0][pick_idx]
+    cols = candidates[1][pick_idx]
+
+    xa_[:, rows, cols] = xb[:, rows, cols]
+    ya_[rows, cols] = yb[rows, cols]
     return xa_, ya_
 
 
 def range_paste(xa: np.ndarray, ya: np.ndarray, xb: np.ndarray, yb: np.ndarray,
-                sem_classes: List[int]):
+                tail_classes: List[int]):
     """
-    RangePaste: paste pixels from xb that belong to rare semantic classes into xa
-
-    Args:
-        xa, xb: rv arrays (C, H, W)
-        ya, yb: label maps (H, W)
-        sem_classes: list of rare semantic class IDs to paste
-
-    Returns:
-        xa_: augmented range image
-        ya_: augmented label map
+    RangePaste: paste rare semantic classes from xb into xa.
     """
+    if not tail_classes:
+        return xa, ya
     xa_ = xa.copy()
     ya_ = ya.copy()
-    for sem_class in sem_classes:
-        pix = (yb == sem_class)
-        if pix.sum() == 0:
+
+    for sem_class in tail_classes:
+        mask = (yb == sem_class)
+        if not np.any(mask):
             continue
-        xa_[:, pix] = xb[:, pix]
-        ya_[pix] = yb[pix]
+        xa_[:, mask] = xb[:, mask]
+        ya_[mask] = sem_class
     return xa_, ya_
 
 
 def range_shift(xa: np.ndarray, ya: np.ndarray):
     """
-    RangeShift: shift image along width (azimuth) by random kshift in [W/4, 3W/4]
-
-    Args:
-        xa: rv array (C, H, W)
-        ya: label map (H, W)
-
-    Returns:
-        xa_: shifted range image
-        ya_: shifted label map
+    RangeShift: shift image along width (azimuth) by random offset.
     """
     xa_ = xa.copy()
     ya_ = ya.copy()
     h, w = xa.shape[1], xa.shape[2]
+    if w <= 1:
+        return xa_, ya_
     p = random.randint(int(0.25 * w), int(0.75 * w))
     xa_ = np.concatenate([xa[:, :, p:], xa[:, :, :p]], axis=2)
     ya_ = np.concatenate([ya[:, p:], ya[:, :p]], axis=1)

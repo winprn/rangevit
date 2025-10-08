@@ -10,10 +10,11 @@ model_type: 'rangeformer'  # or 'rangevit'
 # RangeFormer specific settings
 rangeformer:
   depths: [2, 2, 6, 2]  # Number of transformer blocks per stage
-  stage_channels: [128, 128, 320, 512]  # Channel dimensions per stage
-  heads: [3, 4, 6, 3]  # Number of attention heads per stage
-  decoder_unify_ch: 256  # Unified channel dimension in decoder
+  stage_channels: [128, 256, 384, 512]  # Channel dimensions per stage (paper setting)
+  heads: [4, 4, 8, 16]  # Number of attention heads per stage
+  decoder_unify_ch: 512  # Unified channel dimension in decoder
   mlp_ratio: 4.0  # MLP expansion ratio
+  sr_ratios: [8, 4, 2, 1]  # Spatial reduction ratios per stage
   aux_loss_weight: 0.4  # Weight for auxiliary losses
 
 # Dataset
@@ -24,8 +25,8 @@ use_trainval: False
 
 # Image/Range View Settings
 in_channels: 6  # [x, y, z, depth, intensity, existence]
-image_size: [64, 1024]  # Training crop size
-original_image_size: [64, 2048]  # Full resolution (validation/test)
+image_size: [64, 384]  # STR training view width (1920 / 5)
+original_image_size: [64, 2048]  # Full resolution panorama
 
 # Sensor configuration for range projection
 sensor:
@@ -57,6 +58,12 @@ use_fp16: False
 # Optimizer
 weight_decay: 0.01
 
+onecycle:
+  pct_start: 0.1
+  div_factor: 25.0
+  final_div_factor: 10000.0
+  anneal_strategy: 'cos'
+
 # Data augmentation
 augmentation:
   # 3D Point Cloud Augmentations (before projection)
@@ -86,21 +93,25 @@ augmentation:
 
   # 2D Range Image Augmentations (RangeFormer-specific)
   use_range_aug: True
-  range_aug_prob: 0.5  # Probability of applying RangeAug
-  p_range_shift: 0.5
-  p_range_mix: 0.3
-  p_range_union: 0.2
-  p_range_paste: 0.1
-  range_paste_classes: [1, 2, 3, 4, 5, 6, 7, 8]  # Rare classes for RangePaste
+  range_aug_prob: 1.0  # STR always applies RangeAug when enabled
+  p_range_shift: 0.9
+  p_range_mix: 0.2
+  p_range_union: 0.9
+  p_range_paste: 1.0
+  range_paste_tail_ratio: 0.1  # top 10% rare classes
 
   # Standard 2D augmentations
   p_hflip: 0.0  # Horizontal flip of range view
 
 # Loss function
 loss:
-  type: 'crossentropy'  # or 'lovasz', 'focal'
+  type: 'composite'  # cross-entropy + focal + dice + lovasz + boundary
   ignore_index: 0
   aux_loss_weight: 0.4  # Weight for auxiliary losses
+  dice_weight: 1.0
+  lovasz_weight: 1.0
+  boundary_weight: 1.0
+  ce_weight: 1.0
 
 # Checkpoint
 checkpoint: null  # Path to resume from checkpoint
@@ -109,13 +120,20 @@ pretrained_model: null  # Path to pretrained weights (if any)
 # Inference settings
 inference:
   use_range_post: True  # Use RangePost strategy
-  num_sub: 4  # Number of subclouds for RangePost
+  num_sub: 3  # Paper default RangePost partition
   use_knn: True  # Use KNN post-processing
   knn_params:
     k: 7
     search: 7
     sigma: 1.0
     cutoff: 2.0
+
+# STR configuration (Scalable Training from Range view)
+str:
+  enabled: True
+  num_views: 5  # Partition LiDAR scan into 5 azimuthal views during training (Wtrain=384)
+  inference_views: 5  # Number of STR slices for inference stitching
+  align_inference: True  # Use STR view stitching at validation/inference
 
 # Save settings
 save_frequency: 5  # Save checkpoint every N epochs

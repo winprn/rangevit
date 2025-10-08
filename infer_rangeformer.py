@@ -39,15 +39,21 @@ class RangeFormerInference:
         with open(config_path, 'r') as f:
             self.config = yaml.safe_load(f)
 
+        # Determine training view resolution (STR)
+        image_size = self.config.get('image_size', [self.config['sensor']['proj_h'], self.config['sensor']['proj_w']])
+        train_H, train_W = image_size
+
         # Create model
         model_config = {
-            'H': self.config['sensor']['proj_h'],
-            'W': self.config['sensor']['proj_w'],
+            'H': train_H,
+            'W': train_W,
             'num_classes': self.config['n_classes'],
             'depths': self.config['rangeformer']['depths'],
             'stage_channels': self.config['rangeformer']['stage_channels'],
             'heads': self.config['rangeformer']['heads'],
             'decoder_unify_ch': self.config['rangeformer'].get('decoder_unify_ch', 256),
+            'mlp_ratio': self.config['rangeformer'].get('mlp_ratio', 4.0),
+            'sr_ratios': self.config['rangeformer'].get('sr_ratios', [8, 4, 2, 1]),
         }
 
         self.model = create_rangeformer(model_config)
@@ -75,10 +81,22 @@ class RangeFormerInference:
             proj_h=sensor_config['proj_h']
         )
 
+        self.full_width = sensor_config['proj_w']
+        self.full_height = sensor_config['proj_h']
+        self.view_width = train_W
+
+        # STR configuration
+        str_config = self.config.get('str', {})
+        self.str_enabled = bool(str_config.get('enabled', False))
+        self.str_num_views = int(str_config.get('num_views', max(1, self.full_width // max(1, self.view_width))))
+        self.str_inference_views = int(str_config.get('inference_views', self.str_num_views))
+
         # Inference settings
         infer_config = self.config.get('inference', {})
         self.use_range_post = infer_config.get('use_range_post', True)
-        self.num_sub = infer_config.get('num_sub', 4)
+        default_views = self.str_inference_views if self.str_enabled else max(1, self.full_width // max(1, self.view_width))
+        self.num_views = default_views
+        self.num_sub = infer_config.get('num_sub', default_views)
         self.use_knn = infer_config.get('use_knn', True)
 
         if self.use_knn:
@@ -175,6 +193,19 @@ class RangeFormerInference:
 
         return point_labels
 
+    def _get_view_slice(self, view_idx: int, total_width: int):
+        """
+        Compute [start, end) for a given STR view index.
+        """
+        if self.view_width <= 0 or self.view_width >= total_width:
+            return 0, total_width
+
+        start = view_idx * self.view_width
+        end = start + self.view_width
+        if end > total_width:
+            end = total_width
+        return start, end
+
     def predict(self, pointcloud):
         """
         Standard single-pass prediction.
@@ -190,8 +221,20 @@ class RangeFormerInference:
         # Project to range image
         rv, proj_idx = self.project_to_range_image(pointcloud)
 
-        # Predict
-        pred_map = self.predict_range_image(rv)
+        total_width = rv.shape[2]
+
+        # Predict (handle STR multi-view slicing if needed)
+        if self.num_views <= 1 or self.view_width >= total_width:
+            pred_map = self.predict_range_image(rv)
+        else:
+            pred_map = np.zeros((rv.shape[1], total_width), dtype=np.int32)
+            for view_idx in range(self.num_views):
+                start, end = self._get_view_slice(view_idx, total_width)
+                if end <= start:
+                    continue
+                rv_view = rv[:, :, start:end]
+                pred_view = self.predict_range_image(rv_view)
+                pred_map[:, start:end] = pred_view
 
         # Map back to points
         predictions = self.map_to_points(pred_map, proj_idx, N)
@@ -214,33 +257,32 @@ class RangeFormerInference:
         """
         N = pointcloud.shape[0]
 
-        # Split into subclouds
-        subclouds = []
-        indices = []
-        for i in range(self.num_sub):
-            sub = pointcloud[i::self.num_sub, :]
-            subclouds.append(sub)
-            idxs = np.arange(i, N, self.num_sub)
-            indices.append(idxs)
-
-        # Rasterize and predict each subcloud
         final_pred = np.zeros(N, dtype=np.int32)
+        if N == 0:
+            return final_pred
 
-        for j, (subcloud, idxs) in enumerate(zip(subclouds, indices)):
-            # Project
-            rv, proj_idx = self.project_to_range_image(subcloud)
+        # STR-based azimuth partitioning
+        angles = np.mod(np.arctan2(pointcloud[:, 1], pointcloud[:, 0]) + 2 * np.pi, 2 * np.pi)
+        sector_width = 2 * np.pi / max(1, self.num_sub)
 
-            # Predict
-            pred_map = self.predict_range_image(rv)
+        for view_idx in range(self.num_sub):
+            lower = view_idx * sector_width
+            upper = (view_idx + 1) * sector_width
+            if view_idx == self.num_sub - 1:
+                mask = (angles >= lower) & (angles <= upper)
+            else:
+                mask = (angles >= lower) & (angles < upper)
 
-            # Map back to points
-            H, W = pred_map.shape
-            for r in range(H):
-                for c in range(W):
-                    idx = proj_idx[r, c]
-                    if idx >= 0:
-                        global_idx = idxs[idx]
-                        final_pred[global_idx] = int(pred_map[r, c])
+            idxs = np.where(mask)[0]
+            if idxs.size == 0:
+                continue
+
+            subcloud = pointcloud[idxs]
+            knn_state = self.use_knn
+            self.use_knn = False
+            sub_pred = self.predict(subcloud)
+            self.use_knn = knn_state
+            final_pred[idxs] = sub_pred
 
         # KNN post-processing
         if self.use_knn:

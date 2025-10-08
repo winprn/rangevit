@@ -31,9 +31,11 @@ class RangeFormer(nn.Module):
                  W: int,
                  num_classes: int,
                  depths: List[int] = [2, 2, 6, 2],
-                 stage_channels: List[int] = [128, 128, 320, 512],
-                 heads: List[int] = [3, 4, 6, 3],
-                 decoder_unify_ch: int = 256):
+                 stage_channels: List[int] = [128, 256, 384, 512],
+                 heads: List[int] = [4, 4, 8, 16],
+                 decoder_unify_ch: int = 512,
+                 mlp_ratio: float = 4.0,
+                 sr_ratios: List[int] = [8, 4, 2, 1]):
         """
         Args:
             H: height of range image (vertical resolution)
@@ -55,6 +57,7 @@ class RangeFormer(nn.Module):
         assert len(stage_channels) == 4, f"RangeFormer: stage_channels must have 4 values, got {len(stage_channels)}"
         assert len(heads) == 4, f"RangeFormer: heads must have 4 values, got {len(heads)}"
         assert decoder_unify_ch > 0, f"RangeFormer: decoder_unify_ch must be positive, got {decoder_unify_ch}"
+        assert len(sr_ratios) == 4, f"RangeFormer: sr_ratios must have 4 values, got {len(sr_ratios)}"
 
         self.H = H
         self.W = W
@@ -62,6 +65,8 @@ class RangeFormer(nn.Module):
         self.depths = depths
         self.stage_channels = stage_channels
         self.heads = heads
+        self.mlp_ratio = mlp_ratio
+        self.sr_ratios = sr_ratios
 
         # Backbone: REM + hierarchical transformer encoder
         self.backbone = RangeFormerBackbone(
@@ -70,7 +75,9 @@ class RangeFormer(nn.Module):
             num_classes=num_classes,
             depths=depths,
             stage_channels=stage_channels,
-            heads=heads
+            heads=heads,
+            mlp_ratio=mlp_ratio,
+            sr_ratios=sr_ratios
         )
 
         # Decoder: multi-scale feature fusion head
@@ -151,6 +158,8 @@ def create_rangeformer(config: dict):
             - stage_channels: list of ints, default [128, 128, 320, 512]
             - heads: list of ints, default [3, 4, 6, 3]
             - decoder_unify_ch: int, default 256
+            - mlp_ratio: float, default 4.0
+            - sr_ratios: list of ints, default [8, 4, 2, 1]
 
     Returns:
         RangeFormer model instance
@@ -162,9 +171,11 @@ def create_rangeformer(config: dict):
 
     # Optional parameters with defaults
     depths = config.get('depths', [2, 2, 6, 2])
-    stage_channels = config.get('stage_channels', [128, 128, 320, 512])
-    heads = config.get('heads', [3, 4, 6, 3])
-    decoder_unify_ch = config.get('decoder_unify_ch', 256)
+    stage_channels = config.get('stage_channels', [128, 256, 384, 512])
+    heads = config.get('heads', [4, 4, 8, 16])
+    decoder_unify_ch = config.get('decoder_unify_ch', 512)
+    mlp_ratio = config.get('mlp_ratio', 4.0)
+    sr_ratios = config.get('sr_ratios', [8, 4, 2, 1])
 
     model = RangeFormer(
         H=H,
@@ -173,7 +184,9 @@ def create_rangeformer(config: dict):
         depths=depths,
         stage_channels=stage_channels,
         heads=heads,
-        decoder_unify_ch=decoder_unify_ch
+        decoder_unify_ch=decoder_unify_ch,
+        mlp_ratio=mlp_ratio,
+        sr_ratios=sr_ratios
     )
 
     return model

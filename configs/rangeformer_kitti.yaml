@@ -18,7 +18,7 @@ has_label: true
 val_frequency: 5
 n_epochs: 50
 warmup_epochs: 5
-batch_size: 1
+batch_size: 8
 batch_size_val: 1
 lr: 0.001
 train_result_frequency: 100
@@ -35,9 +35,9 @@ original_image_size: [64, 2048]  # Full resolution
 # RangeFormer specific settings
 rangeformer:
   depths: [2, 2, 6, 2]  # Number of transformer blocks per stage
-  stage_channels: [128, 128, 320, 512]  # Channel dimensions per stage
+  stage_channels: [128, 256, 384, 512]  # Channel dimensions per stage
   heads: [4, 4, 8, 16]  # Number of attention heads per stage (must divide channels)
-  decoder_unify_ch: 256  # Unified channel dimension in decoder
+  decoder_unify_ch: 512  # Unified channel dimension in decoder
   mlp_ratio: 4.0  # MLP expansion ratio
   aux_loss_weight: 0.4  # Weight for auxiliary losses
 

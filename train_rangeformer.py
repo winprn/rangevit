@@ -18,6 +18,7 @@ import utils.tools as tools
 from utils.metrics.eval_results import eval_results
 from utils.metrics.tensorboard_logger import tensorboard_logger
 from utils.tools import Recorder
+from utils.optim import DiceLoss, BoundaryLoss, Lovasz_softmax
 
 # Import RangeFormer
 from models.rangeformer import RangeFormer, create_rangeformer
@@ -62,13 +63,18 @@ class RangeFormerTrainer(object):
             ignore=self.ignore_class, is_distributed=self.settings.distributed)
         self.metrics.reset()
 
-        # Define scheduler
-        self.scheduler = utils.optim.WarmupCosineLR(
-            optimizer=self.optimizer,
-            lr=self.settings.lr,
-            warmup_steps=self.settings.warmup_epochs * len(self.train_loader),
-            momentum=0.9,
-            max_steps=len(self.train_loader) * (self.settings.n_epochs - self.settings.warmup_epochs))
+        # Define scheduler (OneCycle learning rate schedule per paper)
+        onecycle_cfg = self.settings.config.get('onecycle', {})
+        self.scheduler = torch.optim.lr_scheduler.OneCycleLR(
+            self.optimizer,
+            max_lr=self.settings.lr,
+            epochs=self.settings.n_epochs,
+            steps_per_epoch=len(self.train_loader),
+            pct_start=onecycle_cfg.get('pct_start', 0.1),
+            div_factor=onecycle_cfg.get('div_factor', 25.0),
+            final_div_factor=onecycle_cfg.get('final_div_factor', 1e4),
+            anneal_strategy=onecycle_cfg.get('anneal_strategy', 'cos')
+        )
 
         # For mixed precision training
         self.fp16_scaler = None
@@ -81,6 +87,25 @@ class RangeFormerTrainer(object):
         self.aux_loss_weight = self.settings.config.get('loss', {}).get('aux_loss_weight', 0.4)
         print(f'Auxiliary loss weight: {self.aux_loss_weight}')
 
+        # STR configuration
+        str_config = self.settings.config.get('str', {})
+        self.use_str = bool(str_config.get('enabled', False))
+        self.str_num_views = int(str_config.get('num_views', 1))
+        self.str_align_inference = bool(str_config.get('align_inference', True))
+        self.str_inference_views = int(str_config.get('inference_views', self.str_num_views))
+        self.str_view_width = self.settings.image_size[1]
+        self.str_full_width = self.settings.original_image_size[1]
+        if self.use_str:
+            if self.str_full_width % self.str_inference_views != 0:
+                raise ValueError(
+                    f'STR inference views ({self.str_inference_views}) must divide panorama width '
+                    f'({self.str_full_width})')
+            expected_width = self.str_full_width // self.str_num_views
+            if self.str_view_width != expected_width:
+                raise ValueError(
+                    f'Config mismatch: image_size width ({self.str_view_width}) should equal '
+                    f'original_image_size width / num_views ({expected_width})')
+
     def _initOptimizer(self):
         params = self.model.parameters()
         adamw_optimizer = torch.optim.AdamW(
@@ -88,6 +113,39 @@ class RangeFormerTrainer(object):
             lr=self.settings.lr,
             weight_decay=self.settings.config.get('weight_decay', 0.01))
         return adamw_optimizer
+
+    def _forward_with_str_views(self, range_images: torch.Tensor):
+        """
+        Run STR-aligned inference by slicing the panorama into view segments that
+        match the training resolution and stitching logits back together.
+        """
+        if not self.use_str or not self.str_align_inference:
+            logits, _ = self.model(range_images)
+            return logits
+
+        B, C, H, W_full = range_images.shape
+        # If already at training width, run a single forward
+        if W_full == self.str_view_width:
+            logits, _ = self.model(range_images)
+            return logits
+
+        if W_full % self.str_view_width != 0:
+            raise ValueError(
+                f'STR inference requires panorama width ({W_full}) to be divisible '
+                f'by view width ({self.str_view_width}).'
+            )
+
+        num_views = self.str_inference_views
+        logits_views = []
+        for view_idx in range(num_views):
+            start = view_idx * self.str_view_width
+            end = start + self.str_view_width
+            view_tensor = range_images[:, :, :, start:end]
+            logits_view, _ = self.model(view_tensor)
+            logits_views.append(logits_view)
+
+        logits_full = torch.cat(logits_views, dim=3)
+        return logits_full
 
     def _initDataloader(self):
         """Initialize data loaders with RangeFormer loader."""
@@ -174,22 +232,55 @@ class RangeFormerTrainer(object):
         loss_config = self.settings.config.get('loss', {})
         loss_type = loss_config.get('type', 'crossentropy')
         ignore_index = loss_config.get('ignore_index', 0)
+        self.loss_type = loss_type
+        self.loss_ignore_index = ignore_index
 
         if loss_type == 'crossentropy':
             criterion = nn.CrossEntropyLoss(
                 weight=torch.from_numpy(self.cls_weight).float().cuda(),
                 ignore_index=ignore_index)
         elif loss_type == 'lovasz':
-            from utils.optim.lovasz_softmax import Lovasz_softmax
             criterion = Lovasz_softmax(ignore=ignore_index)
         elif loss_type == 'focal':
-            from utils.optim.focal_softmax import Focal_softmax
-            criterion = Focal_softmax(ignore=ignore_index)
+            from utils.optim.focal_softmax import FocalSoftmaxLoss
+            criterion = FocalSoftmaxLoss(ignore=ignore_index)
+        elif loss_type == 'composite':
+            self.ce_loss = nn.CrossEntropyLoss(
+                weight=torch.from_numpy(self.cls_weight).float().cuda(),
+                ignore_index=ignore_index)
+            self.dice_loss_fn = DiceLoss(ignore_index=ignore_index)
+            self.lovasz_loss_fn = Lovasz_softmax(ignore=ignore_index)
+            self.boundary_loss_fn = BoundaryLoss(ignore_index=ignore_index)
+            self.loss_weights = {
+                'ce': loss_config.get('ce_weight', 1.0),
+                'dice': loss_config.get('dice_weight', 1.0),
+                'lovasz': loss_config.get('lovasz_weight', 1.0),
+                'boundary': loss_config.get('boundary_weight', 1.0),
+            }
+            criterion = None
         else:
             raise NotImplementedError(f'Loss type {loss_type} not supported')
 
         print(f'Using {loss_type} loss')
         return criterion
+
+    def _composite_loss(self, logits, labels):
+        ce = self.ce_loss(logits, labels)
+        dice = self.dice_loss_fn(logits, labels)
+        lovasz = self.lovasz_loss_fn(torch.softmax(logits, dim=1), labels)
+        boundary = self.boundary_loss_fn(logits, labels)
+        return (
+            self.loss_weights['ce'] * ce +
+            self.loss_weights['dice'] * dice +
+            self.loss_weights['lovasz'] * lovasz +
+            self.loss_weights['boundary'] * boundary
+        )
+
+    def _compute_loss(self, logits, labels):
+        if self.loss_type == 'composite':
+            return self._composite_loss(logits, labels)
+        else:
+            return self.criterion(logits, labels)
 
     def train_one_epoch(self, epoch):
         """Train for one epoch with auxiliary loss support."""
@@ -221,12 +312,12 @@ class RangeFormerTrainer(object):
                     logits, aux_logits = self.model(range_images)
 
                     # Main loss
-                    loss_main = self.criterion(logits, labels)
+                    loss_main = self._compute_loss(logits, labels)
 
                     # Auxiliary losses
                     loss_aux = 0.0
                     for aux_logit in aux_logits:
-                        loss_aux += self.criterion(aux_logit, labels)
+                        loss_aux += self._compute_loss(aux_logit, labels)
                     loss_aux /= len(aux_logits)
 
                     # Total loss
@@ -242,12 +333,12 @@ class RangeFormerTrainer(object):
                 logits, aux_logits = self.model(range_images)
 
                 # Main loss
-                loss_main = self.criterion(logits, labels)
+                loss_main = self._compute_loss(logits, labels)
 
                 # Auxiliary losses
                 loss_aux = 0.0
                 for aux_logit in aux_logits:
-                    loss_aux += self.criterion(aux_logit, labels)
+                    loss_aux += self._compute_loss(aux_logit, labels)
                 loss_aux /= len(aux_logits)
 
                 # Total loss
@@ -275,10 +366,16 @@ class RangeFormerTrainer(object):
             # Logging
             if batch_idx % self.settings.log_frequency == 0:
                 current_lr = self.optimizer.param_groups[0]['lr']
+                miou_running, _ = self.metrics.getIoU()
+                acc_running, _ = self.metrics.getAcc()
+                recall_running, _ = self.metrics.getRecall()
                 print(f'Epoch [{epoch}/{self.settings.n_epochs}] '
                       f'Batch [{batch_idx}/{len(self.train_loader)}] '
                       f'Loss: {loss.item():.4f} (Main: {loss_main.item():.4f}, Aux: {loss_aux.item():.4f}) '
-                      f'LR: {current_lr:.6f}')
+                      f'LR: {current_lr:.6f} '
+                      f'Acc: {acc_running.item():.4f} '
+                      f'mIoU: {miou_running.item():.4f} '
+                      f'Recall: {recall_running.item():.4f}')
 
         # Compute metrics
         avg_loss = epoch_loss / num_batches
@@ -286,19 +383,20 @@ class RangeFormerTrainer(object):
         avg_loss_aux = epoch_loss_aux / num_batches
 
         miou, ious = self.metrics.getIoU()
-        acc = self.metrics.getacc()
+        acc_mean, _ = self.metrics.getAcc()
+        acc_value = acc_mean.item() if isinstance(acc_mean, torch.Tensor) else float(acc_mean)
 
         print(f'\nEpoch {epoch} Training Results:')
         print(f'  Loss: {avg_loss:.4f} (Main: {avg_loss_main:.4f}, Aux: {avg_loss_aux:.4f})')
         print(f'  mIoU: {miou:.4f}')
-        print(f'  Accuracy: {acc:.4f}')
+        print(f'  Accuracy: {acc_value:.4f}')
 
         return {
             'loss': avg_loss,
             'loss_main': avg_loss_main,
             'loss_aux': avg_loss_aux,
             'miou': miou,
-            'acc': acc,
+            'acc': acc_value,
             'ious': ious
         }
 
@@ -322,10 +420,10 @@ class RangeFormerTrainer(object):
                 labels = labels.cuda(non_blocking=True).long()
 
                 # Forward pass
-                logits, aux_logits = self.model(range_images)
+                logits = self._forward_with_str_views(range_images)
 
                 # Loss (main only for validation)
-                loss = self.criterion(logits, labels)
+                loss = self._compute_loss(logits, labels)
                 val_loss += loss.item()
                 num_batches += 1
 
@@ -428,6 +526,8 @@ def create_rangeformer_model(settings):
         'stage_channels': settings.config['rangeformer']['stage_channels'],
         'heads': settings.config['rangeformer']['heads'],
         'decoder_unify_ch': settings.config['rangeformer'].get('decoder_unify_ch', 256),
+        'mlp_ratio': settings.config['rangeformer'].get('mlp_ratio', 4.0),
+        'sr_ratios': settings.config['rangeformer'].get('sr_ratios', [8, 4, 2, 1]),
     }
 
     model = create_rangeformer(config)

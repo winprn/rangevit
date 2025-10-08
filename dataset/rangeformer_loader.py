@@ -4,6 +4,7 @@
 import numpy as np
 import torch
 import random
+from typing import Optional, Tuple
 from torch.utils.data import Dataset
 
 from .range_view_loader import RangeViewLoader
@@ -14,11 +15,7 @@ class RangeFormerLoader(RangeViewLoader):
     """
     Dataset loader for RangeFormer with RangeAug support.
 
-    Extends RangeViewLoader to add 2D range image augmentations:
-    - RangeMix: Grid-based mixing of two range images
-    - RangeUnion: Fill voids with another image
-    - RangePaste: Paste rare semantic classes
-    - RangeShift: Azimuthal shift
+    Extends RangeViewLoader to add RangeAug & STR support per RangeFormer paper.
     """
 
     def __init__(self, dataset, config, data_len=-1, is_train=True, return_uproj=False, use_kpconv=False):
@@ -28,31 +25,101 @@ class RangeFormerLoader(RangeViewLoader):
         self.use_range_aug = config.get('augmentation', {}).get('use_range_aug', False) and is_train
         if self.use_range_aug:
             aug_config = config['augmentation']
-            self.range_aug_prob = aug_config.get('range_aug_prob', 0.5)
-            self.p_range_shift = aug_config.get('p_range_shift', 0.5)
-            self.p_range_mix = aug_config.get('p_range_mix', 0.3)
-            self.p_range_union = aug_config.get('p_range_union', 0.2)
-            self.p_range_paste = aug_config.get('p_range_paste', 0.1)
-            self.range_paste_classes = aug_config.get('range_paste_classes', [1, 2, 3, 4, 5, 6, 7, 8])
+            self.range_aug_prob = aug_config.get('range_aug_prob', 1.0)
+            self.p_range_shift = aug_config.get('p_range_shift', 0.9)
+            self.p_range_mix = aug_config.get('p_range_mix', 0.2)
+            self.p_range_union = aug_config.get('p_range_union', 0.9)
+            self.p_range_paste = aug_config.get('p_range_paste', 1.0)
+            tail_ratio = aug_config.get('range_paste_tail_ratio', None)
+            if tail_ratio is not None and hasattr(self.dataset, 'cls_freq'):
+                self.range_paste_classes = self._compute_tail_classes(tail_ratio)
+            else:
+                self.range_paste_classes = aug_config.get('range_paste_classes', [])
+            self.range_paste_classes = [int(c) for c in self.range_paste_classes]
 
-            print(f'RangeAug enabled with probability {self.range_aug_prob}')
-            print(f'  RangeShift: {self.p_range_shift}')
-            print(f'  RangeMix: {self.p_range_mix}')
-            print(f'  RangeUnion: {self.p_range_union}')
-            print(f'  RangePaste: {self.p_range_paste}')
+            print(f'RangeAug enabled: prob={self.range_aug_prob}')
+            print(f'  RangeShift p={self.p_range_shift}')
+            print(f'  RangeMix p={self.p_range_mix}')
+            print(f'  RangeUnion p={self.p_range_union}')
+            print(f'  RangePaste p={self.p_range_paste}, tail={self.range_paste_classes}')
 
-    def apply_range_aug(self, rv_np, label_np):
+        # STR configuration
+        str_config = config.get('str', {})
+        self.use_str = bool(str_config.get('enabled', False))
+        self.str_num_views = int(str_config.get('num_views', 1))
+        if self.use_str and self.str_num_views < 1:
+            raise ValueError('STR enabled but num_views < 1')
+
+        self.str_inference_views = int(str_config.get('inference_views', self.str_num_views))
+        self.str_align_inference = bool(str_config.get('align_inference', True))
+        # Training view width (expected to match config image_size[1])
+        self.str_view_width = self.config['image_size'][1] if self.use_str else None
+        # Full resolution width (used for inference/validation stitching)
+        self.str_full_width = self.config['original_image_size'][1]
+
+        if self.use_str:
+            if self.str_full_width % self.str_num_views != 0:
+                raise ValueError(
+                    f'STR view partition mismatch: full width {self.str_full_width} '
+                    f'is not divisible by num_views {self.str_num_views}')
+            expected_width = self.str_full_width // self.str_num_views
+            if self.str_view_width != expected_width:
+                raise ValueError(
+                    f'image_size width ({self.str_view_width}) must equal '
+                    f'original_image_size width / num_views ({expected_width})')
+
+    def _get_view_slice(self, view_idx: int, total_width: int) -> Tuple[int, int]:
+        """
+        Compute column slice [start, end) for a given view index.
+        """
+        if not self.use_str:
+            return 0, total_width
+
+        view_width = self.str_view_width or (total_width // self.str_num_views)
+        start = view_idx * view_width
+        end = start + view_width
+        if end > total_width:
+            end = total_width
+        return start, end
+
+    def _slice_view(self, rv: np.ndarray, label: np.ndarray, view_slice: Tuple[int, int]):
+        start, end = view_slice
+        rv = rv[:, :, start:end]
+        label = label[:, start:end]
+        return rv, label
+
+    def _compute_tail_classes(self, tail_ratio: float):
+        """
+        Determine tail classes based on dataset class frequency histogram.
+        """
+        cls_freq = getattr(self.dataset, 'cls_freq', None)
+        if cls_freq is None:
+            return []
+        ignore_idx = 0
+        valid_indices = [i for i in range(len(cls_freq)) if i != ignore_idx and cls_freq[i] > 0]
+        if not valid_indices:
+            return []
+        sorted_valid = sorted(valid_indices, key=lambda idx: cls_freq[idx])
+        tail_count = max(1, int(np.ceil(len(sorted_valid) * tail_ratio)))
+        tail_classes = sorted_valid[:tail_count]
+        return tail_classes
+
+    def apply_range_aug(self, rv_np, label_np, view_slice: Optional[Tuple[int, int]] = None):
         """
         Apply RangeAug augmentations to range image and labels.
 
         Args:
             rv_np: (6, H, W) range image numpy array
             label_np: (H, W) label map numpy array
+            view_slice: optional (start, end) width slice for STR view
 
         Returns:
             rv_aug: augmented range image
             label_aug: augmented labels
         """
+        if view_slice is not None:
+            rv_np, label_np = self._slice_view(rv_np, label_np, view_slice)
+
         # Decide whether to apply RangeAug
         if random.random() > self.range_aug_prob:
             return rv_np, label_np
@@ -84,6 +151,9 @@ class RangeFormerLoader(RangeViewLoader):
         mask_b = proj_idx_b > 0
         label_b[mask_b] = sem_label_b[proj_idx_b[mask_b]]
 
+        if view_slice is not None:
+            rv_b, label_b = self._slice_view(rv_b, label_b, view_slice)
+
         rv_aug = rv_np.copy()
         label_aug = label_np.copy()
 
@@ -94,10 +164,8 @@ class RangeFormerLoader(RangeViewLoader):
 
         # RangeMix
         if random.random() < self.p_range_mix:
-            # Random grid strategy
-            phi = random.choice([4, 8, 16])
-            theta = random.choice([8, 16, 32])
-            rv_aug, label_aug = range_mix(rv_aug, label_aug, rv_b, label_b, (phi, theta))
+            kmix = random.choice([2, 3, 4, 5, 6])
+            rv_aug, label_aug = range_mix(rv_aug, label_aug, rv_b, label_b, kmix)
 
         # RangeUnion (fill voids)
         if random.random() < self.p_range_union:
@@ -157,9 +225,17 @@ class RangeFormerLoader(RangeViewLoader):
         mask = proj_idx > 0
         proj_sem_label[mask] = sem_label[proj_idx[mask]]
 
+        # STR view selection (training only)
+        selected_view_slice = None
+        if self.use_str and self.is_train:
+            view_idx = random.randint(0, self.str_num_views - 1)
+            selected_view_slice = self._get_view_slice(view_idx, rv_np.shape[2])
+
         # Apply RangeAug (2D augmentations)
         if self.use_range_aug and self.is_train:
-            rv_np, proj_sem_label = self.apply_range_aug(rv_np, proj_sem_label)
+            rv_np, proj_sem_label = self.apply_range_aug(rv_np, proj_sem_label, selected_view_slice)
+        elif selected_view_slice is not None:
+            rv_np, proj_sem_label = self._slice_view(rv_np, proj_sem_label, selected_view_slice)
 
         # Convert to tensors
         proj_mask_tensor = torch.from_numpy(rv_np[5].astype(np.float32))  # existence channel
