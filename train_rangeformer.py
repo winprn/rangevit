@@ -499,18 +499,20 @@ class RangeFormerTrainer(object):
                     self.save_checkpoint(epoch, val_metrics, is_best=is_best)
 
                 # Log to tensorboard
-                if self.recorder and tools.is_main_process():
-                    self.recorder.logger.add_scalar('val/loss', val_metrics['loss'], epoch)
-                    self.recorder.logger.add_scalar('val/miou', val_metrics['miou'], epoch)
-                    self.recorder.logger.add_scalar('val/acc', val_metrics['acc'], epoch)
+                if self.recorder and tools.is_main_process() and self.recorder.tensorboard:
+                    tb = self.recorder.tensorboard
+                    tb.add_scalar('val/loss', val_metrics['loss'], epoch)
+                    tb.add_scalar('val/miou', val_metrics['miou'], epoch)
+                    tb.add_scalar('val/acc', val_metrics['acc'], epoch)
 
             # Log training metrics
-            if self.recorder and tools.is_main_process():
-                self.recorder.logger.add_scalar('train/loss', train_metrics['loss'], epoch)
-                self.recorder.logger.add_scalar('train/loss_main', train_metrics['loss_main'], epoch)
-                self.recorder.logger.add_scalar('train/loss_aux', train_metrics['loss_aux'], epoch)
-                self.recorder.logger.add_scalar('train/miou', train_metrics['miou'], epoch)
-                self.recorder.logger.add_scalar('train/acc', train_metrics['acc'], epoch)
+            if self.recorder and tools.is_main_process() and self.recorder.tensorboard:
+                tb = self.recorder.tensorboard
+                tb.add_scalar('train/loss', train_metrics['loss'], epoch)
+                tb.add_scalar('train/loss_main', train_metrics['loss_main'], epoch)
+                tb.add_scalar('train/loss_aux', train_metrics['loss_aux'], epoch)
+                tb.add_scalar('train/miou', train_metrics['miou'], epoch)
+                tb.add_scalar('train/acc', train_metrics['acc'], epoch)
 
         print('\nTraining completed!')
         print(f'Best validation mIoU: {best_miou:.4f}')

@@ -44,7 +44,7 @@ sensor:
 
 # Training settings
 n_epochs: 50
-batch_size: 8  # Adjust based on GPU memory
+batch_size: 16  # Adjust based on GPU memory
 batch_size_val: 1
 lr: 0.001
 warmup_epochs: 5
