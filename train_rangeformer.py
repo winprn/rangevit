@@ -434,7 +434,7 @@ class RangeFormerTrainer(object):
         # Compute metrics
         avg_loss = val_loss / num_batches
         miou, ious = self.metrics.getIoU()
-        acc = self.metrics.getacc()
+        acc, _ = self.metrics.getAcc()
 
         print(f'\nEpoch {epoch} Validation Results:')
         print(f'  Loss: {avg_loss:.4f}')
