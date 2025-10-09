@@ -65,8 +65,8 @@ def rotate_copy(pts, labels):
 def polarmix(pts1, labels1, pts2, labels2, alpha, beta):
     pts_out, labels_out = pts1, labels1
     # swapping
-    # if np.random.random() < 0.5:
-    pts_out, _, labels_out, _ = swap(pts1, pts2, start_angle=alpha, end_angle=beta, label1=labels1, label2=labels2)
+    if np.random.random() < 0.5:
+        pts_out, _, labels_out, _ = swap(pts1, pts2, start_angle=alpha, end_angle=beta, label1=labels1, label2=labels2)
 
     # rotate-pasting
     if np.random.random() < 1.0:

@@ -122,10 +122,11 @@ class RangeViewLoader(Dataset):
 
         if self.is_train and (self.scan_proj is False):
             mix_index = (index + 60) % len(self.dataset)
+            mix_index = np.random.randint(0, len(self.dataset))
             pointcloud_b, sem_label_b, _ = self.dataset.loadDataByIndex(mix_index)
             # print(f'PolaMix 0, {mix_index}')
             pointcloud, sem_label = self.augmentor.polarmix(pointcloud, sem_label, pointcloud_b, sem_label_b)
-            pointcloud = self.augmentor.doAugmentation(pointcloud)  # n, 4
+            # pointcloud = self.augmentor.doAugmentation(pointcloud)  # n, 4
 
         points_xyz = pointcloud[:, :3]
         proj_pointcloud, proj_range, proj_idx, proj_mask = self.projection.doProjection(pointcloud)
