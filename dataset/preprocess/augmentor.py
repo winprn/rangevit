@@ -242,6 +242,41 @@ class Augmentor(object):
                 ya_[r0:r1, :]    = yb[r0:r1, :].clone()
 
         return xa_, ya_
+    
+    @staticmethod
+    def sparse_quantize(coords, return_index=False, return_inverse=False):
+        """
+        Quantize coordinates to find unique voxels.
+        
+        Args:
+            coords: (N, 3) array of integer voxel coordinates
+            return_index: whether to return indices of unique points
+            return_inverse: whether to return inverse mapping
+        
+        Returns:
+            unique_coords: unique voxel coordinates
+            indices: (optional) indices of first occurrence of each unique voxel
+            inverse_map: (optional) mapping from all points to unique voxels
+        """
+        # Convert to tuple for hashing (or use view for structured array)
+        # Method 1: Using numpy unique with axis (cleaner but slightly slower)
+        _, indices, inverse_map = np.unique(
+            coords, 
+            axis=0, 
+            return_index=True, 
+            return_inverse=True
+        )
+        
+        results = [coords[indices]]  # unique coordinates
+        
+        if return_index:
+            results.append(indices)
+        if return_inverse:
+            results.append(inverse_map)
+        
+        if len(results) == 1:
+            return results[0]
+        return tuple(results)
 
     def polarmix(self, pca, lba, pcb, lbb):
         p = random.uniform(0, 1)
@@ -250,6 +285,16 @@ class Augmentor(object):
 
         alpha = (np.random.random() - 1) * np.pi
         beta = alpha + np.pi
-        # print(f"alpha {alpha}, beta {beta}")
+        
         from .polarmix import polarmix
         return polarmix(pca, lba, pcb, lbb, alpha, beta)
+        pc = np.zeros_like(pc_)
+        pc[:, 3] = pc_[:, 3]
+        return pc_, lb_
+        # pc_ -= pc_.min(0, keepdims=1)
+
+        # feat_ = pc
+        # _, inds, inverse_map = self.sparse_quantize(pc_, return_index=True, return_inverse=True)
+        # pc = pc_[inds]
+        # lb = lb_[inds]
+        return pc, lb_

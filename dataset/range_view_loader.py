@@ -118,12 +118,11 @@ class RangeViewLoader(Dataset):
         proj_mask_tensor: HxW
         '''
         pointcloud, sem_label, inst_label = self.dataset.loadDataByIndex(index)
-        sem_label = self.dataset.labelMapping(sem_label)
+        # sem_label = self.dataset.labelMapping(sem_label)
 
         if self.is_train and (self.scan_proj is False):
-            mix_index = torch.randint(0, len(self.dataset), (1,)).item()
+            mix_index = (index + 60) % len(self.dataset)
             pointcloud_b, sem_label_b, _ = self.dataset.loadDataByIndex(mix_index)
-            sem_label_b = self.dataset.labelMapping(sem_label_b)
             # print(f'PolaMix 0, {mix_index}')
             pointcloud, sem_label = self.augmentor.polarmix(pointcloud, sem_label, pointcloud_b, sem_label_b)
             pointcloud = self.augmentor.doAugmentation(pointcloud)  # n, 4
@@ -135,7 +134,7 @@ class RangeViewLoader(Dataset):
         proj_mask_tensor = torch.from_numpy(proj_mask)
         mask = proj_idx > 0
         proj_sem_label = np.zeros((proj_mask.shape[0], proj_mask.shape[1]), dtype=np.float32)
-        proj_sem_label[mask] = sem_label[proj_idx[mask]]
+        proj_sem_label[mask] = self.dataset.labelMapping(sem_label[proj_idx[mask]])
         proj_sem_label_tensor = torch.from_numpy(proj_sem_label)
         proj_sem_label_tensor = proj_sem_label_tensor * proj_mask_tensor.float()
 
@@ -218,13 +217,15 @@ class RangeViewLoader(Dataset):
             # Save to image for testing
             # if True:
             #     print(f'index: {index}, mix: {mix_index}')
-            #     save_proj_tensor_as_images(proj_tensor, index, save_path)
+            #     save_proj_tensor_as_images(proj_tensor, index, save_path, pointcloud=pointcloud, labels=sem_label)
             #     sys.exit()
             # proj_tensor = self.aug_ops(proj_tensor)
             # return proj_tensor[0:5], proj_tensor[6], proj_tensor[7]
+            # save_proj_tensor_as_images(proj_tensor, index, save_path, pointcloud=pointcloud, labels=sem_label)
             proj_tensor, px, py, points_xyz, sem_label = crop_inputs(
                 proj_tensor, px, py, points_xyz, sem_label,
                 self.crop_size, center_crop=False, p_hflip=self.proj_p_hflip)
+            # sys.exit()
         else:
             _, h, w = proj_tensor.shape
 
@@ -424,9 +425,9 @@ def load_color_map():
     return color_map
 
 
-def save_proj_tensor_as_images(proj_tensor, index, save_path, color_map=None):
+def save_proj_tensor_as_images(proj_tensor, index, save_path, pointcloud=None, labels=None, color_map=None):
     """
-    Save proj_tensor channels as visualizable images.
+    Save proj_tensor channels as visualizable images and optionally save pointcloud and labels as .bin files.
     proj_tensor shape: [8, H, W] where channels are:
         0: range
         1-3: xyz
@@ -434,6 +435,8 @@ def save_proj_tensor_as_images(proj_tensor, index, save_path, color_map=None):
         5: existence
         6: semantic label
         7: mask
+    pointcloud: [N, 4] numpy array (x, y, z, intensity)
+    labels: [N] numpy array of semantic labels
     """
     os.makedirs(save_path, exist_ok=True)
 
@@ -491,6 +494,19 @@ def save_proj_tensor_as_images(proj_tensor, index, save_path, color_map=None):
     for i in range(3):
         xyz_normalized[:, :, i] = normalize_to_uint8(xyz_data[:, :, i])
     cv2.imwrite(f'{save_path}/sample_{index:06d}_xyz_composite.png', xyz_normalized.astype(np.uint8))
+
+    # Save pointcloud as .bin file (if provided)
+    if pointcloud is not None:
+        pointcloud_path = f'{save_path}/sample_{index:06d}.bin'
+        pointcloud.astype(np.float32).tofile(pointcloud_path)
+        print(f'Saved pointcloud to {pointcloud_path}')
+
+    # Save labels as .label file (if provided)
+    if labels is not None:
+        label_path = f'{save_path}/sample_{index:06d}.label'
+        # SemanticKITTI format: labels are saved as uint32
+        labels.astype(np.uint32).tofile(label_path)
+        print(f'Saved labels to {label_path}')
 
     print(f'Saved augmented visualizations for sample {index} to {save_path}/')
 
