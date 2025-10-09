@@ -292,8 +292,15 @@ class RangeFormerLoader(RangeViewLoader):
         # Return data
         if self.return_uproj:
             # For inference, we might need projection indices
-            px, py = self.projection.cached_data['px'], self.projection.cached_data['py']
-            return proj_feature_tensor, proj_sem_label_tensor, proj_mask_tensor, proj_idx, px, py
+            proj_idx_tensor = torch.from_numpy(proj_idx.astype(np.int64))
+            sample_index = torch.tensor(index, dtype=torch.int64)
+            return (
+                proj_feature_tensor,
+                proj_sem_label_tensor,
+                proj_mask_tensor,
+                proj_idx_tensor,
+                sample_index,
+            )
         else:
             return proj_feature_tensor, proj_sem_label_tensor, proj_mask_tensor
 

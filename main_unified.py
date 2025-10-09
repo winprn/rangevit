@@ -102,9 +102,11 @@ def create_trainer(settings, model, recorder):
 def main():
     # Parse arguments
     parser = argparse.ArgumentParser(description='Unified Training for RangeViT and RangeFormer')
-    parser.add_argument('--config', type=str, required=True,
+    parser.add_argument('config_path', nargs='?', default=None,
+                        help='Path to config YAML file (positional alternative to --config)')
+    parser.add_argument('--config', type=str, default=None,
                         help='Path to config YAML file')
-    parser.add_argument('--data-root', type=str, required=True,
+    parser.add_argument('--data-root', '--data_root', dest='data_root', type=str, required=True,
                         help='Path to dataset root')
     parser.add_argument('--val-only', action='store_true',
                         help='Run validation only')
@@ -122,12 +124,25 @@ def main():
                         help='Distributed backend')
     parser.add_argument('--save_path', type=str, required=True,
                         help='path to save the file, type: string')
+    parser.add_argument('--checkpoint', type=str, default=None,
+                        help='Path to checkpoint for evaluation or finetuning')
+    parser.add_argument('--test_split', action='store_true',
+                        help='Run inference on the SemanticKITTI test split (no labels)')
+    parser.add_argument('--save_eval_results', action='store_true',
+                        help='Save per-scan predictions during evaluation')
+    parser.add_argument('--id', type=str, default=None,
+                        help='Override run identifier')
     parser.add_argument('--seed', type=int, default=1, help='random seed')
     
     args = parser.parse_args()
 
+    # Resolve config path (allow positional or --config)
+    resolved_config = args.config if args.config is not None else args.config_path
+    if resolved_config is None:
+        parser.error('Please provide a config path via --config or as a positional argument.')
+
     # Initialize settings
-    settings = Option(args.config, args)
+    settings = Option(resolved_config, args)
     settings.data_root = args.data_root
     settings.val_only = args.val_only
     settings.distributed = args.distributed
@@ -136,12 +151,24 @@ def main():
     settings.rank = args.rank
     settings.dist_url = args.dist_url
     settings.dist_backend = args.dist_backend
+    settings.test_split = args.test_split
+    settings.save_eval_results = args.save_eval_results
+    settings.seed = args.seed
+    if args.id is not None:
+        settings.id = args.id
+        settings.save_path = os.path.join(os.path.dirname(settings.save_path), f'log_{settings.id}')
+    if args.checkpoint is not None:
+        settings.checkpoint = args.checkpoint
+        settings.pretrained_model = None
+        settings.finetune_pretrained_model = False
+    if settings.val_only:
+        settings.save_path = os.path.join(settings.save_path, f'Eval_{settings.id}')
 
     # Print configuration
     print('\n' + '=' * 60)
     print('Configuration:')
     print('=' * 60)
-    print(f'Config file: {args.config}')
+    print(f'Config file: {resolved_config}')
     print(f'Model type: {settings.config.get("model_type", "rangevit")}')
     print(f'Dataset: {settings.dataset}')
     print(f'Data root: {settings.data_root}')
@@ -173,8 +200,8 @@ def main():
 
     # Create recorder (for logging and checkpoints)
     if tools.is_main_process():
-        # recorder = Recorder(settings, rank=settings.rank)
-        recorder = Recorder(settings, save_path=args.save_path, use_tensorboard=True)
+        use_tensorboard = not settings.val_only
+        recorder = Recorder(settings, save_path=settings.save_path, use_tensorboard=use_tensorboard)
     else:
         recorder = None
 
@@ -199,9 +226,15 @@ def main():
     if settings.val_only: # Validation only
         print('\nRunning validation only...')
         val_metrics = trainer.validate(epoch=0)
-        print(f'\nValidation Results:')
-        print(f'  mIoU: {val_metrics["miou"]:.4f}')
-        print(f'  Accuracy: {val_metrics["acc"]:.4f}')
+        if val_metrics is not None and 'miou' in val_metrics:
+            print(f'\nValidation Results:')
+            print(f'  mIoU: {val_metrics["miou"]:.4f}')
+            print(f'  Accuracy: {val_metrics["acc"]:.4f}')
+        elif settings.test_split:
+            if settings.save_eval_results and getattr(trainer, 'prediction_path', None):
+                print(f'\nTest predictions saved to: {trainer.prediction_path}')
+            else:
+                print('\nTest split inference completed (predictions not saved).')
     else: # Full training
         print('\nStarting training...')
         trainer.train()

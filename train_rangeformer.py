@@ -40,6 +40,12 @@ class RangeFormerTrainer(object):
         self.recorder = recorder
         self.model = model.cuda()
         self.remain_time = tools.RemainTime(self.settings.n_epochs)
+        self.prediction_path = None
+        if self.settings.save_eval_results:
+            base_path = self.recorder.save_path if self.recorder is not None else self.settings.save_path
+            self.prediction_path = os.path.join(base_path, 'preds')
+            if tools.is_main_process():
+                os.makedirs(self.prediction_path, exist_ok=True)
 
         # Init data loader
         self.train_loader, self.val_loader, self.train_sampler, self.val_sampler = self._initDataloader()
@@ -157,20 +163,49 @@ class RangeFormerTrainer(object):
             print('----Using SemanticKITTI dataset----')
             from dataset.semantic_kitti.parser import SemanticKitti
 
+            data_config_path = self.settings.config.get(
+                'data_config_path', 'dataset/semantic_kitti/semantic-kitti.yaml')
+            data_config = yaml.safe_load(open(data_config_path, 'r'))
+
+            if self.settings.use_mini_version:
+                train_sequences = ['00']
+            elif self.settings.use_trainval:
+                train_sequences = data_config['split']['train'] + data_config['split']['valid']
+            else:
+                train_sequences = data_config['split']['train']
+
+            train_sequences = [f'{int(seq):02d}' for seq in train_sequences]
+
+            if self.settings.test_split:
+                val_sequences = data_config['split']['test']
+                val_has_label = False
+            else:
+                val_sequences = data_config['split']['valid']
+                val_has_label = True
+
+            val_sequences = [f'{int(seq):02d}' for seq in val_sequences]
+
             trainset = SemanticKitti(
                 root=self.settings.data_root,
-                sequences=['00', '01', '02', '03', '04', '05', '06', '07', '09', '10'],
-                config_path='dataset/semantic_kitti/semantic-kitti.yaml')
+                sequences=train_sequences,
+                config_path=data_config_path)
 
             valset = SemanticKitti(
                 root=self.settings.data_root,
-                sequences=['08'],
-                config_path='dataset/semantic_kitti/semantic-kitti.yaml')
+                sequences=val_sequences,
+                config_path=data_config_path,
+                has_label=val_has_label)
 
             self.mapped_cls_name = trainset.mapped_cls_name
-            self.ignore_class = [0]
-            self.cls_weight = np.ones((self.settings.n_classes))
-            self.cls_weight[0] = 0
+            self.cls_weight = 1 / (trainset.cls_freq + 1e-3)
+            self.ignore_class = []
+            for cl, weight in enumerate(self.cls_weight):
+                if trainset.data_config['learning_ignore'][cl]:
+                    self.cls_weight[cl] = 0
+                if self.cls_weight[cl] < 1e-10:
+                    self.ignore_class.append(cl)
+            if self.recorder is not None:
+                self.recorder.logger.info('Class weights: {}'.format(self.cls_weight))
 
         # nuScenes dataset
         elif self.settings.dataset == 'nuScenes':
@@ -198,7 +233,9 @@ class RangeFormerTrainer(object):
 
         val_dataset = RangeFormerLoader(
             valset, self.settings.config,
-            is_train=False, return_uproj=False, use_kpconv=False)
+            is_train=False,
+            return_uproj=bool(self.settings.test_split and self.settings.save_eval_results),
+            use_kpconv=False)
 
         # Create data loaders
         if self.settings.distributed:
@@ -403,24 +440,49 @@ class RangeFormerTrainer(object):
     def validate(self, epoch):
         """Validation with auxiliary outputs."""
         self.model.eval()
-        self.metrics.reset()
+        if not self.settings.test_split:
+            self.metrics.reset()
 
         val_loss = 0.0
         num_batches = 0
+        saved_predictions = 0
 
         with torch.no_grad():
             for batch_idx, batch_data in enumerate(self.val_loader):
                 # Unpack data
-                if len(batch_data) == 3:
+                if len(batch_data) >= 5:
+                    range_images, labels, masks, proj_indices, sample_indices = batch_data
+                elif len(batch_data) == 3:
                     range_images, labels, masks = batch_data
+                    proj_indices = None
+                    sample_indices = None
                 else:
                     range_images, labels = batch_data[:2]
+                    masks = None
+                    proj_indices = None
+                    sample_indices = None
 
                 range_images = range_images.cuda(non_blocking=True)
                 labels = labels.cuda(non_blocking=True).long()
 
                 # Forward pass
                 logits = self._forward_with_str_views(range_images)
+                preds = logits.argmax(dim=1)
+
+                if self.settings.test_split:
+                    if self.settings.save_eval_results:
+                        if proj_indices is None or sample_indices is None:
+                            raise RuntimeError('Test split evaluation requires return_uproj=True to recover point indices.')
+                        proj_indices = proj_indices.cpu().numpy()
+                        sample_indices = sample_indices.cpu().numpy()
+                        preds_np = preds.cpu().numpy()
+                        for b in range(preds_np.shape[0]):
+                            index = int(sample_indices[b])
+                            pred_map = preds_np[b]
+                            proj_idx_map = proj_indices[b]
+                            self._save_test_predictions(index, pred_map, proj_idx_map)
+                            saved_predictions += 1
+                    continue
 
                 # Loss (main only for validation)
                 loss = self._compute_loss(logits, labels)
@@ -428,8 +490,14 @@ class RangeFormerTrainer(object):
                 num_batches += 1
 
                 # Metrics
-                preds = logits.argmax(dim=1)
                 self.metrics.addBatch(preds.cpu().numpy(), labels.cpu().numpy())
+
+        if self.settings.test_split:
+            msg = f'\nTest split inference completed.'
+            if self.settings.save_eval_results:
+                msg += f' Saved {saved_predictions} scans to {self.prediction_path}.'
+            print(msg)
+            return {'saved_predictions': saved_predictions} if self.settings.save_eval_results else {}
 
         # Compute metrics
         avg_loss = val_loss / num_batches
@@ -447,6 +515,28 @@ class RangeFormerTrainer(object):
             'acc': acc,
             'ious': ious
         }
+
+    def _save_test_predictions(self, index: int, pred_map: np.ndarray, proj_idx_map: np.ndarray):
+        """Map 2D predictions back to points and save SemanticKITTI-formatted labels."""
+        if self.prediction_path is None:
+            return
+
+        sk_dataset = self.val_loader.dataset.dataset
+        pointcloud, _, _ = sk_dataset.loadDataByIndex(index)
+        num_points = pointcloud.shape[0]
+        default_label = self.loss_ignore_index if hasattr(self, 'loss_ignore_index') else 0
+        point_preds = np.ones(num_points, dtype=np.int32) * default_label
+        proj_idx_map = proj_idx_map.astype(np.int64, copy=False)
+        pred_map = pred_map.astype(np.int32, copy=False)
+        mask = proj_idx_map >= 0
+        point_preds[proj_idx_map[mask]] = pred_map[mask]
+
+        raw_preds = sk_dataset.class_map_lut_inv[point_preds]
+        seq_id, frame_id = sk_dataset.parsePathInfoByIndex(index)
+        pred_dir = os.path.join(self.prediction_path, 'sequences', seq_id, 'predictions')
+        os.makedirs(pred_dir, exist_ok=True)
+        output_path = os.path.join(pred_dir, f'{frame_id}.label')
+        raw_preds.astype(np.uint32).tofile(output_path)
 
     def save_checkpoint(self, epoch, metrics, is_best=False):
         """Save model checkpoint."""
