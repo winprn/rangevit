@@ -19,6 +19,7 @@ from utils.metrics.eval_results import eval_results
 from utils.metrics.tensorboard_logger import tensorboard_logger
 from utils.tools import Recorder
 from utils.optim import DiceLoss, BoundaryLoss, Lovasz_softmax
+from utils import mlflow_utils
 
 # Import RangeFormer
 from models.rangeformer import RangeFormer, create_rangeformer
@@ -111,6 +112,10 @@ class RangeFormerTrainer(object):
                 raise ValueError(
                     f'Config mismatch: image_size width ({self.str_view_width}) should equal '
                     f'original_image_size width / num_views ({expected_width})')
+
+        # MLflow integration flags/counters
+        self.mlflow_enabled = mlflow_utils.is_enabled()
+        self.global_step = 0
 
     def _initOptimizer(self):
         params = self.model.parameters()
@@ -414,6 +419,19 @@ class RangeFormerTrainer(object):
                       f'mIoU: {miou_running.item():.4f} '
                       f'Recall: {recall_running.item():.4f}')
 
+                if self.mlflow_enabled and tools.is_main_process():
+                    # Step-wise metrics (batch-level)
+                    mlflow_utils.log_metric('train/loss', float(loss.item()), step=self.global_step)
+                    mlflow_utils.log_metric('train/loss_main', float(loss_main.item()), step=self.global_step)
+                    mlflow_utils.log_metric('train/loss_aux', float(loss_aux.item()), step=self.global_step)
+                    mlflow_utils.log_metric('train/miou_running', float(miou_running.item()), step=self.global_step)
+                    mlflow_utils.log_metric('train/acc_running', float(acc_running.item()), step=self.global_step)
+                    mlflow_utils.log_metric('train/recall_running', float(recall_running.item()), step=self.global_step)
+                    mlflow_utils.log_metric('train/lr', float(current_lr), step=self.global_step)
+
+            # advance global step every batch
+            self.global_step += 1
+
         # Compute metrics
         avg_loss = epoch_loss / num_batches
         avg_loss_main = epoch_loss_main / num_batches
@@ -427,6 +445,14 @@ class RangeFormerTrainer(object):
         print(f'  Loss: {avg_loss:.4f} (Main: {avg_loss_main:.4f}, Aux: {avg_loss_aux:.4f})')
         print(f'  mIoU: {miou:.4f}')
         print(f'  Accuracy: {acc_value:.4f}')
+
+        # Epoch-level metrics
+        if self.mlflow_enabled and tools.is_main_process():
+            mlflow_utils.log_metric('epoch/train_loss', float(avg_loss), step=epoch)
+            mlflow_utils.log_metric('epoch/train_loss_main', float(avg_loss_main), step=epoch)
+            mlflow_utils.log_metric('epoch/train_loss_aux', float(avg_loss_aux), step=epoch)
+            mlflow_utils.log_metric('epoch/train_miou', float(miou), step=epoch)
+            mlflow_utils.log_metric('epoch/train_acc', float(acc_value), step=epoch)
 
         return {
             'loss': avg_loss,
@@ -509,6 +535,11 @@ class RangeFormerTrainer(object):
         print(f'  mIoU: {miou:.4f}')
         print(f'  Accuracy: {acc:.4f}')
 
+        if self.mlflow_enabled and tools.is_main_process():
+            mlflow_utils.log_metric('epoch/val_loss', float(avg_loss), step=epoch)
+            mlflow_utils.log_metric('epoch/val_miou', float(miou), step=epoch)
+            mlflow_utils.log_metric('epoch/val_acc', float(acc), step=epoch)
+
         return {
             'loss': avg_loss,
             'miou': miou,
@@ -584,6 +615,10 @@ class RangeFormerTrainer(object):
                 is_best = val_metrics['miou'] > best_miou
                 if is_best:
                     best_miou = val_metrics['miou']
+                    # Optionally log and register best model
+                    if self.mlflow_enabled and tools.is_main_process():
+                        registered_name = os.getenv('MLFLOW_REGISTERED_MODEL', 'rangeformer')
+                        mlflow_utils.log_pytorch_model(self.model, artifact_path='model', registered_model_name=registered_name)
 
                 if epoch % self.settings.config.get('save_frequency', 5) == 0:
                     self.save_checkpoint(epoch, val_metrics, is_best=is_best)

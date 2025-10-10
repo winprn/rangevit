@@ -12,6 +12,7 @@ import torch.distributed as dist
 from option import Option
 from utils.tools import Recorder
 import utils.tools as tools
+from utils import mlflow_utils
 
 
 def create_model(settings):
@@ -181,6 +182,10 @@ def main():
     print(f'Mixed precision: {settings.use_fp16}')
     print('=' * 60 + '\n')
 
+    # MLflow setup (optional via env var MLFLOW_TRACKING_URI)
+    mlflow_enabled = mlflow_utils.setup() if mlflow_utils.is_enabled() else False
+    run_name = mlflow_utils.default_run_name(settings.config.get('model_type', 'rangevit'), getattr(settings, 'id', None))
+
     # Initialize distributed training
     if settings.distributed:
         if settings.gpu is not None:
@@ -222,22 +227,50 @@ def main():
     # Create trainer
     trainer = create_trainer(settings, model, recorder)
 
-    # Run training or validation
-    if settings.val_only: # Validation only
-        print('\nRunning validation only...')
-        val_metrics = trainer.validate(epoch=0)
-        if val_metrics is not None and 'miou' in val_metrics:
-            print(f'\nValidation Results:')
-            print(f'  mIoU: {val_metrics["miou"]:.4f}')
-            print(f'  Accuracy: {val_metrics["acc"]:.4f}')
-        elif settings.test_split:
-            if settings.save_eval_results and getattr(trainer, 'prediction_path', None):
-                print(f'\nTest predictions saved to: {trainer.prediction_path}')
-            else:
-                print('\nTest split inference completed (predictions not saved).')
-    else: # Full training
-        print('\nStarting training...')
-        trainer.train()
+    # Run training or validation (optionally within MLflow run)
+    if mlflow_enabled:
+        with mlflow_utils.start_run(run_name=run_name):
+            # Log configuration and tags
+            mlflow_utils.log_params(mlflow_utils.collect_params_from_settings(settings))
+            mlflow_utils.set_tags(mlflow_utils.collect_tags_from_settings(settings))
+            # Log the config file as artifact for reproducibility
+            try:
+                mlflow_utils.log_artifact(resolved_config, artifact_path="config")
+            except Exception:
+                pass
+
+            if settings.val_only:  # Validation only
+                print('\nRunning validation only...')
+                val_metrics = trainer.validate(epoch=0)
+                if val_metrics is not None and 'miou' in val_metrics:
+                    print(f'\nValidation Results:')
+                    print(f'  mIoU: {val_metrics["miou"]:.4f}')
+                    print(f'  Accuracy: {val_metrics["acc"]:.4f}')
+                elif settings.test_split:
+                    if settings.save_eval_results and getattr(trainer, 'prediction_path', None):
+                        print(f'\nTest predictions saved to: {trainer.prediction_path}')
+                    else:
+                        print('\nTest split inference completed (predictions not saved).')
+            else:  # Full training
+                print('\nStarting training...')
+                trainer.train()
+    else:
+        # Fallback without MLflow
+        if settings.val_only:  # Validation only
+            print('\nRunning validation only...')
+            val_metrics = trainer.validate(epoch=0)
+            if val_metrics is not None and 'miou' in val_metrics:
+                print(f'\nValidation Results:')
+                print(f'  mIoU: {val_metrics["miou"]:.4f}')
+                print(f'  Accuracy: {val_metrics["acc"]:.4f}')
+            elif settings.test_split:
+                if settings.save_eval_results and getattr(trainer, 'prediction_path', None):
+                    print(f'\nTest predictions saved to: {trainer.prediction_path}')
+                else:
+                    print('\nTest split inference completed (predictions not saved).')
+        else:  # Full training
+            print('\nStarting training...')
+            trainer.train()
 
     # Cleanup
     if settings.distributed:
