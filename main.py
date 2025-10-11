@@ -302,7 +302,7 @@ if __name__ == '__main__':
                         help='path to save the file, type: string')
     parser.add_argument('--id', type=str,
                         help='name to identify the run')
-    parser.add_argument('--num_workers', type=int, default=4,
+    parser.add_argument('--num_workers', type=int, default=2,
                         help='number of threads used for data loading, type: int')
     parser.add_argument('--pretrained_model', type=str,
                         help='path of pre-trained model to initialize the ViT encoder backbone, type: string')
