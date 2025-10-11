@@ -118,24 +118,26 @@ class RangeViewLoader(Dataset):
         proj_mask_tensor: HxW
         '''
         pointcloud, sem_label, inst_label = self.dataset.loadDataByIndex(index)
-        # sem_label = self.dataset.labelMapping(sem_label)
+        points_xyz = pointcloud[:, :3]
+        sem_label = self.dataset.labelMapping(sem_label)
 
         if self.is_train and (self.scan_proj is False):
             mix_index = (index + 60) % len(self.dataset)
             mix_index = np.random.randint(0, len(self.dataset))
             pointcloud_b, sem_label_b, _ = self.dataset.loadDataByIndex(mix_index)
+            sem_label_b = self.dataset.labelMapping(sem_label_b)
             # print(f'PolaMix 0, {mix_index}')
             pointcloud, sem_label = self.augmentor.polarmix(pointcloud, sem_label, pointcloud_b, sem_label_b)
+            points_xyz = pointcloud[:, :3]
             # pointcloud = self.augmentor.doAugmentation(pointcloud)  # n, 4
 
-        points_xyz = pointcloud[:, :3]
         proj_pointcloud, proj_range, proj_idx, proj_mask = self.projection.doProjection(pointcloud)
         px, py = self.projection.cached_data['px'], self.projection.cached_data['py']
 
         proj_mask_tensor = torch.from_numpy(proj_mask)
         mask = proj_idx > 0
         proj_sem_label = np.zeros((proj_mask.shape[0], proj_mask.shape[1]), dtype=np.float32)
-        proj_sem_label[mask] = self.dataset.labelMapping(sem_label[proj_idx[mask]])
+        proj_sem_label[mask] = sem_label[proj_idx[mask]]
         proj_sem_label_tensor = torch.from_numpy(proj_sem_label)
         proj_sem_label_tensor = proj_sem_label_tensor * proj_mask_tensor.float()
 
