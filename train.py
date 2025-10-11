@@ -21,6 +21,7 @@ import datetime
 import numpy as np
 import torch.nn as nn
 import torch.nn.functional as F
+from typing import Callable, Dict, Optional
 
 from option import Option
 import dataset
@@ -33,12 +34,19 @@ from utils.tools import Recorder
 
 
 class Trainer(object):
-    def __init__(self, settings: Option, model: nn.Module, recorder=None):
+    def __init__(
+        self,
+        settings: Option,
+        model: nn.Module,
+        recorder=None,
+        mlflow_step_logger: Optional[Callable[[str, int, int, Dict[str, float]], None]] = None,
+    ):
         # Init params
         self.settings = settings
         self.recorder = recorder
         self.model = model.cuda()
         self.remain_time = tools.RemainTime(self.settings.n_epochs)
+        self.mlflow_step_logger = mlflow_step_logger
 
         # Init data loader
         self.train_loader, self.val_loader, self.train_sampler, self.val_sampler = self._initDataloader()
@@ -349,16 +357,29 @@ class Trainer(object):
             if (i % self.settings.log_frequency == 0) or (i == total_iter-1):
                 with torch.no_grad():
                     mean_iou, _, mean_acc, _ = self.metrics.getIoUnAcc()
+                lr_value = None
+                for g in self.optimizer.param_groups:
+                    lr_value = g['lr']
+                    break
+
                 if self.recorder is not None:
-                    for g in self.optimizer.param_groups:
-                        lr = g['lr']
-                        break
                     log_str = '>>> {} E[{:03d}|{:03d}] I[{:04d}|{:04d}] DT[{:.3f}] PT[{:.3f}] '.format(
                         mode, self.settings.n_epochs, epoch+1, total_iter, i+1, data_cost_time, process_cost_time)
                     log_str += 'LR {} Loss {:0.4f} Acc {:0.4f} IOU {:0.4F} '.format(
-                        lr, loss.item(), mean_acc.item(), mean_iou.item())
+                        lr_value, loss.item(), mean_acc.item(), mean_iou.item())
                     log_str += 'RT {}'.format(remain_time)
                     self.recorder.logger.info(log_str)
+
+                if self.mlflow_step_logger is not None and not self.settings.test_split:
+                    step_index = epoch * total_iter + i
+                    metrics_payload = {
+                        'loss': float(loss.item()),
+                        'acc': float(mean_acc.item()),
+                        'iou': float(mean_iou.item()),
+                    }
+                    if mode == 'Train' and lr_value is not None:
+                        metrics_payload['lr'] = float(lr_value)
+                    self.mlflow_step_logger(mode, epoch, step_index, metrics_payload)
 
         with torch.no_grad():
             mean_acc, class_acc = self.metrics.getAcc()
@@ -587,17 +608,31 @@ class Trainer(object):
             if (i % self.settings.log_frequency == 0) or (i == total_iter-1):
                 with torch.no_grad():
                     mean_iou, _, mean_acc, _ = self.metrics.getIoUnAcc()
+
+                lr_value = None
+                for g in self.optimizer.param_groups:
+                    lr_value = g['lr']
+                    break
+
                 if self.recorder is not None:
-                    for g in self.optimizer.param_groups:
-                        lr = g['lr']
-                        break
                     log_str = '>>> {} E[{:03d}|{:03d}] I[{:04d}|{:04d}] DT[{:.3f}] PT[{:.3f}] '.format(
                         mode, self.settings.n_epochs, epoch+1, total_iter, i+1, data_cost_time, process_cost_time)
                     log_str += 'LR {} Loss {:0.4f} Acc {:0.4f} IOU {:0.4F} '.format(
-                        lr, loss.item(), mean_acc.item(), mean_iou.item())
+                        lr_value, loss.item(), mean_acc.item(), mean_iou.item())
                     log_str += 'RT {} '.format(remain_time)
                     log_str += 'RT PER EPOCH {}'.format(remain_time_1epoch)
                     self.recorder.logger.info(log_str)
+
+                if self.mlflow_step_logger is not None and not self.settings.test_split:
+                    step_index = epoch * total_iter + i
+                    metrics_payload = {
+                        'loss': float(loss.item()),
+                        'acc': float(mean_acc.item()),
+                        'iou': float(mean_iou.item()),
+                    }
+                    if mode == 'Train' and lr_value is not None:
+                        metrics_payload['lr'] = float(lr_value)
+                    self.mlflow_step_logger(mode, epoch, step_index, metrics_payload)
 
         with torch.no_grad():
             mean_acc, class_acc = self.metrics.getAcc()

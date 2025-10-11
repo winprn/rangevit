@@ -19,6 +19,7 @@ import datetime
 import time
 import numpy as np
 from contextlib import nullcontext
+from typing import Dict
 
 from option import Option
 from train import Trainer
@@ -99,7 +100,12 @@ class Experiment(object):
         self.model = self._initModel()
 
         # Init trainer
-        self.trainer = Trainer(self.settings, self.model, self.recorder)
+        self.trainer = Trainer(
+            self.settings,
+            self.model,
+            self.recorder,
+            mlflow_step_logger=self._log_step_metrics if self.mlflow_active else None,
+        )
 
         # Load checkpoint
         self._loadCheckpoint()
@@ -110,6 +116,16 @@ class Experiment(object):
         for key, value in metrics.items():
             try:
                 mlflow_utils.log_metric(f'{mode.lower()}_{key.lower()}', float(value), step=epoch)
+            except Exception:
+                continue
+
+    def _log_step_metrics(self, mode: str, epoch: int, step_index: int, metrics: Dict[str, float]):
+        if not self.mlflow_active:
+            return
+        prefix = mode.lower()
+        for key, value in metrics.items():
+            try:
+                mlflow_utils.log_metric(f'{prefix}_{key.lower()}', float(value), step=step_index)
             except Exception:
                 continue
 
@@ -238,10 +254,13 @@ class Experiment(object):
         t_start = time.time()
         if self.settings.val_only:
             save_results_path = self.prediction_path if self.settings.save_eval_results else None
-            self.trainer.run(self.epoch_start,
-                             mode='Validation',
-                             print_results=True,
-                             save_results_path=save_results_path)
+            val_result = self.trainer.run(self.epoch_start,
+                                          mode='Validation',
+                                          print_results=True,
+                                          save_results_path=save_results_path)
+            # Log metrics when available (skip test split without labels)
+            if val_result is not None:
+                self._log_metrics(val_result, mode='val', epoch=self.epoch_start)
 
             cost_time = time.time() - t_start
             if self.recorder is not None:
