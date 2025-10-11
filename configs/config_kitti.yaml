@@ -18,7 +18,7 @@ has_label: true
 val_frequency: 3
 n_epochs: 60
 warmup_epochs: 10
-batch_size: 16
+batch_size: 32
 batch_size_val: 1
 lr: 0.0004
 train_result_frequency: 100 # printing frequency of the train results
