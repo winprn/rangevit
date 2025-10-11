@@ -18,6 +18,7 @@ import os
 import datetime
 import time
 import numpy as np
+from contextlib import nullcontext
 
 from option import Option
 from train import Trainer
@@ -25,6 +26,7 @@ import models
 import utils
 import utils.tools as tools
 from models.model_utils import resize_pos_embed
+from utils import mlflow_utils
 
 
 def build_rangevit_model(settings, pretrained_path=None):
@@ -65,8 +67,9 @@ def build_rangevit_model(settings, pretrained_path=None):
 
 
 class Experiment(object):
-    def __init__(self, settings: Option):
+    def __init__(self, settings: Option, mlflow_active: bool = False):
         self.settings = settings
+        self.mlflow_active = mlflow_active
 
         # Init gpu
         tools.init_distributed_mode(self.settings)
@@ -100,6 +103,31 @@ class Experiment(object):
 
         # Load checkpoint
         self._loadCheckpoint()
+
+    def _log_metrics(self, metrics, mode: str, epoch: int):
+        if not self.mlflow_active or metrics is None:
+            return
+        for key, value in metrics.items():
+            try:
+                mlflow_utils.log_metric(f'{mode.lower()}_{key.lower()}', float(value), step=epoch)
+            except Exception:
+                continue
+
+    def _log_best_metric(self, metric_name: str, value: float):
+        if not self.mlflow_active:
+            return
+        try:
+            mlflow_utils.log_metric(f'best_val_{metric_name.lower()}', float(value))
+        except Exception:
+            pass
+
+    def _log_training_time(self, total_seconds: float):
+        if not self.mlflow_active:
+            return
+        try:
+            mlflow_utils.log_metric('total_training_time_sec', float(total_seconds))
+        except Exception:
+            pass
 
 
     def _initModel(self):
@@ -219,6 +247,7 @@ class Experiment(object):
             if self.recorder is not None:
                 self.recorder.logger.info('==== Total cost time: {}'.format(
                     datetime.timedelta(seconds=cost_time)))
+            self._log_training_time(cost_time)
             return
         best_val_result = None
 
@@ -227,13 +256,15 @@ class Experiment(object):
         for epoch in range(self.epoch_start, self.settings.n_epochs):
 
             # Run one epoch
-            self.trainer.run(epoch, mode='Train')
+            train_result = self.trainer.run(epoch, mode='Train')
+            self._log_metrics(train_result, mode='train', epoch=epoch)
 
             # Run validation
             if (epoch % self.settings.val_frequency == 0 or
                 epoch == self.settings.n_epochs - 1 or
                 epoch == self.epoch_start):
                 val_result = self.trainer.run(epoch, mode='Validation')
+                self._log_metrics(val_result, mode='val', epoch=epoch)
 
                 # Save the best result (skip if test_split - no metrics available)
                 if self.recorder is not None and val_result is not None:
@@ -249,6 +280,7 @@ class Experiment(object):
                             saved_path_start = os.path.join(
                                 self.recorder.checkpoint_path, 'best_{}_model_from_start_{}.pth'.format(k, self.epoch_start))
                             best_val_result[k] = v
+                            self._log_best_metric(k, v)
 
                             checkpoint_data = {
                                 'model': self.model.state_dict(),
@@ -290,6 +322,7 @@ class Experiment(object):
         if self.recorder is not None:
             self.recorder.logger.info('=== Total cost time: {}'.format(
                 datetime.timedelta(seconds=cost_time)))
+        self._log_training_time(cost_time)
 
 
 if __name__ == '__main__':
@@ -348,5 +381,30 @@ if __name__ == '__main__':
     if settings.val_only:
         settings.save_path = os.path.join(settings.save_path, f'Eval_{settings.id}')
 
-    exp = Experiment(settings)
-    exp.run()
+    # MLflow setup (optional via config or env var)
+    tracking_uri = os.getenv("MLFLOW_TRACKING_URI")
+    experiment_name = getattr(settings, 'mlflow_experiment', None)
+    run_name_override = getattr(settings, 'mlflow_run_name', None)
+    mlflow_requested = getattr(settings, 'mlflow_enabled', None)
+
+    if mlflow_requested is None:
+        mlflow_requested = mlflow_utils.is_enabled(tracking_uri)
+
+    mlflow_enabled = False
+    if mlflow_requested:
+        if not tracking_uri:
+            raise RuntimeError('MLflow tracking is enabled but MLFLOW_TRACKING_URI environment variable is not set.')
+        mlflow_enabled = mlflow_utils.setup(tracking_uri=tracking_uri, experiment=experiment_name)
+
+    run_name = (run_name_override or
+                mlflow_utils.default_run_name(settings.config.get('model_type', 'rangevit'),
+                                              getattr(settings, 'id', None)))
+    mlflow_context = mlflow_utils.start_run(run_name=run_name) if mlflow_enabled else nullcontext()
+
+    with mlflow_context:
+        if mlflow_enabled:
+            mlflow_utils.set_tags(mlflow_utils.collect_tags_from_settings(settings))
+            mlflow_utils.log_params(mlflow_utils.collect_params_from_settings(settings))
+
+        exp = Experiment(settings, mlflow_active=mlflow_enabled)
+        exp.run()

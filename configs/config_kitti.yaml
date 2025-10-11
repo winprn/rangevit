@@ -2,6 +2,12 @@
 num_workers: 4
 id: 'exp_kitti'
 
+# MLflow (optional)
+mlflow:
+    enabled: true
+    experiment: 'rangevit'
+    run_name: 'rangevit_semantickitti_baseline'            # overrides default if set
+
 # Data config
 dataset: 'SemanticKitti'
 n_classes: 20 # 19 + 1(ignored)
@@ -44,7 +50,7 @@ use_kpconv: true
 
 # Checkpoint model
 # checkpoint: null
-pretrained_model: "../pretrained_model/vit_small_p16_384.pth"
+pretrained_model: "../pretrained_model/vit_small_p16_384_ft.pth"
 
 # Loading pre-trained patch and positional embeddings
 reuse_pos_emb: true

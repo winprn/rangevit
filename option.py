@@ -95,6 +95,12 @@ class Option(object):
         self.reuse_pos_emb = self.config.get('reuse_pos_emb', False)
         self.reuse_patch_emb = self.config.get('reuse_patch_emb', False)
 
+        # MLflow configuration (optional)
+        self.mlflow_config = self.config.get('mlflow', {})
+        self.mlflow_enabled = self.mlflow_config.get('enabled')
+        self.mlflow_experiment = self.mlflow_config.get('experiment')
+        self.mlflow_run_name = self.mlflow_config.get('run_name')
+
 
         # Save results
         self.id = self.config['id'] # name to identify the run
