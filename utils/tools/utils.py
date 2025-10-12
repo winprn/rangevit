@@ -3,6 +3,7 @@ import torch
 import torch.distributed as dist
 import builtins
 import datetime
+import atexit
 
 
 def setup_for_distributed(is_master):
@@ -78,6 +79,23 @@ def init_distributed_mode(args):
         rank=args.rank,
     )
     setup_for_distributed(args.rank == 0)
+    # Ensure process group is properly torn down on exit
+    try:
+        atexit.register(cleanup)
+    except Exception:
+        pass
+
+def cleanup():
+    """
+    Clean up distributed process group if initialized.
+    Safe to call multiple times. Intended for use on normal exit and failures.
+    """
+    try:
+        if dist.is_available() and dist.is_initialized():
+            dist.destroy_process_group()
+    except Exception:
+        # Swallow exceptions during cleanup to avoid masking originals
+        pass
 
 def setup_logger_for_distributed(is_master, logger):
     '''

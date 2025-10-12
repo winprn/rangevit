@@ -421,9 +421,16 @@ if __name__ == '__main__':
     mlflow_context = mlflow_utils.start_run(run_name=run_name) if mlflow_enabled else nullcontext()
 
     with mlflow_context:
-        if mlflow_enabled:
-            mlflow_utils.set_tags(mlflow_utils.collect_tags_from_settings(settings))
-            mlflow_utils.log_params(mlflow_utils.collect_params_from_settings(settings))
+        try:
+            if mlflow_enabled:
+                mlflow_utils.set_tags(mlflow_utils.collect_tags_from_settings(settings))
+                mlflow_utils.log_params(mlflow_utils.collect_params_from_settings(settings))
 
-        exp = Experiment(settings, mlflow_active=mlflow_enabled)
-        exp.run()
+            exp = Experiment(settings, mlflow_active=mlflow_enabled)
+            exp.run()
+        finally:
+            # Ensure DDP is torn down even on failure
+            try:
+                tools.cleanup()
+            except Exception:
+                pass
