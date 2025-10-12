@@ -683,7 +683,7 @@ class Trainer(object):
                                    recorder=self.recorder,
                                    metrics_dict=metrics_dict,
                                    loss_dict=loss_dict,
-                                   lr=lr,
+                                   lr=lr_value,
                                    mapped_cls_name=self.mapped_cls_name)
 
                 # Results at the end of the epoch
