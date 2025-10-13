@@ -23,6 +23,7 @@ from option import Option
 from train import Trainer
 import models
 import utils
+from utils import mlflow_utils
 import utils.tools as tools
 from models.model_utils import resize_pos_embed
 
@@ -335,5 +336,7 @@ if __name__ == '__main__':
     if settings.val_only:
         settings.save_path = os.path.join(settings.save_path, f'Eval_{settings.id}')
 
+    mlflow_utils.setup()
     exp = Experiment(settings)
-    exp.run()
+    with mlflow_utils.start_run(run_name=mlflow_utils.default_run_name('rangevit', getattr(settings, 'id', None))):
+        exp.run()

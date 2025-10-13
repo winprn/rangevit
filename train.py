@@ -25,6 +25,7 @@ import torch.nn.functional as F
 from option import Option
 import dataset
 import utils
+from utils import mlflow_utils
 import utils.tools as tools
 from utils.metrics.eval_results import eval_results
 from utils.metrics.tensorboard_logger import tensorboard_logger
@@ -581,6 +582,11 @@ class Trainer(object):
                     log_str += 'RT {} '.format(remain_time)
                     log_str += 'RT PER EPOCH {}'.format(remain_time_1epoch)
                     self.recorder.logger.info(log_str)
+                    if tools.is_main_process():
+                        mlflow_utils.log_metric('train/loss', float(loss.item()), step=self.global_step)
+                        mlflow_utils.log_metric('train/miou_running', float(mean_iou.item()), step=self.global_step)
+                        mlflow_utils.log_metric('train/acc_running', float(mean_acc.item()), step=self.global_step)
+                        mlflow_utils.log_metric('train/lr', float(lr), step=self.global_step)
 
         with torch.no_grad():
             mean_acc, class_acc = self.metrics.getAcc()
