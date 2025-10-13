@@ -28,6 +28,7 @@ import utils
 import utils.tools as tools
 from models.model_utils import resize_pos_embed
 from utils import mlflow_utils
+from utils.discord import notify_run_completion
 
 
 def build_rangevit_model(settings, pretrained_path=None):
@@ -421,13 +422,33 @@ if __name__ == '__main__':
     mlflow_context = mlflow_utils.start_run(run_name=run_name) if mlflow_enabled else nullcontext()
 
     with mlflow_context:
-        try:
-            if mlflow_enabled:
-                mlflow_utils.set_tags(mlflow_utils.collect_tags_from_settings(settings))
-                mlflow_utils.log_params(mlflow_utils.collect_params_from_settings(settings))
+        if mlflow_enabled:
+            mlflow_utils.set_tags(mlflow_utils.collect_tags_from_settings(settings))
+            mlflow_utils.log_params(mlflow_utils.collect_params_from_settings(settings))
 
+        run_start = time.time()
+        task_name = run_name or getattr(settings, 'id', 'RangeViT')
+
+        try:
             exp = Experiment(settings, mlflow_active=mlflow_enabled)
             exp.run()
+        except Exception as exc:
+            if tools.is_main_process():
+                notify_run_completion(
+                    task_name=task_name,
+                    success=False,
+                    elapsed_seconds=time.time() - run_start,
+                    extra_message=f"Error: {exc}",
+                )
+            raise
+        else:
+            if tools.is_main_process():
+                notify_run_completion(
+                    task_name=task_name,
+                    success=True,
+                    elapsed_seconds=time.time() - run_start,
+                    extra_message=f"Outputs saved to {settings.save_path}",
+                )
         finally:
             # Ensure DDP is torn down even on failure
             try:
