@@ -24,6 +24,7 @@ import sys
 import yaml
 
 from .preprocess import augmentor, projection
+from .preprocess.wpd import WPDConfig, WPDAugmentor
 
 
 class RangeViewLoader(Dataset):
@@ -70,8 +71,25 @@ class RangeViewLoader(Dataset):
                 augment_params.setPolarMixParams(augment_config['p_polarmix'])
                 print(f'Adding PolarMix with probability {augment_params.p_polarmix}')
             self.augmentor = augmentor.Augmentor(augment_params)
+
+            # Initialize WPD augmentation
+            if 'use_wpd' in augment_config and augment_config['use_wpd']:
+                wpd_stats_path = augment_config.get('wpd_stats_path', 'dataset/preprocess/wpd_stats.yaml')
+                wpd_mode = augment_config.get('wpd_mode', 'semantic')
+                wpd_apply_rate = augment_config.get('wpd_apply_rate', 0.6)
+                try:
+                    wpd_config = WPDConfig(wpd_stats_path, mode=wpd_mode)
+                    self.wpd_augmentor = WPDAugmentor(wpd_config, apply_rate=wpd_apply_rate)
+                    print(f'WPD augmentation enabled (mode={wpd_mode}, apply_rate={wpd_apply_rate})')
+                except FileNotFoundError as e:
+                    print(f'Warning: {e}')
+                    print('WPD augmentation disabled. Please run compute_wpd_stats.py first.')
+                    self.wpd_augmentor = None
+            else:
+                self.wpd_augmentor = None
         else:
             self.augmentor = None
+            self.wpd_augmentor = None
             self.p_rangemix = 0.0
 
         self.proj_p_hflip = augment_config.get('p_hflip', 0.0)
@@ -150,6 +168,55 @@ class RangeViewLoader(Dataset):
         #     [proj_range_tensor.unsqueeze(0), proj_xyz_tensor.permute(2, 0, 1), proj_intensity_tensor.unsqueeze(0), proj_existence_tensor.unsqueeze(0)], 0)
         proj_feature_tensor = torch.cat(
             [proj_range_tensor.unsqueeze(0), proj_xyz_tensor.permute(2, 0, 1), proj_intensity_tensor.unsqueeze(0)], 0)
+
+        # Apply WPD augmentation (before normalization)
+        if self.is_train and self.wpd_augmentor is not None:
+            # Sample a donor frame
+            donor_index = np.random.randint(0, len(self.dataset))
+            pointcloud_donor, sem_label_donor, _ = self.dataset.loadDataByIndex(donor_index)
+            sem_label_donor = self.dataset.labelMapping(sem_label_donor)
+
+            # Apply standard augmentations to donor
+            # pointcloud_donor = self.augmentor.doAugmentation(pointcloud_donor)
+
+            # Project donor frame
+            proj_pointcloud_donor, proj_range_donor, proj_idx_donor, proj_mask_donor = self.projection.doProjection(pointcloud_donor)
+
+            # Build donor tensors
+            proj_mask_tensor_donor = torch.from_numpy(proj_mask_donor)
+            mask_donor = proj_idx_donor > 0
+            proj_sem_label_donor = np.zeros((proj_mask_donor.shape[0], proj_mask_donor.shape[1]), dtype=np.float32)
+            proj_sem_label_donor[mask_donor] = sem_label_donor[proj_idx_donor[mask_donor]]
+            proj_sem_label_tensor_donor = torch.from_numpy(proj_sem_label_donor)
+            proj_sem_label_tensor_donor = proj_sem_label_tensor_donor * proj_mask_tensor_donor.float()
+
+            proj_range_tensor_donor = torch.from_numpy(proj_range_donor)
+            proj_xyz_tensor_donor = torch.from_numpy(proj_pointcloud_donor[..., :3])
+            proj_intensity_tensor_donor = torch.from_numpy(proj_pointcloud_donor[..., 3])
+            proj_intensity_tensor_donor = proj_intensity_tensor_donor.ne(-1).float() * proj_intensity_tensor_donor
+
+            proj_feature_tensor_donor = torch.cat(
+                [proj_range_tensor_donor.unsqueeze(0), proj_xyz_tensor_donor.permute(2, 0, 1),
+                 proj_intensity_tensor_donor.unsqueeze(0)], 0)
+
+            # Apply WPD
+            frame_a_dict = {
+                'features': proj_feature_tensor,
+                'labels': proj_sem_label_tensor.long(),
+                'mask': proj_mask_tensor,
+                'range': proj_range_tensor,
+            }
+            frame_b_dict = {
+                'features': proj_feature_tensor_donor,
+                'labels': proj_sem_label_tensor_donor.long(),
+                'mask': proj_mask_tensor_donor,
+                'range': proj_range_tensor_donor,
+            }
+
+            result = self.wpd_augmentor(frame_a_dict, frame_b_dict)
+            proj_feature_tensor = result['features']
+            proj_sem_label_tensor = result['labels'].float()
+            proj_mask_tensor = result['mask']
 
         proj_feature_tensor = (proj_feature_tensor - self.proj_img_mean[:, None, None]) / self.proj_img_stds[:, None, None]
         proj_feature_tensor = proj_feature_tensor * proj_mask_tensor.unsqueeze(0).float()
