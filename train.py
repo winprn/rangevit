@@ -583,10 +583,10 @@ class Trainer(object):
                     log_str += 'RT PER EPOCH {}'.format(remain_time_1epoch)
                     self.recorder.logger.info(log_str)
                     if tools.is_main_process():
-                        mlflow_utils.log_metric('train/loss', float(loss.item()), step=epoch+1)
-                        mlflow_utils.log_metric('train/miou_running', float(mean_iou.item()), step=epoch+1)
-                        mlflow_utils.log_metric('train/acc_running', float(mean_acc.item()), step=epoch+1)
-                        mlflow_utils.log_metric('train/lr', float(lr), step=epoch+1)
+                        mlflow_utils.log_metric('train/loss', float(loss.item()), step=i//self.settings.log_frequency)
+                        mlflow_utils.log_metric('train/miou_running', float(mean_iou.item()), step=i//self.settings.log_frequency)
+                        mlflow_utils.log_metric('train/acc_running', float(mean_acc.item()), step=i//self.settings.log_frequency)
+                        mlflow_utils.log_metric('train/lr', float(lr), step=i//self.settings.log_frequency)
 
         with torch.no_grad():
             mean_acc, class_acc = self.metrics.getAcc()
