@@ -18,7 +18,7 @@ lr: 0.0004
 train_result_frequency: 100 # printing frequency of the train results
 
 # Model config
-vit_backbone: "vit_base_patch16_384"
+vit_backbone: "vit_small_patch16_384"
 in_channels: 5
 patch_size: [2, 8] # patch size = patch stride if a convolutional stem (ConvStem) is used
 patch_stride: [2, 8]
@@ -80,6 +80,27 @@ augmentation:
   # advance augmentation
   p_rangemix: 0.9
   p_polarmix: 0.23
+
+  # WPD (Weighted Paste and Drop) augmentation
+  # Addresses overfitting, context-reliance, and class imbalance
+  use_wpd: true # Enable WPD augmentation (requires wpd_stats.yaml)
+  wpd_mode: "semantic" # "semantic" or "panoptic"
+  wpd_apply_rate: 0.6 # Probability of applying WPD to a batch (0.5-0.7 recommended)
+  wpd_stats_path: "dataset/preprocess/wpd_stats.yaml" # Path to WPD statistics file
+
+  # MaskRange augmentation (range-view level)
+  # Overfitting prevention
+  p_range_drop: 0.3 # Randomly drop rows/columns in range image
+  p_range_mask: 0.3 # Randomly mask rectangular regions
+  p_range_noise: 0.2 # Add Gaussian noise to range values
+
+  # Context-reliance reduction
+  p_range_shift: 0.5 # Circular shift along azimuth dimension
+  p_grid_fill: 0.0 # Fill empty grid cells (disabled by default, computationally expensive)
+
+  # Class-imbalance handling (point cloud level, applied before projection)
+  p_instance_paste: 0.5 # Paste instances from other scans
+  p_class_mix: 0.5 # Mix minority classes between scans
 
 sensor:
   name: "HDL64"
