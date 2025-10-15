@@ -20,7 +20,7 @@ import datetime
 import time
 import numpy as np
 from contextlib import nullcontext
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from option import Option
 from train import Trainer
@@ -97,11 +97,11 @@ def _build_run_context_lines(args: argparse.Namespace, settings: Option) -> List
     screen_id = os.environ.get("SCREEN") or os.environ.get("STY") or os.environ.get("TMUX")
     if not screen_id:
         raise RuntimeError(
-        "Screen/TMUX session not detected. "
-        "If you're running manually (not inside screen/tmux), you can temporarily set one of the env vars:\n"
-        "  export SCREEN=1    # (Linux/macOS Bash)\n"
-        "  set SCREEN=1       # (Windows CMD)\n"
-        "  $env:SCREEN = 1    # (Windows PowerShell)"
+            "Screen/TMUX session not detected. "
+            "If you're running manually (not inside screen/tmux), you can temporarily set one of the env vars:\n"
+            "  export SCREEN=1    # (Linux/macOS Bash)\n"
+            "  set SCREEN=1       # (Windows CMD)\n"
+            "  $env:SCREEN = 1    # (Windows PowerShell)"
         )
 
     lines.append(f"- Screen ID: {screen_id}")
@@ -129,6 +129,44 @@ def _is_notification_master() -> bool:
         except ValueError:
             return rank_env == "0"
     return tools.is_main_process()
+
+
+def _prepare_settings(args: argparse.Namespace) -> Option:
+    """
+    Instantiate an Option object and normalize settings according to CLI args.
+    Shared by training and follow-up evaluation flows.
+    """
+    settings = Option(args.config_path, args)
+
+    settings.id = args.id if args.id is not None else settings.id
+    settings.pretrained_model = args.pretrained_model if args.pretrained_model is not None else settings.pretrained_model
+    if args.checkpoint is not None:
+        settings.checkpoint = args.checkpoint
+        settings.pretrained_model = None
+        settings.finetune_pretrained_model = False
+
+    if args.val_only and args.window_stride is not None:
+        settings.window_stride = [settings.window_stride[0], args.window_stride]
+        print(f'WINDOW STRIDE: {settings.window_stride}')
+
+    settings.data_root = args.data_root
+    settings.use_mini_version = args.mini
+    settings.val_only = args.val_only
+    settings.test_split = args.test_split
+    settings.save_eval_results = args.save_eval_results
+    settings.log_frequency = args.log_frequency
+    settings.num_workers = args.num_workers
+    settings.seed = args.seed
+
+    # No patch and positional embeddings are loaded when training from scratch.
+    if settings.pretrained_model is None:
+        settings.reuse_patch_emb = False
+        settings.reuse_pos_emb = False
+
+    if settings.val_only:
+        settings.save_path = os.path.join(settings.save_path, f'Eval_{settings.id}')
+
+    return settings
 
 
 class Experiment(object):
@@ -408,66 +446,22 @@ class Experiment(object):
         self._log_training_time(cost_time)
 
 
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='Experiment Options')
-    parser.add_argument('config_path', type=str, metavar='config_path',
-                        help='path of config file, type: string')
-    parser.add_argument('--data_root', type=str, required=True,
-                        help='path to the data, type: string')
-    parser.add_argument('--save_path', type=str, required=True,
-                        help='path to save the file, type: string')
-    parser.add_argument('--id', type=str,
-                        help='name to identify the run')
-    parser.add_argument('--num_workers', type=int, default=4,
-                        help='number of threads used for data loading, type: int')
-    parser.add_argument('--pretrained_model', type=str,
-                        help='path of pre-trained model to initialize the ViT encoder backbone, type: string')
-    parser.add_argument('--checkpoint', type=str,
-                        help='path of checkpoint model for resuming training or evaluation, type: string')
-    parser.add_argument('--window_stride', type=int,
-                        help='sliding window stride during validation, type: int')
-    parser.add_argument('--mini', action='store_true', help='use mini version of the dataset, type: bool')
-    parser.add_argument('--val_only', action='store_true', help='run inference only')
-    parser.add_argument('--test_split', action='store_true', help='run inference on the test split')
-    parser.add_argument('--save_eval_results', action='store_true', help='save the predictions')
-    parser.add_argument('--log_frequency', type=int, default=100, help='logging frequency')
-    parser.add_argument('--seed', type=int, default=1, help='random seed')
-
-    args = parser.parse_args()
-    settings = Option(args.config_path, args)
-
-    settings.id = args.id if args.id is not None else settings.id
-    settings.pretrained_model = args.pretrained_model if args.pretrained_model is not None else settings.pretrained_model
-    if args.checkpoint is not None:
-        settings.checkpoint = args.checkpoint
-        settings.pretrained_model = None
-        settings.finetune_pretrained_model = False
-
-    if args.val_only and args.window_stride is not None:
-        settings.window_stride = [settings.window_stride[0], args.window_stride]
-        print(f'WINDOW STRIDE: {settings.window_stride}')
-
-    settings.data_root = args.data_root
-    settings.use_mini_version = args.mini
-    settings.val_only = args.val_only
-    settings.test_split = args.test_split
-    settings.save_eval_results = args.save_eval_results
-    settings.log_frequency = args.log_frequency
-    settings.num_workers = args.num_workers
-    settings.seed = args.seed
-
-    # No patch and positional embeddings are loaded when training from scratch.
-    if settings.pretrained_model is None:
-        settings.reuse_patch_emb = False
-        settings.reuse_pos_emb = False
-
-    if settings.val_only:
-        settings.save_path = os.path.join(settings.save_path, f'Eval_{settings.id}')
-
-    # MLflow setup (optional via config or env var)
+def _run_pipeline(
+    args: argparse.Namespace,
+    settings: Option,
+    *,
+    forced_run_name: Optional[str] = None,
+    run_name_suffix: Optional[str] = None,
+    task_name_suffix: Optional[str] = None,
+    success_status_detail: Optional[str] = None,
+) -> Dict[str, object]:
+    """
+    Execute a training or evaluation run with MLflow/Discord bookkeeping.
+    Returns metadata about the execution.
+    """
     tracking_uri = os.getenv("MLFLOW_TRACKING_URI")
     experiment_name = getattr(settings, 'mlflow_experiment', None)
-    run_name_override = getattr(settings, 'mlflow_run_name', None)
+    configured_run_name = getattr(settings, 'mlflow_run_name', None)
     mlflow_requested = getattr(settings, 'mlflow_enabled', None)
 
     if mlflow_requested is None:
@@ -479,10 +473,16 @@ if __name__ == '__main__':
             raise RuntimeError('MLflow tracking is enabled but MLFLOW_TRACKING_URI environment variable is not set.')
         mlflow_enabled = mlflow_utils.setup(tracking_uri=tracking_uri, experiment=experiment_name)
 
-    run_name = (run_name_override or
-                mlflow_utils.default_run_name(settings.config.get('model_type', 'rangevit'),
-                                              getattr(settings, 'id', None)))
+    base_run_name = mlflow_utils.default_run_name(settings.config.get('model_type', 'rangevit'),
+                                                  getattr(settings, 'id', None))
+    run_name = forced_run_name or configured_run_name or base_run_name
+    if run_name_suffix:
+        run_name = f"{run_name}{run_name_suffix}"
+
     mlflow_context = mlflow_utils.start_run(run_name=run_name) if mlflow_enabled else nullcontext()
+    task_name = run_name or getattr(settings, 'id', 'RangeViT')
+    if task_name_suffix:
+        task_name = f"{task_name} {task_name_suffix}"
 
     with mlflow_context:
         if mlflow_enabled:
@@ -490,7 +490,6 @@ if __name__ == '__main__':
             mlflow_utils.log_params(mlflow_utils.collect_params_from_settings(settings))
 
         run_start = time.time()
-        task_name = run_name or getattr(settings, 'id', 'RangeViT')
         start_context_lines = _build_run_context_lines(args, settings)
         context_text = "\n".join(start_context_lines)
 
@@ -515,7 +514,8 @@ if __name__ == '__main__':
             raise
         else:
             if _is_notification_master():
-                success_lines = _build_run_context_lines(args, settings) + [f"- Status details: Outputs saved to {settings.save_path}"]
+                detail_text = success_status_detail or f"Outputs saved to {settings.save_path}"
+                success_lines = _build_run_context_lines(args, settings) + [f"- Status details: {detail_text}"]
                 notify_run_completion(
                     task_name=task_name,
                     success=True,
@@ -528,3 +528,69 @@ if __name__ == '__main__':
                 tools.cleanup()
             except Exception:
                 pass
+
+    return {
+        "elapsed_seconds": time.time() - run_start,
+        "settings": settings,
+        "task_name": task_name,
+    }
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description='Experiment Options')
+    parser.add_argument('config_path', type=str, metavar='config_path',
+                        help='path of config file, type: string')
+    parser.add_argument('--data_root', type=str, required=True,
+                        help='path to the data, type: string')
+    parser.add_argument('--save_path', type=str, required=True,
+                        help='path to save the file, type: string')
+    parser.add_argument('--id', type=str,
+                        help='name to identify the run')
+    parser.add_argument('--num_workers', type=int, default=4,
+                        help='number of threads used for data loading, type: int')
+    parser.add_argument('--pretrained_model', type=str,
+                        help='path of pre-trained model to initialize the ViT encoder backbone, type: string')
+    parser.add_argument('--checkpoint', type=str,
+                        help='path of checkpoint model for resuming training or evaluation, type: string')
+    parser.add_argument('--window_stride', type=int,
+                        help='sliding window stride during validation, type: int')
+    parser.add_argument('--mini', action='store_true', help='use mini version of the dataset, type: bool')
+    parser.add_argument('--val_only', action='store_true', help='run inference only')
+    parser.add_argument('--test_split', action='store_true', help='run inference on the test split')
+    parser.add_argument('--save_eval_results', action='store_true', help='save the predictions')
+    parser.add_argument('--full', action='store_true',
+                        help='after training, evaluate on the test split using the latest checkpoint and save results')
+    parser.add_argument('--log_frequency', type=int, default=100, help='logging frequency')
+    parser.add_argument('--seed', type=int, default=1, help='random seed')
+
+    args = parser.parse_args()
+    settings = _prepare_settings(args)
+
+    _run_pipeline(args, settings, success_status_detail=f"Outputs saved to {settings.save_path}")
+
+    if args.full and not settings.val_only:
+        checkpoint_path = os.path.join(settings.save_path, 'checkpoint', 'checkpoint.pth')
+        if not os.path.isfile(checkpoint_path):
+            raise FileNotFoundError(
+                f"Full evaluation requested but checkpoint not found at {checkpoint_path}"
+            )
+
+        eval_args_dict = vars(args).copy()
+        eval_args_dict.update({
+            'val_only': True,
+            'test_split': True,
+            'save_eval_results': True,
+            'checkpoint': checkpoint_path,
+            'pretrained_model': None,
+            'full': False,
+        })
+        eval_args = argparse.Namespace(**eval_args_dict)
+        eval_settings = _prepare_settings(eval_args)
+
+        _run_pipeline(
+            eval_args,
+            eval_settings,
+            run_name_suffix='-test',
+            task_name_suffix='[test]',
+            success_status_detail=f"Test outputs saved to {eval_settings.save_path}",
+        )
