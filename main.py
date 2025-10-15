@@ -15,11 +15,12 @@
 import torch
 import argparse
 import os
+import sys
 import datetime
 import time
 import numpy as np
 from contextlib import nullcontext
-from typing import Dict
+from typing import Dict, List
 
 from option import Option
 from train import Trainer
@@ -28,7 +29,7 @@ import utils
 import utils.tools as tools
 from models.model_utils import resize_pos_embed
 from utils import mlflow_utils
-from utils.discord import notify_run_completion
+from utils.discord import notify_run_completion, post_message
 
 
 def build_rangevit_model(settings, pretrained_path=None):
@@ -66,6 +67,68 @@ def build_rangevit_model(settings, pretrained_path=None):
         up_conv_scale_factor=settings.patch_stride,
         use_kpconv=settings.use_kpconv)
     return model
+
+
+def _build_run_context_lines(args: argparse.Namespace, settings: Option) -> List[str]:
+    """
+    Gather useful runtime metadata for Discord notifications.
+    """
+    lines: List[str] = [
+        f"- Run ID: {settings.id}",
+        f"- Config: {args.config_path}",
+        f"- Data root: {settings.data_root}",
+        f"- Save path: {settings.save_path}",
+    ]
+
+    if settings.checkpoint:
+        lines.append(f"- Checkpoint: {settings.checkpoint}")
+    elif settings.pretrained_model:
+        lines.append(f"- Pretrained model: {settings.pretrained_model}")
+
+    if settings.val_only:
+        lines.append("- Mode: validation-only")
+    if settings.test_split:
+        lines.append("- Split: test")
+
+    launch_command = " ".join(sys.argv)
+    if launch_command:
+        lines.append(f"- Command: {launch_command}")
+
+    screen_id = os.environ.get("SCREEN") or os.environ.get("STY") or os.environ.get("TMUX")
+    if not screen_id:
+        raise RuntimeError(
+        "Screen/TMUX session not detected. "
+        "If you're running manually (not inside screen/tmux), you can temporarily set one of the env vars:\n"
+        "  export SCREEN=1    # (Linux/macOS Bash)\n"
+        "  set SCREEN=1       # (Windows CMD)\n"
+        "  $env:SCREEN = 1    # (Windows PowerShell)"
+        )
+
+    lines.append(f"- Screen ID: {screen_id}")
+
+    cuda_devices = os.environ.get("CUDA_VISIBLE_DEVICES")
+    if cuda_devices:
+        lines.append(f"- CUDA_VISIBLE_DEVICES: {cuda_devices}")
+
+    world_size = os.environ.get("WORLD_SIZE")
+    if world_size:
+        lines.append(f"- WORLD_SIZE: {world_size}")
+
+    return lines
+
+
+def _is_notification_master() -> bool:
+    """
+    Determine whether the current process should send Discord notifications.
+    Handles the pre-distributed initialization case by checking the RANK env var.
+    """
+    rank_env = os.environ.get("RANK")
+    if rank_env is not None:
+        try:
+            return int(rank_env) == 0
+        except ValueError:
+            return rank_env == "0"
+    return tools.is_main_process()
 
 
 class Experiment(object):
@@ -428,26 +491,36 @@ if __name__ == '__main__':
 
         run_start = time.time()
         task_name = run_name or getattr(settings, 'id', 'RangeViT')
+        start_context_lines = _build_run_context_lines(args, settings)
+        context_text = "\n".join(start_context_lines)
+
+        if _is_notification_master():
+            post_message(
+                f"`{task_name}` started\n{context_text}",
+                username="RangeViT Bot",
+            )
 
         try:
             exp = Experiment(settings, mlflow_active=mlflow_enabled)
             exp.run()
         except Exception as exc:
-            if tools.is_main_process():
+            if _is_notification_master():
+                failure_lines = _build_run_context_lines(args, settings) + [f"- Status details: Error: {exc}"]
                 notify_run_completion(
                     task_name=task_name,
                     success=False,
                     elapsed_seconds=time.time() - run_start,
-                    extra_message=f"Error: {exc}",
+                    extra_message="\n".join(failure_lines),
                 )
             raise
         else:
-            if tools.is_main_process():
+            if _is_notification_master():
+                success_lines = _build_run_context_lines(args, settings) + [f"- Status details: Outputs saved to {settings.save_path}"]
                 notify_run_completion(
                     task_name=task_name,
                     success=True,
                     elapsed_seconds=time.time() - run_start,
-                    extra_message=f"Outputs saved to {settings.save_path}",
+                    extra_message="\n".join(success_lines),
                 )
         finally:
             # Ensure DDP is torn down even on failure
