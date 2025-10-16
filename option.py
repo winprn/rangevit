@@ -52,6 +52,7 @@ class Option(object):
         self.lr = self.config['lr']
         self.warmup_epochs = self.config.get('warmup_epochs', 10)
         self.log_frequency = 100
+        self.save_frequent = self.config.get('save_frequent', 0)
         self.train_result_frequency = self.config.get('train_result_frequency', 100)
         self.use_fp16 = self.config.get('use_fp16', False) # for mixed-precision training
         self.max_iters_per_epoch = self.config.get('max_iters_per_epoch', None) # limit iterations per epoch for testing
@@ -106,8 +107,15 @@ class Option(object):
         self.id = self.config['id'] # name to identify the run
         self.save_eval_results = False
 
-        self.save_path = args.save_path
-        self.save_path = os.path.join(self.save_path, 'log_{}'.format(self.id))
+        config_save_path = self.config.get('save_path')
+        arg_save_path = getattr(args, 'save_path', None)
+        base_save_path = arg_save_path if arg_save_path is not None else config_save_path
+        if base_save_path is None:
+            raise ValueError(
+                "Save path is not specified. Provide it via the --save_path flag or the 'save_path' field in the config."
+            )
+
+        self.save_path = os.path.join(base_save_path, 'log_{}'.format(self.id))
 
 
         # -----------------------------------------------------

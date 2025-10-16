@@ -158,6 +158,15 @@ def _prepare_settings(args: argparse.Namespace) -> Option:
     settings.num_workers = args.num_workers
     settings.seed = args.seed
 
+    save_frequent = settings.save_frequent if hasattr(settings, 'save_frequent') else 0
+    if save_frequent is None:
+        save_frequent = 0
+    if args.save_frequent is not None:
+        save_frequent = args.save_frequent
+    if save_frequent < 0:
+        raise ValueError(f"Invalid save_frequent value: {save_frequent}. Expected a non-negative integer.")
+    settings.save_frequent = save_frequent
+
     # No patch and positional embeddings are loaded when training from scratch.
     if settings.pretrained_model is None:
         settings.reuse_patch_emb = False
@@ -430,6 +439,12 @@ class Experiment(object):
                     checkpoint_data['fp16_scaler'] = self.trainer.fp16_scaler.state_dict()
                 torch.save(checkpoint_data, saved_path)
 
+                save_frequency = getattr(self.settings, 'save_frequent', 0) or 0
+                if save_frequency > 0 and ((epoch + 1) % save_frequency == 0):
+                    epoch_filename = f'epoch_{epoch+1:04d}.pth'
+                    epoch_path = os.path.join(self.recorder.checkpoint_path, epoch_filename)
+                    torch.save(checkpoint_data, epoch_path)
+
                 # Logging best results
                 if best_val_result is not None:
                     log_str = '>>> Best Result: '
@@ -543,8 +558,8 @@ if __name__ == '__main__':
                         help='path of config file, type: string')
     parser.add_argument('--data_root', type=str, required=True,
                         help='path to the data, type: string')
-    parser.add_argument('--save_path', type=str, required=True,
-                        help='path to save the file, type: string')
+    parser.add_argument('--save_path', type=str, default=None,
+                        help='path to save outputs (overrides config save_path if set)')
     parser.add_argument('--id', type=str,
                         help='name to identify the run')
     parser.add_argument('--num_workers', type=int, default=4,
@@ -562,6 +577,8 @@ if __name__ == '__main__':
     parser.add_argument('--full', action='store_true',
                         help='after training, evaluate on the test split using the latest checkpoint and save results')
     parser.add_argument('--log_frequency', type=int, default=100, help='logging frequency')
+    parser.add_argument('--save_frequent', type=int, default=None,
+                        help='frequency (in epochs) to save checkpoints as epoch_*.pth; 0 disables extra saves')
     parser.add_argument('--seed', type=int, default=1, help='random seed')
 
     args = parser.parse_args()

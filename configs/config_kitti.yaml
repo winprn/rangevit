@@ -6,7 +6,7 @@ id: 'exp_kitti'
 mlflow:
     enabled: true
     experiment: 'rangevit'
-    run_name: '[trainval] rangevit_small_noft_trainval'            # overrides default if set
+    run_name: '[trainval] rangevit256_small_ft_trainval'            # overrides default if set
 
 # Data config
 dataset: 'SemanticKitti'
@@ -16,6 +16,7 @@ use_trainval: true # set to true if you want to train on train-val of SemanticKI
 # Train config
 has_label: true
 val_frequency: 3
+save_frequent: 10
 n_epochs: 60
 warmup_epochs: 10
 batch_size: 32
@@ -37,7 +38,7 @@ original_image_size: [64, 2048]
 # Stem
 conv_stem: 'ConvStem' # 'none' or 'ConvStem'
 stem_base_channels: 32
-D_h: 128 # hidden dimension of the stem
+D_h: 256 # hidden dimension of the stem
 # Note tha the test results that we provide in the paper for the SemanticKITTI were with D_h = 256.
 # However, in the validation set D_h = 128 gave us better mIoU results.
 
@@ -49,8 +50,9 @@ skip_filters: 128 # has to be 0 (no skip) or D_h
 use_kpconv: true
 
 # Checkpoint model
+save_path: "save_rangevit256_small_ft_trainval"
 # checkpoint: null
-pretrained_model: "../pretrained_model/vit_small_p16_384.pth"
+pretrained_model: "../pretrained_model/vit_small_p16_384_ft.pth"
 
 # Loading pre-trained patch and positional embeddings
 reuse_pos_emb: true
