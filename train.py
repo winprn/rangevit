@@ -40,6 +40,7 @@ class Trainer(object):
         self.mlflow_manager = mlflow_manager
         self.model = model.cuda()
         self.remain_time = tools.RemainTime(self.settings.n_epochs)
+        self.iter_steps = {'Train': 0, 'Validation': 0}
 
         # Init data loader
         self.train_loader, self.val_loader, self.train_sampler, self.val_sampler = self._initDataloader()
@@ -266,6 +267,7 @@ class Trainer(object):
 
         for i, (input_feature, input_label, input_mask) in enumerate(dataloader):
             t_process_start = time.time()
+            current_lr = None
 
             # Feature: range, x, y, z, intensity
             input_feature = input_feature.cuda() # shape: B x 5 x H x W
@@ -296,8 +298,8 @@ class Trainer(object):
 
                 # Update lr after backward (required by pytorch)
                 self.scheduler.step()
-            else:
-                with torch.no_grad():
+            with torch.no_grad():
+                if mode == 'Validation':
                     assert input_feature.shape[0] == 1 # validation batch size has to be 1
 
                     # Validation
@@ -320,6 +322,7 @@ class Trainer(object):
                     total_loss, loss_lovasz, loss_focal = self.compute_losses(
                         output, output_softmax, input_label, input_mask)
 
+            current_lr = self.optimizer.param_groups[0]['lr']
 
             # Measure IoU and record loss
             loss = total_loss.mean()
@@ -328,6 +331,26 @@ class Trainer(object):
                 self.metrics.addBatch(argmax, input_label) # 2D predictions
 
             loss_meter.update(loss.item(), input_feature.size(0))
+
+            with torch.no_grad():
+                mean_iou_tensor, _, mean_acc_tensor, _ = self.metrics.getIoUnAcc()
+                mean_recall_tensor, _ = self.metrics.getRecall()
+            mean_iou_running = float(mean_iou_tensor)
+            mean_acc_running = float(mean_acc_tensor)
+            mean_recall_running = float(mean_recall_tensor)
+
+            if self.mlflow_manager is not None:
+                step_id = self.iter_steps[mode]
+                self.iter_steps[mode] += 1
+                mlflow_metrics = {
+                    f'{mode.lower()}_loss': loss.item(),
+                    f'{mode.lower()}_mean_iou': mean_iou_running,
+                    f'{mode.lower()}_mean_acc': mean_acc_running,
+                    f'{mode.lower()}_mean_recall': mean_recall_running,
+                }
+                if mode == 'Train':
+                    mlflow_metrics[f'{mode.lower()}_lr'] = current_lr
+                self.mlflow_manager.log_metrics(mlflow_metrics, step=step_id)
 
             # Timer logger
             t_process_end = time.time()
@@ -342,16 +365,11 @@ class Trainer(object):
 
             # Logging
             if (i % self.settings.log_frequency == 0) or (i == total_iter-1):
-                with torch.no_grad():
-                    mean_iou, _, mean_acc, _ = self.metrics.getIoUnAcc()
                 if self.recorder is not None:
-                    for g in self.optimizer.param_groups:
-                        lr = g['lr']
-                        break
                     log_str = '>>> {} E[{:03d}|{:03d}] I[{:04d}|{:04d}] DT[{:.3f}] PT[{:.3f}] '.format(
                         mode, self.settings.n_epochs, epoch+1, total_iter, i+1, data_cost_time, process_cost_time)
                     log_str += 'LR {} Loss {:0.4f} Acc {:0.4f} IOU {:0.4F} '.format(
-                        lr, loss.item(), mean_acc.item(), mean_iou.item())
+                        current_lr, loss.item(), mean_acc_running, mean_iou_running)
                     log_str += 'RT {}'.format(remain_time)
                     self.recorder.logger.info(log_str)
 
@@ -376,10 +394,7 @@ class Trainer(object):
                 'loss_lovasz': loss_lovasz,
             }
 
-        current_lr = None
-        for g in self.optimizer.param_groups:
-            current_lr = g['lr']
-            break
+        epoch_lr = self.optimizer.param_groups[0]['lr']
 
         # Print results
         if self.recorder is not None:
@@ -408,7 +423,7 @@ class Trainer(object):
                                recorder=self.recorder,
                                metrics_dict=metrics_dict,
                                loss_dict=loss_dict,
-                               lr=current_lr,
+                               lr=epoch_lr,
                                mapped_cls_name=self.mapped_cls_name)
 
             # Results at the end of the epoch
@@ -418,14 +433,14 @@ class Trainer(object):
 
         if self.mlflow_manager is not None:
             mlflow_metrics = {
-                f'{mode.lower()}_loss': loss_meter.avg,
-                f'{mode.lower()}_acc': mean_acc.item(),
-                f'{mode.lower()}_iou': mean_iou.item(),
-                f'{mode.lower()}_recall': mean_recall.item(),
+                f'{mode.lower()}_epoch_loss': loss_meter.avg,
+                f'{mode.lower()}_epoch_acc': mean_acc.item(),
+                f'{mode.lower()}_epoch_iou': mean_iou.item(),
+                f'{mode.lower()}_epoch_recall': mean_recall.item(),
             }
-            if (mode == 'Train') and (current_lr is not None):
-                mlflow_metrics[f'{mode.lower()}_lr'] = current_lr
-            self.mlflow_manager.log_metrics(mlflow_metrics, step=epoch)
+            if (mode == 'Train') and (epoch_lr is not None):
+                mlflow_metrics[f'{mode.lower()}_epoch_lr'] = epoch_lr
+            self.mlflow_manager.log_metrics(mlflow_metrics, step=self.iter_steps[mode])
 
 
         result_metrics = {
@@ -464,6 +479,7 @@ class Trainer(object):
 
         for i, batch_dict in enumerate(dataloader):
             t_process_start = time.time()
+            current_lr = None
 
             # 2D inputs
             input_feature = batch_dict['input2d'].cuda(non_blocking=True)
@@ -502,8 +518,8 @@ class Trainer(object):
 
                 # Update lr after backward (required by pytorch)
                 self.scheduler.step()
-            else:
-                with torch.no_grad():
+            with torch.no_grad():
+                if mode == 'Validation':
                     assert input_feature.shape[0] == 1 # validation batch size has to be 1
 
                     # Validation
@@ -531,6 +547,8 @@ class Trainer(object):
                     total_loss, loss_lovasz, loss_focal = self.compute_losses(
                         output3d, output3d_softmax, labels3d, mask_3d)
 
+            current_lr = self.optimizer.param_groups[0]['lr']
+
             # Measure IoU and record loss
             loss = total_loss.mean()
             with torch.no_grad():
@@ -538,6 +556,26 @@ class Trainer(object):
                 self.metrics.addBatch(argmax3d, labels3d) # 3D predictions
 
             loss_meter.update(loss.item(), input_feature.size(0))
+
+            with torch.no_grad():
+                mean_iou_tensor, _, mean_acc_tensor, _ = self.metrics.getIoUnAcc()
+                mean_recall_tensor, _ = self.metrics.getRecall()
+            mean_iou_running = float(mean_iou_tensor)
+            mean_acc_running = float(mean_acc_tensor)
+            mean_recall_running = float(mean_recall_tensor)
+
+            if self.mlflow_manager is not None:
+                step_id = self.iter_steps[mode]
+                self.iter_steps[mode] += 1
+                mlflow_metrics = {
+                    f'{mode.lower()}_loss': loss.item(),
+                    f'{mode.lower()}_mean_iou': mean_iou_running,
+                    f'{mode.lower()}_mean_acc': mean_acc_running,
+                    f'{mode.lower()}_mean_recall': mean_recall_running,
+                }
+                if mode == 'Train':
+                    mlflow_metrics[f'{mode.lower()}_lr'] = current_lr
+                self.mlflow_manager.log_metrics(mlflow_metrics, step=step_id)
 
             # Save the predictions
             if (mode == 'Validation' and save_results_path is not None):
@@ -583,16 +621,11 @@ class Trainer(object):
 
             # Logging
             if (i % self.settings.log_frequency == 0) or (i == total_iter-1):
-                with torch.no_grad():
-                    mean_iou, _, mean_acc, _ = self.metrics.getIoUnAcc()
                 if self.recorder is not None:
-                    for g in self.optimizer.param_groups:
-                        lr = g['lr']
-                        break
                     log_str = '>>> {} E[{:03d}|{:03d}] I[{:04d}|{:04d}] DT[{:.3f}] PT[{:.3f}] '.format(
                         mode, self.settings.n_epochs, epoch+1, total_iter, i+1, data_cost_time, process_cost_time)
                     log_str += 'LR {} Loss {:0.4f} Acc {:0.4f} IOU {:0.4F} '.format(
-                        lr, loss.item(), mean_acc.item(), mean_iou.item())
+                        current_lr, loss.item(), mean_acc_running, mean_iou_running)
                     log_str += 'RT {} '.format(remain_time)
                     log_str += 'RT PER EPOCH {}'.format(remain_time_1epoch)
                     self.recorder.logger.info(log_str)
@@ -618,10 +651,7 @@ class Trainer(object):
                 'loss_lovasz': loss_lovasz,
             }
 
-        current_lr = None
-        for g in self.optimizer.param_groups:
-            current_lr = g['lr']
-            break
+        epoch_lr = self.optimizer.param_groups[0]['lr']
 
         # Print results
         if self.recorder is not None:
@@ -650,7 +680,7 @@ class Trainer(object):
                                recorder=self.recorder,
                                metrics_dict=metrics_dict,
                                loss_dict=loss_dict,
-                               lr=current_lr,
+                               lr=epoch_lr,
                                mapped_cls_name=self.mapped_cls_name)
 
             # Results at the end of the epoch
@@ -660,14 +690,14 @@ class Trainer(object):
 
         if self.mlflow_manager is not None:
             mlflow_metrics = {
-                f'{mode.lower()}_loss': loss_meter.avg,
-                f'{mode.lower()}_acc': mean_acc.item(),
-                f'{mode.lower()}_iou': mean_iou.item(),
-                f'{mode.lower()}_recall': mean_recall.item(),
+                f'{mode.lower()}_epoch_loss': loss_meter.avg,
+                f'{mode.lower()}_epoch_acc': mean_acc.item(),
+                f'{mode.lower()}_epoch_iou': mean_iou.item(),
+                f'{mode.lower()}_epoch_recall': mean_recall.item(),
             }
-            if (mode == 'Train') and (current_lr is not None):
-                mlflow_metrics[f'{mode.lower()}_lr'] = current_lr
-            self.mlflow_manager.log_metrics(mlflow_metrics, step=epoch)
+            if (mode == 'Train') and (epoch_lr is not None):
+                mlflow_metrics[f'{mode.lower()}_epoch_lr'] = epoch_lr
+            self.mlflow_manager.log_metrics(mlflow_metrics, step=self.iter_steps[mode])
 
 
         result_metrics = {
