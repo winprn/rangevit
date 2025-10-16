@@ -24,7 +24,6 @@ from .model_utils import adapt_input_conv, padding, unpadding, resize_pos_embed,
 from .stems import PatchEmbedding, ConvStem
 from .decoders import DecoderLinear, DecoderUpConv
 from .rangevit_kpconv import RangeViT_KPConv, KPClassifier
-from .swin_transformer_v2 import SwinTransformerV2, create_swin_v2
 
 
 class VisionTransformer(nn.Module):
@@ -180,7 +179,8 @@ def create_rangevit(model_cfg, use_kpconv=False):
     # Choose encoder architecture
     backbone = model_cfg.get('backbone', 'vit_small_patch16_384')
     if backbone.startswith('swin'):
-        encoder = create_swin_v2(model_cfg)
+        raise NotImplementedError("Swin Transformer is not available.")
+        # encoder = create_swin_v2(model_cfg)
     else:
         encoder = create_vit(model_cfg)
     
@@ -265,13 +265,20 @@ class RangeViT(nn.Module):
 
         self.n_cls = n_cls
 
-        if backbone == 'vit_small_patch16_384':
+        if backbone == 'vit_small_patch16_384' or backbone == 'vit_small_p16_384':
             n_heads = 6
             n_layers = 12
             patch_size = 16
             dropout = 0.0
             drop_path_rate = 0.1
             d_model = 384
+        elif backbone == 'vit_tiny_patch16_384':
+            n_heads = 6
+            n_layers = 12
+            patch_size = 16
+            dropout = 0.0
+            drop_path_rate = 0.1
+            d_model = 192
         elif backbone == 'vit_base_patch16_384':
             n_heads = 12
             n_layers = 12
@@ -286,27 +293,6 @@ class RangeViT(nn.Module):
             dropout = 0.0
             drop_path_rate = 0.1
             d_model = 1024
-        elif backbone == 'swin_small_patch4_window7_224':
-            n_heads = 3
-            n_layers = 12
-            patch_size = 4
-            dropout = 0.0
-            drop_path_rate = 0.1
-            d_model = 96
-        elif backbone == 'swin_base_patch4_window7_224':
-            n_heads = 4
-            n_layers = 12
-            patch_size = 4
-            dropout = 0.0
-            drop_path_rate = 0.1
-            d_model = 128
-        elif backbone == 'swin_large_patch4_window7_224':
-            n_heads = 6
-            n_layers = 12
-            patch_size = 4
-            dropout = 0.0
-            drop_path_rate = 0.1
-            d_model = 192
         else:
             raise NameError('Not known ViT backbone.')
 
@@ -357,17 +343,21 @@ class RangeViT(nn.Module):
                     pretrained_state_dict['encoder.'+key] = pretrained_state_dict.pop(key)
             else:
                 pretrained_state_dict = torch.load(pretrained_path, map_location='cpu')
-                all_keys = list(pretrained_state_dict['state_dict'].keys())
+                
+                if 'state_dict' in pretrained_state_dict:
+                    pretrained_state_dict = pretrained_state_dict['state_dict']
+                
+                all_keys = list(pretrained_state_dict.keys())
                 for key in all_keys:
                     if key.startswith('backbone.'):
                         new_key = key.replace('backbone.', '')
-                        pretrained_state_dict['state_dict'][new_key] = pretrained_state_dict['state_dict'].pop(key)
+                        pretrained_state_dict[new_key] = pretrained_state_dict.pop(key)
                 if 'model' in pretrained_state_dict:
                     pretrained_state_dict = pretrained_state_dict['model']
-                elif 'pos_embed' in pretrained_state_dict['state_dict'].keys():
-                    all_keys = list(pretrained_state_dict['state_dict'].keys())
+                elif 'pos_embed' in pretrained_state_dict.keys():
+                    all_keys = list(pretrained_state_dict.keys())
                     for key in all_keys:
-                        pretrained_state_dict['encoder.'+key] = pretrained_state_dict['state_dict'].pop(key)
+                        pretrained_state_dict['encoder.'+key] = pretrained_state_dict.pop(key)
 
             # Reuse pre-trained positional embeddings
             if reuse_pos_emb:
@@ -381,8 +371,8 @@ class RangeViT(nn.Module):
                                                    grid_new_shape=(gs_new_h, gs_new_w),
                                                    num_extra_tokens=num_extra_tokens)
                 pretrained_state_dict['encoder.pos_embed'] = resized_pos_emb
-            else:
-                del pretrained_state_dict['encoder.pos_embed'] # remove positional embeddings
+            # else:
+            #     del pretrained_state_dict['encoder.pos_embed'] # remove positional embeddings
 
             # Reuse pre-trained patch embeddings
             if reuse_patch_emb:
@@ -396,17 +386,17 @@ class RangeViT(nn.Module):
                 reshaped_weight = adapt_input_conv(in_channels, pretrained_state_dict['encoder.patch_embed.proj.weight'])
                 reshaped_weight = F.interpolate(reshaped_weight, size=(gs_new_h, gs_new_w), mode='bilinear')
                 pretrained_state_dict['encoder.patch_embed.proj.weight'] = reshaped_weight
-            else:
-                del pretrained_state_dict['encoder.patch_embed.projection.weight'] # remove patch embedding layers
-                del pretrained_state_dict['encoder.patch_embed.projection.bias'] # remove patch embedding layers
+            # else:
+            #     del pretrained_state_dict['encoder.patch_embed.projection.weight'] # remove patch embedding layers
+            #     del pretrained_state_dict['encoder.patch_embed.projection.bias'] # remove patch embedding layers
 
             # Delete the pre-trained weights of the decoder
             decoder_keys = []
-            for key in pretrained_state_dict['state_dict'].keys():
+            for key in pretrained_state_dict.keys():
                 if 'decoder' in key:
                     decoder_keys.append(key)
-            for decoder_key in decoder_keys:
-                del pretrained_state_dict[decoder_key]
+            # for decoder_key in decoder_keys:
+            #     del pretrained_state_dict[decoder_key]
 
             msg = self.rangevit.load_state_dict(pretrained_state_dict, strict=False)
             print(f'{msg}')

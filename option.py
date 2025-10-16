@@ -54,6 +54,7 @@ class Option(object):
         self.log_frequency = 100
         self.train_result_frequency = self.config.get('train_result_frequency', 100)
         self.use_fp16 = self.config.get('use_fp16', False) # for mixed-precision training
+        self.max_iters_per_epoch = self.config.get('max_iters_per_epoch', None) # limit iterations per epoch for testing
 
 
         # Model config
@@ -93,6 +94,12 @@ class Option(object):
         # Loading pre-trained patch and positional embeddings
         self.reuse_pos_emb = self.config.get('reuse_pos_emb', False)
         self.reuse_patch_emb = self.config.get('reuse_patch_emb', False)
+
+        # MLflow configuration (optional)
+        self.mlflow_config = self.config.get('mlflow', {})
+        self.mlflow_enabled = self.mlflow_config.get('enabled')
+        self.mlflow_experiment = self.mlflow_config.get('experiment')
+        self.mlflow_run_name = self.mlflow_config.get('run_name')
 
 
         # Save results

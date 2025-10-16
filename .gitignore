@@ -5,6 +5,17 @@ save_path*/*
 !save_path/README.md
 
 pretrained_model/*
+!pretrained_model/README.
+
+# Checkpoints
+*.pth
+
+kernels/*
+
+test_output/*
+save_*/
+
+.env
 !pretrained_model/README.md
 
 rangevit

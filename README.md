@@ -33,12 +33,12 @@ In particular, we initialize RangeViT’s backbone with ViTs pretrained (a) on s
 
 | Train data | Test data                 | Pre-trained weights    | mIoU (%)    | Download  | Config |
 |------------| ----------------------- | ---------------------- | ------------| ----------|---------|
-| nuScenes train set | nuScenes val set | Cityscapes             | 75.2        | [RangeViT model](https://github.com/valeoai/rangevit/releases/download/v1/model_nuscenes_cs_init.pth) | [config](https://github.com/valeoai/rangevit/blob/main/config_nusc.yaml) |
-| nuScenes train set | nuScenes val set | IN21k                  | 74.8        | [RangeViT model](https://github.com/valeoai/rangevit/releases/download/v1/model_nuscenes_in21k_init.pth) | [config](https://github.com/valeoai/rangevit/blob/main/config_nusc.yaml) |
-| nuScenes train set | nuScenes val set | DINO                   | 73.3        | [RangeViT model](https://github.com/valeoai/rangevit/releases/download/v1/model_nuscenes_dino_init.pth) | [config](https://github.com/valeoai/rangevit/blob/main/config_nusc.yaml) |
-| nuScenes train set | nuScenes val set | Random                 | 72.4        | [RangeViT model](https://github.com/valeoai/rangevit/releases/download/v1/model_nuscenes_rand_init.pth) | [config](https://github.com/valeoai/rangevit/blob/main/config_nusc.yaml) |
-| SemanticKITTI train+val set | SemanticKITTI test set  | Cityscapes             | 64.0        | [RangeViT model](https://github.com/valeoai/rangevit/releases/download/v1/model_skitti_trainval_cs_init_h256.pth) | [config](https://github.com/valeoai/rangevit/blob/main/config_kitti_trainval.yaml) |
-| SemanticKITTI train set | SemanticKITTI val set  | Cityscapes              | 60.8        | [RangeViT model](https://github.com/valeoai/rangevit/releases/download/v1/model_skitti_train_cs_init_h128.pth) | [config](https://github.com/valeoai/rangevit/blob/main/config_kitti.yaml) |
+| nuScenes train set | nuScenes val set | Cityscapes             | 75.2        | [RangeViT model](https://github.com/valeoai/rangevit/releases/download/v1/model_nuscenes_cs_init.pth) | [config](configs/config_nusc.yaml) |
+| nuScenes train set | nuScenes val set | IN21k                  | 74.8        | [RangeViT model](https://github.com/valeoai/rangevit/releases/download/v1/model_nuscenes_in21k_init.pth) | [config](configs/config_nusc.yaml) |
+| nuScenes train set | nuScenes val set | DINO                   | 73.3        | [RangeViT model](https://github.com/valeoai/rangevit/releases/download/v1/model_nuscenes_dino_init.pth) | [config](configs/config_nusc.yaml) |
+| nuScenes train set | nuScenes val set | Random                 | 72.4        | [RangeViT model](https://github.com/valeoai/rangevit/releases/download/v1/model_nuscenes_rand_init.pth) | [config](configs/config_nusc.yaml) |
+| SemanticKITTI train+val set | SemanticKITTI test set  | Cityscapes             | 64.0        | [RangeViT model](https://github.com/valeoai/rangevit/releases/download/v1/model_skitti_trainval_cs_init_h256.pth) | [config](configs/config_kitti_trainval.yaml) |
+| SemanticKITTI train set | SemanticKITTI val set  | Cityscapes              | 60.8        | [RangeViT model](https://github.com/valeoai/rangevit/releases/download/v1/model_skitti_train_cs_init_h128.pth) | [config](configs/config_kitti.yaml) |
 
 Note that the positional embeddings are initialized with the corresponding pre-trained weights or randomly when training from scratch. The convolutional stem, the decoder and the 3D refiner layer are always randomly initialized.
 
@@ -58,11 +58,11 @@ pip install -r requirements.txt
 
 ## **Training**
 
-To train on nuScenes or on SemanticKITTI, use (and modify if needed) the config file `config_nusc.yaml` or `config_kitti.yaml`, respectively. For instance, to train on nuScenes, run the following command: 
+To train on nuScenes or on SemanticKITTI, use (and modify if needed) the config file `configs/config_nusc.yaml` or `configs/config_kitti.yaml`, respectively. For instance, to train on nuScenes, run the following command:
 
 ```bash
 python -m torch.distributed.launch --nproc_per_node=4 --master_port=63545 \
-    --use_env main.py 'config_nusc.yaml' \
+    --use_env main.py 'configs/config_nusc.yaml' \
     --data_root '<path_to_nuscenes_dataset>' \
     --save_path '<path_to_log>' \
     --pretrained_model '<path_to_image_pretrained_model.pth>'
@@ -73,7 +73,7 @@ The `--pretrained_model` argument specifies the image-pretrained ViT-encoder tha
 Similarly, to train on SemanticKITTI, run the following command:
 ```bash
 python -m torch.distributed.launch --nproc_per_node=4 --master_port=63545 \
-    --use_env main.py 'config_kitti.yaml' \
+    --use_env main.py 'configs/config_kitti.yaml' \
     --data_root '<path_to_nuscenes_dataset>/dataset/sequences/' \
     --save_path '<path_to_log>' \
     --pretrained_model '<path_to_image_pretrained_model.pth>'
@@ -86,7 +86,7 @@ For instance, to evaluate on the nuScenes validation set, run the following comm
 
 ```bash
 python -m torch.distributed.launch --nproc_per_node=1 --master_port=63545 \
-    --use_env main.py 'config_nusc.yaml' \
+    --use_env main.py 'configs/config_nusc.yaml' \
     --data_root '<path_to_nuscenes_dataset>' \
     --save_path '<path_to_log>' \
     --checkpoint '<path_to_pretrained_rangevit_model.pth>' \
@@ -97,7 +97,7 @@ To evaluate on the SemanticKITTI validation set, run the following command (addi
 
 ```bash
 python -m torch.distributed.launch --nproc_per_node=1 --master_port=63545 \
-    --use_env main.py 'config_kitti.yaml' \
+    --use_env main.py 'configs/config_kitti.yaml' \
     --data_root '<path_to_semantic_kitti_dataset>' \
     --save_path '<path_to_log>' \
     --checkpoint '<path_to_pretrained_rangevit_model.pth>' \
