@@ -265,6 +265,8 @@ class Trainer(object):
         total_iter = len(dataloader)
         t_start = time.time()
 
+        log_frequency = max(1, self.settings.log_frequency)
+
         for i, (input_feature, input_label, input_mask) in enumerate(dataloader):
             t_process_start = time.time()
             current_lr = None
@@ -339,7 +341,9 @@ class Trainer(object):
             mean_acc_running = float(mean_acc_tensor)
             mean_recall_running = float(mean_recall_tensor)
 
-            if self.mlflow_manager is not None:
+            should_log = (i % log_frequency == 0) or (i == total_iter - 1)
+
+            if should_log and self.mlflow_manager is not None:
                 step_id = self.iter_steps[mode]
                 self.iter_steps[mode] += 1
                 mlflow_metrics = {
@@ -364,7 +368,7 @@ class Trainer(object):
             t_start = time.time()
 
             # Logging
-            if (i % self.settings.log_frequency == 0) or (i == total_iter-1):
+            if should_log:
                 if self.recorder is not None:
                     log_str = '>>> {} E[{:03d}|{:03d}] I[{:04d}|{:04d}] DT[{:.3f}] PT[{:.3f}] '.format(
                         mode, self.settings.n_epochs, epoch+1, total_iter, i+1, data_cost_time, process_cost_time)
@@ -477,6 +481,8 @@ class Trainer(object):
         total_iter = len(dataloader)
         t_start = time.time()
 
+        log_frequency = max(1, self.settings.log_frequency)
+
         for i, batch_dict in enumerate(dataloader):
             t_process_start = time.time()
             current_lr = None
@@ -564,7 +570,9 @@ class Trainer(object):
             mean_acc_running = float(mean_acc_tensor)
             mean_recall_running = float(mean_recall_tensor)
 
-            if self.mlflow_manager is not None:
+            should_log = (i % log_frequency == 0) or (i == total_iter - 1)
+
+            if should_log and self.mlflow_manager is not None:
                 step_id = self.iter_steps[mode]
                 self.iter_steps[mode] += 1
                 mlflow_metrics = {
@@ -620,7 +628,7 @@ class Trainer(object):
             t_start = time.time()
 
             # Logging
-            if (i % self.settings.log_frequency == 0) or (i == total_iter-1):
+            if should_log:
                 if self.recorder is not None:
                     log_str = '>>> {} E[{:03d}|{:03d}] I[{:04d}|{:04d}] DT[{:.3f}] PT[{:.3f}] '.format(
                         mode, self.settings.n_epochs, epoch+1, total_iter, i+1, data_cost_time, process_cost_time)
