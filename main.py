@@ -96,7 +96,7 @@ class Experiment(object):
         self.model = self._initModel()
 
         # Init trainer
-        # self.trainer = Trainer(self.settings, self.model, self.recorder, self.mlflow_manager)
+        self.trainer = Trainer(self.settings, self.model, self.recorder, self.mlflow_manager)
 
         # Load checkpoint
         self._loadCheckpoint()
@@ -366,5 +366,4 @@ if __name__ == '__main__':
 
     mlflow_utils.setup()
     exp = Experiment(settings)
-    with mlflow_utils.start_run(run_name=mlflow_utils.default_run_name('rangevit', getattr(settings, 'id', None))):
-        exp.run()
+    exp.run()
