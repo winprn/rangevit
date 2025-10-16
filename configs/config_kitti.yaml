@@ -6,12 +6,12 @@ id: 'exp_kitti'
 mlflow:
     enabled: true
     experiment: 'rangevit'
-    run_name: 'rangevit_semantickitti_baseline'            # overrides default if set
+    run_name: '[trainval] rangevit_small_noft_trainval'            # overrides default if set
 
 # Data config
 dataset: 'SemanticKitti'
 n_classes: 20 # 19 + 1(ignored)
-use_trainval: false # set to true if you want to train on train-val of SemanticKITTI.
+use_trainval: true # set to true if you want to train on train-val of SemanticKITTI.
 
 # Train config
 has_label: true
@@ -50,7 +50,7 @@ use_kpconv: true
 
 # Checkpoint model
 # checkpoint: null
-pretrained_model: "../pretrained_model/vit_small_p16_384_ft.pth"
+pretrained_model: "../pretrained_model/vit_small_p16_384.pth"
 
 # Loading pre-trained patch and positional embeddings
 reuse_pos_emb: true

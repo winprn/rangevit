@@ -89,6 +89,27 @@ def log_artifact(path: str, artifact_path: Optional[str] = None) -> None:
         pass
 
 
+def log_input_dataset(name: Optional[str], context: str = "training") -> None:
+    """Log a dataset input to the current MLflow run.
+
+    Uses mlflow.data.dataset.Dataset to construct a lightweight dataset object
+    and logs it via mlflow.log_input. Silently no-ops if MLflow is unavailable
+    or if the provided name is empty/None.
+    """
+    if not name:
+        return
+    mlflow = _import_mlflow()
+    if mlflow is None:
+        return
+    try:
+        from mlflow.data.dataset import Dataset  # type: ignore
+        ds = Dataset(name=str(name))
+        mlflow.log_input(ds, context=context)
+    except Exception:
+        # Best-effort logging; ignore any MLflow errors
+        pass
+
+
 def log_pytorch_model(model, artifact_path: str = "model", registered_model_name: Optional[str] = None) -> None:
     mlflow = _import_mlflow()
     if mlflow is None:

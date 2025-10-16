@@ -488,6 +488,7 @@ def _run_pipeline(
         if mlflow_enabled:
             mlflow_utils.set_tags(mlflow_utils.collect_tags_from_settings(settings))
             mlflow_utils.log_params(mlflow_utils.collect_params_from_settings(settings))
+            mlflow_utils.log_input_dataset(getattr(settings, 'dataset', "SemanticKitti"), context="training")
 
         run_start = time.time()
         start_context_lines = _build_run_context_lines(args, settings)
