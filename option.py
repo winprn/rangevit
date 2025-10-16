@@ -54,6 +54,7 @@ class Option(object):
         self.log_frequency = 100
         self.save_frequent = self.config.get('save_frequent', 0)
         self.train_result_frequency = self.config.get('train_result_frequency', 100)
+        self.boundary_loss_weight = float(self.config.get('boundary_loss_weight', 0.0))
         self.use_fp16 = self.config.get('use_fp16', False) # for mixed-precision training
         self.max_iters_per_epoch = self.config.get('max_iters_per_epoch', None) # limit iterations per epoch for testing
 

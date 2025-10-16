@@ -174,6 +174,13 @@ def _prepare_settings(args: argparse.Namespace) -> Option:
         raise ValueError(f"Invalid save_frequent value: {save_frequent}. Expected a non-negative integer.")
     settings.save_frequent = save_frequent
 
+    boundary_loss_weight = getattr(settings, 'boundary_loss_weight', 0.0)
+    if args.boundary_loss_weight is not None:
+        boundary_loss_weight = args.boundary_loss_weight
+    if boundary_loss_weight < 0:
+        raise ValueError(f"Invalid boundary_loss_weight value: {boundary_loss_weight}. Expected a non-negative float.")
+    settings.boundary_loss_weight = boundary_loss_weight
+
     # No patch and positional embeddings are loaded when training from scratch.
     if settings.pretrained_model is None:
         settings.reuse_patch_emb = False
@@ -586,6 +593,8 @@ if __name__ == '__main__':
     parser.add_argument('--log_frequency', type=int, default=100, help='logging frequency')
     parser.add_argument('--save_frequent', type=int, default=None,
                         help='frequency (in epochs) to save checkpoints as epoch_*.pth; 0 disables extra saves')
+    parser.add_argument('--boundary_loss_weight', type=float, default=None,
+                        help='weight for boundary loss added to the total loss')
     parser.add_argument('--seed', type=int, default=1, help='random seed')
 
     args = parser.parse_args()

@@ -229,8 +229,57 @@ class Trainer(object):
     def compute_losses(self, output, output_softmax, label, mask):
         loss_lovasz = self.criterion['lovasz'](output_softmax, label)
         loss_focal = self.criterion['focal_loss'](output_softmax, label, mask=mask)
-        total_loss = loss_focal + loss_lovasz
-        return total_loss, loss_lovasz, loss_focal
+
+        boundary_loss_weight = getattr(self.settings, 'boundary_loss_weight', 0.0)
+        loss_boundary = output_softmax.new_tensor(0.0)
+        if boundary_loss_weight > 0:
+            loss_boundary = self._compute_boundary_loss(output_softmax, label, mask)
+
+        total_loss = loss_focal + loss_lovasz + boundary_loss_weight * loss_boundary
+        return total_loss, loss_lovasz, loss_focal, loss_boundary
+
+    def _compute_boundary_loss(self, prob_map, label, mask):
+        """
+        Compute boundary loss as the L1 distance between predicted probability boundaries and
+        ground-truth one-hot boundaries, masked to ignore invalid pixels.
+        """
+        num_classes = prob_map.shape[1]
+        valid_prob_map = prob_map[:, 1:, :, :]  # drop ignore class channel
+
+        label_clamped = label.clamp(min=0, max=num_classes - 1)
+        one_hot = torch.nn.functional.one_hot(label_clamped, num_classes=num_classes).permute(0, 3, 1, 2).float()
+        one_hot[:, 0, :, :] = 0.0  # ignore unlabeled class
+        valid_one_hot = one_hot[:, 1:, :, :]
+
+        valid_mask = mask.unsqueeze(1)
+        valid_prob_map = valid_prob_map * valid_mask
+        valid_one_hot = valid_one_hot * valid_mask
+
+        boundary_pred = self._boundary_map(valid_prob_map)
+        boundary_gt = self._boundary_map(valid_one_hot)
+
+        diff = torch.abs(boundary_pred - boundary_gt)
+        masked_diff = diff * valid_mask
+
+        normalizer = valid_mask.sum()
+        if normalizer <= 0:
+            return prob_map.new_tensor(0.0)
+        return masked_diff.sum() / normalizer
+
+    @staticmethod
+    def _boundary_map(tensor):
+        channels = tensor.size(1)
+        kernel_x = tensor.new_zeros((channels, 1, 1, 2))
+        kernel_x[:, :, 0, 0] = 1.0
+        kernel_x[:, :, 0, 1] = -1.0
+        kernel_y = tensor.new_zeros((channels, 1, 2, 1))
+        kernel_y[:, :, 0, 0] = 1.0
+        kernel_y[:, :, 1, 0] = -1.0
+
+        grad_x = torch.nn.functional.conv2d(tensor, kernel_x, padding=(0, 1), groups=channels)
+        grad_y = torch.nn.functional.conv2d(tensor, kernel_y, padding=(1, 0), groups=channels)
+
+        return torch.sqrt(grad_x * grad_x + grad_y * grad_y + 1e-6)
 
 
     def run(self, epoch, mode='Train', print_results=False, save_results_path=None):
@@ -293,7 +342,7 @@ class Trainer(object):
                     output_softmax = F.softmax(output, dim=1)
 
                     # Loss calculation
-                    total_loss, loss_lovasz, loss_focal = self.compute_losses(
+                    total_loss, loss_lovasz, loss_focal, loss_boundary = self.compute_losses(
                         output, output_softmax, input_label, input_mask)
 
                 # Backward
@@ -330,7 +379,7 @@ class Trainer(object):
                     output_softmax = F.softmax(output, dim=1)
 
                     # Loss calculation
-                    total_loss, loss_lovasz, loss_focal = self.compute_losses(
+                    total_loss, loss_lovasz, loss_focal, loss_boundary = self.compute_losses(
                         output, output_softmax, input_label, input_mask)
 
 
@@ -367,6 +416,8 @@ class Trainer(object):
                         mode, self.settings.n_epochs, epoch+1, total_iter, i+1, data_cost_time, process_cost_time)
                     log_str += 'LR {} Loss {:0.4f} Acc {:0.4f} IOU {:0.4F} '.format(
                         lr_value, loss.item(), mean_acc.item(), mean_iou.item())
+                    if getattr(self.settings, 'boundary_loss_weight', 0.0) > 0:
+                        log_str += 'BND {:0.4f} '.format(loss_boundary.item())
                     log_str += 'RT {}'.format(remain_time)
                     self.recorder.logger.info(log_str)
 
@@ -379,6 +430,8 @@ class Trainer(object):
                     }
                     if mode == 'Train' and lr_value is not None:
                         metrics_payload['lr'] = float(lr_value)
+                    if getattr(self.settings, 'boundary_loss_weight', 0.0) > 0:
+                        metrics_payload['loss_boundary'] = float(loss_boundary.item())
                     self.mlflow_step_logger(mode, epoch, step_index, metrics_payload)
 
         with torch.no_grad():
@@ -400,6 +453,7 @@ class Trainer(object):
                 'loss_meter_avg': loss_meter.avg,
                 'loss_focal': loss_focal,
                 'loss_lovasz': loss_lovasz,
+                'loss_boundary': loss_boundary,
             }
 
         # Print results
@@ -509,7 +563,7 @@ class Trainer(object):
                     output3d_softmax = F.softmax(output3d, dim=1)
 
                     # Loss calculation
-                    total_loss, loss_lovasz, loss_focal = self.compute_losses(
+                    total_loss, loss_lovasz, loss_focal, loss_boundary = self.compute_losses(
                         output3d, output3d_softmax, labels3d, mask_3d)
 
                 # Backward
@@ -551,7 +605,7 @@ class Trainer(object):
                     output3d_softmax = F.softmax(output3d, dim=1)
 
                     # Loss calculation
-                    total_loss, loss_lovasz, loss_focal = self.compute_losses(
+                    total_loss, loss_lovasz, loss_focal, loss_boundary = self.compute_losses(
                         output3d, output3d_softmax, labels3d, mask_3d)
 
             # Measure IoU and record loss
@@ -619,6 +673,8 @@ class Trainer(object):
                         mode, self.settings.n_epochs, epoch+1, total_iter, i+1, data_cost_time, process_cost_time)
                     log_str += 'LR {} Loss {:0.4f} Acc {:0.4f} IOU {:0.4F} '.format(
                         lr_value, loss.item(), mean_acc.item(), mean_iou.item())
+                    if getattr(self.settings, 'boundary_loss_weight', 0.0) > 0:
+                        log_str += 'BND {:0.4f} '.format(loss_boundary.item())
                     log_str += 'RT {} '.format(remain_time)
                     log_str += 'RT PER EPOCH {}'.format(remain_time_1epoch)
                     self.recorder.logger.info(log_str)
@@ -632,6 +688,8 @@ class Trainer(object):
                     }
                     if mode == 'Train' and lr_value is not None:
                         metrics_payload['lr'] = float(lr_value)
+                    if getattr(self.settings, 'boundary_loss_weight', 0.0) > 0:
+                        metrics_payload['loss_boundary'] = float(loss_boundary.item())
                     self.mlflow_step_logger(mode, epoch, step_index, metrics_payload)
 
         with torch.no_grad():
@@ -653,6 +711,7 @@ class Trainer(object):
                 'loss_meter_avg': loss_meter.avg,
                 'loss_focal': loss_focal,
                 'loss_lovasz': loss_lovasz,
+                'loss_boundary': loss_boundary,
             }
 
         # Print results
@@ -689,6 +748,8 @@ class Trainer(object):
                 # Results at the end of the epoch
                 log_str = '>>> {} Loss {:0.4f} Acc {:0.4f} IOU {:0.4F} Recall {:0.4f}'.format(
                     mode, loss_meter.avg, mean_acc.item(), mean_iou.item(), mean_recall.item())
+                if getattr(self.settings, 'boundary_loss_weight', 0.0) > 0:
+                    log_str += ' BND {:0.4f}'.format(loss_boundary.item())
                 self.recorder.logger.info(log_str)
             else:
                 self.recorder.logger.info(f'>>> {mode} on test split completed - predictions saved')
