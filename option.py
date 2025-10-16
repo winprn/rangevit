@@ -37,7 +37,7 @@ class Option(object):
         # Data config
         self.dataset = self.config['dataset']
         self.n_classes = self.config['n_classes']
-        self.data_root = None
+        self.data_root = self.config.get('data_root')
         self.has_label = self.config['has_label']
         self.use_mini_version = False
         self.use_trainval = self.config.get('use_trainval', False)

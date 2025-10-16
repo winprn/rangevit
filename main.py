@@ -149,7 +149,14 @@ def _prepare_settings(args: argparse.Namespace) -> Option:
         settings.window_stride = [settings.window_stride[0], args.window_stride]
         print(f'WINDOW STRIDE: {settings.window_stride}')
 
-    settings.data_root = args.data_root
+    data_root = settings.data_root
+    if args.data_root is not None:
+        data_root = args.data_root
+    if data_root is None:
+        raise ValueError(
+            "Data root is not specified. Provide it via the --data_root flag or the 'data_root' field in the config."
+        )
+    settings.data_root = data_root
     settings.use_mini_version = args.mini
     settings.val_only = args.val_only
     settings.test_split = args.test_split
@@ -556,8 +563,8 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Experiment Options')
     parser.add_argument('config_path', type=str, metavar='config_path',
                         help='path of config file, type: string')
-    parser.add_argument('--data_root', type=str, required=True,
-                        help='path to the data, type: string')
+    parser.add_argument('--data_root', type=str, default=None,
+                        help='path to the data (overrides config data_root if set)')
     parser.add_argument('--save_path', type=str, default=None,
                         help='path to save outputs (overrides config save_path if set)')
     parser.add_argument('--id', type=str,

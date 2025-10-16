@@ -12,6 +12,7 @@ mlflow:
 dataset: 'SemanticKitti'
 n_classes: 20 # 19 + 1(ignored)
 use_trainval: true # set to true if you want to train on train-val of SemanticKITTI.
+data_root: "../dataset/SemanticKitti/data_odometry_velodyne/dataset/sequences"
 
 # Train config
 has_label: true
