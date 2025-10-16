@@ -79,6 +79,23 @@ python -m torch.distributed.launch --nproc_per_node=4 --master_port=63545 \
     --pretrained_model '<path_to_image_pretrained_model.pth>'
 ```
 
+## **MLflow Integration**
+
+Set the `mlflow` section in the configuration file to enable experiment tracking. A minimal example is:
+
+```yaml
+mlflow:
+  enable: true
+  tracking_uri: 'file:./mlruns'
+  experiment_name: 'RangeViT'
+  run_name: 'my_run'
+  log_checkpoints: true
+  log_code_snapshot: true
+```
+
+When enabled, the training loop logs epoch metrics, configuration files, code snapshots and the best checkpoints to the configured MLflow tracking server.
+Both the original YAML file (as provided via the CLI) and a snapshot of the parsed configuration are stored under the `config/` artifact directory for reference.
+
 ## **Evaluation**
 
 The same config files can be used for evaluating the pre-trained RangeViT models. 
