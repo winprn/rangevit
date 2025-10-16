@@ -34,10 +34,11 @@ from utils.tools import Recorder
 
 
 class Trainer(object):
-    def __init__(self, settings: Option, model: nn.Module, recorder=None):
+    def __init__(self, settings: Option, model: nn.Module, recorder=None, mlflow_manager=None):
         # Init params
         self.settings = settings
         self.recorder = recorder
+        self.mlflow_manager = mlflow_manager
         self.model = model.cuda()
         self.remain_time = tools.RemainTime(self.settings.n_epochs)
 
@@ -378,6 +379,11 @@ class Trainer(object):
                 'loss_lovasz': loss_lovasz,
             }
 
+        current_lr = None
+        for g in self.optimizer.param_groups:
+            current_lr = g['lr']
+            break
+
         # Print results
         if self.recorder is not None:
             # Print train pixel-wise evaluation results
@@ -405,13 +411,24 @@ class Trainer(object):
                                recorder=self.recorder,
                                metrics_dict=metrics_dict,
                                loss_dict=loss_dict,
-                               lr=lr,
+                               lr=current_lr,
                                mapped_cls_name=self.mapped_cls_name)
 
             # Results at the end of the epoch
             log_str = '>>> {} Loss {:0.4f} Acc {:0.4f} IOU {:0.4F} Recall {:0.4f}'.format(
                 mode, loss_meter.avg, mean_acc.item(), mean_iou.item(), mean_recall.item())
             self.recorder.logger.info(log_str)
+
+        if self.mlflow_manager is not None:
+            mlflow_metrics = {
+                f'{mode.lower()}_loss': loss_meter.avg,
+                f'{mode.lower()}_acc': mean_acc.item(),
+                f'{mode.lower()}_iou': mean_iou.item(),
+                f'{mode.lower()}_recall': mean_recall.item(),
+            }
+            if (mode == 'Train') and (current_lr is not None):
+                mlflow_metrics[f'{mode.lower()}_lr'] = current_lr
+            self.mlflow_manager.log_metrics(mlflow_metrics, step=epoch)
 
 
         result_metrics = {
@@ -609,6 +626,11 @@ class Trainer(object):
                 'loss_lovasz': loss_lovasz,
             }
 
+        current_lr = None
+        for g in self.optimizer.param_groups:
+            current_lr = g['lr']
+            break
+
         # Print results
         if self.recorder is not None:
             # Print train point-wise results
@@ -636,13 +658,24 @@ class Trainer(object):
                                recorder=self.recorder,
                                metrics_dict=metrics_dict,
                                loss_dict=loss_dict,
-                               lr=lr,
+                               lr=current_lr,
                                mapped_cls_name=self.mapped_cls_name)
 
             # Results at the end of the epoch
             log_str = '>>> {} Loss {:0.4f} Acc {:0.4f} IOU {:0.4F} Recall {:0.4f}'.format(
                 mode, loss_meter.avg, mean_acc.item(), mean_iou.item(), mean_recall.item())
             self.recorder.logger.info(log_str)
+
+        if self.mlflow_manager is not None:
+            mlflow_metrics = {
+                f'{mode.lower()}_loss': loss_meter.avg,
+                f'{mode.lower()}_acc': mean_acc.item(),
+                f'{mode.lower()}_iou': mean_iou.item(),
+                f'{mode.lower()}_recall': mean_recall.item(),
+            }
+            if (mode == 'Train') and (current_lr is not None):
+                mlflow_metrics[f'{mode.lower()}_lr'] = current_lr
+            self.mlflow_manager.log_metrics(mlflow_metrics, step=epoch)
 
 
         result_metrics = {

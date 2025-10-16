@@ -102,6 +102,20 @@ class Option(object):
         self.save_path = args.save_path
         self.save_path = os.path.join(self.save_path, 'log_{}'.format(self.id))
 
+        # MLflow config
+        mlflow_cfg = self.config.get('mlflow', {})
+        self.mlflow_enable = mlflow_cfg.get('enable', False)
+        self.mlflow_tracking_uri = mlflow_cfg.get('tracking_uri', None)
+        self.mlflow_experiment_name = mlflow_cfg.get(
+            'experiment_name', 'RangeViT')
+        self.mlflow_run_name = mlflow_cfg.get('run_name', self.id)
+        self.mlflow_nested = mlflow_cfg.get('nested', False)
+        tags_cfg = mlflow_cfg.get('tags', {})
+        self.mlflow_tags = tags_cfg if isinstance(tags_cfg, dict) else {}
+        self.mlflow_description = mlflow_cfg.get('description', None)
+        self.mlflow_log_checkpoints = mlflow_cfg.get('log_checkpoints', True)
+        self.mlflow_log_code_snapshot = mlflow_cfg.get(
+            'log_code_snapshot', True)
 
         # -----------------------------------------------------
         # Check options

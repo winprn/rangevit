@@ -26,6 +26,7 @@ import utils
 from utils import mlflow_utils
 import utils.tools as tools
 from models.model_utils import resize_pos_embed
+from utils.tools.mlflow_utils import MLflowManager
 
 
 def build_rangevit_model(settings, pretrained_path=None):
@@ -63,6 +64,13 @@ class Experiment(object):
 
         self.settings.check_path()
 
+        # Init MLflow
+        self.mlflow_manager = MLflowManager(self.settings)
+        self.mlflow_manager.start_run()
+        self.mlflow_manager.log_settings()
+        self.mlflow_manager.log_artifact(self.settings.config_path, artifact_path='config')
+        self.mlflow_manager.log_config(self.settings.config, artifact_path='config', filename='config_snapshot.yaml')
+
         # Set random seed
         torch.manual_seed(self.settings.seed)
         torch.cuda.manual_seed(self.settings.seed)
@@ -76,16 +84,19 @@ class Experiment(object):
         self.recorder = None
         if tools.is_main_process():
             self.recorder = utils.tools.Recorder(self.settings, self.settings.save_path)
+            if self.settings.mlflow_log_code_snapshot:
+                self.mlflow_manager.log_artifact(self.recorder.code_path, artifact_path='code')
 
         self.prediction_path = os.path.join(self.settings.save_path, 'preds')
 
         self.epoch_start = 0
+        self._mlflow_finalized = False
 
         # Init model
         self.model = self._initModel()
 
         # Init trainer
-        self.trainer = Trainer(self.settings, self.model, self.recorder)
+        # self.trainer = Trainer(self.settings, self.model, self.recorder, self.mlflow_manager)
 
         # Load checkpoint
         self._loadCheckpoint()
@@ -192,6 +203,14 @@ class Experiment(object):
                 if ('fp16_scaler' in checkpoint_data) and (checkpoint_data['fp16_scaler'] is not None):
                     self.trainer.fp16_scaler.load_state_dict(checkpoint_data['fp16_scaler'])
 
+    def _finalize_mlflow(self, status='FINISHED'):
+        if self._mlflow_finalized:
+            return
+        self._mlflow_finalized = True
+        if self.mlflow_manager is not None:
+            if self.recorder is not None:
+                self.mlflow_manager.log_artifact(self.recorder.log_path, artifact_path='logs')
+            self.mlflow_manager.end_run(status=status)
 
     def run(self):
         t_start = time.time()
@@ -206,6 +225,8 @@ class Experiment(object):
             if self.recorder is not None:
                 self.recorder.logger.info('==== Total cost time: {}'.format(
                     datetime.timedelta(seconds=cost_time)))
+            self.mlflow_manager.log_metrics({'total_runtime_sec': cost_time}, step=self.epoch_start)
+            self._finalize_mlflow()
             return
         best_val_result = None
 
@@ -250,6 +271,11 @@ class Experiment(object):
                             torch.save(checkpoint_data, saved_path)
                             if self.epoch_start > 0:
                                 torch.save(checkpoint_data, saved_path_start)
+                            self.mlflow_manager.log_metrics({f'best_{k}': v}, step=epoch)
+                            if self.settings.mlflow_log_checkpoints:
+                                self.mlflow_manager.log_artifact(saved_path, artifact_path='checkpoints')
+                                if self.epoch_start > 0:
+                                    self.mlflow_manager.log_artifact(saved_path_start, artifact_path='checkpoints')
 
             # Save checkpoint
             if self.recorder is not None:
@@ -277,6 +303,8 @@ class Experiment(object):
         if self.recorder is not None:
             self.recorder.logger.info('=== Total cost time: {}'.format(
                 datetime.timedelta(seconds=cost_time)))
+        self.mlflow_manager.log_metrics({'total_runtime_sec': cost_time}, step=self.settings.n_epochs)
+        self._finalize_mlflow()
 
 
 if __name__ == '__main__':

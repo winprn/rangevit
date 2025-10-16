@@ -2,6 +2,7 @@ einops
 scipy
 pyyaml
 tensorboardX
+mlflow
 prettytable
 timm
 numpy==1.26.4
