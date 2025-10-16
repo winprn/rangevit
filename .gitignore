@@ -1,7 +1,7 @@
 *.pyc
 *core.*
 __pycache__/
-save_path*/*
+save_path/*
 !save_path/README.md
 
 pretrained_model/*
@@ -16,6 +16,3 @@ test_output/*
 save_*/
 
 .env
-!pretrained_model/README.md
-
-rangevit
