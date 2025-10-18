@@ -20,7 +20,6 @@ import torchvision.transforms.functional as TF
 from scipy.spatial.ckdtree import cKDTree as kdtree
 import os
 import cv2
-import sys
 import yaml
 
 from .preprocess import augmentor, projection
@@ -92,6 +91,16 @@ class RangeViewLoader(Dataset):
             self.wpd_augmentor = None
             self.p_rangemix = 0.0
 
+        mcf_config = self.config.get('mcf', {})
+        self.use_mcf = self.is_train and mcf_config.get('enabled', False)
+        self.mcf_num_subclouds = int(mcf_config.get('num_subclouds', 3))
+        self.mcf_donor_order = mcf_config.get('donor_order', 'sequential')
+        if self.mcf_num_subclouds < 2:
+            self.use_mcf = False
+        if self.use_mcf:
+            print(f'Enabling Multi-Cloud Fusion (subclouds={self.mcf_num_subclouds}, donor_order={self.mcf_donor_order})')
+        self.mcf_debug = bool(mcf_config.get('debug', False))
+
         self.proj_p_hflip = augment_config.get('p_hflip', 0.0)
         if self.proj_p_hflip > 0.0:
             print(f'Horizontal flip of range projections with p={self.proj_p_hflip}')
@@ -127,7 +136,165 @@ class RangeViewLoader(Dataset):
                               self.config['original_image_size'][1]))
             ])
 
-        # self.get_item_for_kpconv(0)
+        self.get_item_for_kpconv(235)
+
+    def _project_pointcloud(self, pointcloud, mapped_sem_label):
+
+        proj_pointcloud, proj_range, proj_idx, _ = self.projection.doProjection(pointcloud)
+        cached = self.projection.cached_data
+        px = cached.get('px')
+        py = cached.get('py')
+        uproj_x = cached.get('uproj_x_idx')
+        uproj_y = cached.get('uproj_y_idx')
+        uproj_depth = cached.get('uproj_depth')
+
+        mask = proj_idx >= 0
+        proj_mask_tensor = torch.from_numpy(mask).bool()
+        proj_sem_label = np.zeros((mask.shape[0], mask.shape[1]), dtype=np.float32)
+        proj_sem_label[mask] = mapped_sem_label[proj_idx[mask]]
+        proj_sem_label_tensor = torch.from_numpy(proj_sem_label)
+        proj_sem_label_tensor = proj_sem_label_tensor * proj_mask_tensor.float()
+
+        proj_range_tensor = torch.from_numpy(proj_range).float()
+        proj_xyz_tensor = torch.from_numpy(proj_pointcloud[..., :3]).float()
+        proj_intensity_tensor = torch.from_numpy(proj_pointcloud[..., 3]).float()
+        proj_intensity_tensor = proj_intensity_tensor.ne(-1).float() * proj_intensity_tensor
+
+        proj_feature_tensor = torch.cat(
+            [proj_range_tensor.unsqueeze(0),
+             proj_xyz_tensor.permute(2, 0, 1),
+             proj_intensity_tensor.unsqueeze(0)], 0)
+
+        return {
+            'features': proj_feature_tensor,
+            'labels': proj_sem_label_tensor,
+            'mask': proj_mask_tensor,
+            'range': proj_range_tensor,
+            'proj_idx': proj_idx,
+            'px': px.copy() if px is not None else None,
+            'py': py.copy() if py is not None else None,
+            'uproj_x_idx': uproj_x.copy() if uproj_x is not None else None,
+            'uproj_y_idx': uproj_y.copy() if uproj_y is not None else None,
+            'uproj_depth': uproj_depth.copy() if uproj_depth is not None else None,
+        }
+
+    def _build_subcloud_projections(self, pointcloud, mapped_sem_label):
+        if not self.use_mcf or self.mcf_num_subclouds <= 1:
+            return [self._project_pointcloud(pointcloud, mapped_sem_label)]
+
+        x, y = pointcloud[:, 0], pointcloud[:, 1]
+        yaw = np.mod(-np.arctan2(y, x), 2 * np.pi)
+        bin_edges = np.linspace(0, 2 * np.pi, self.mcf_num_subclouds + 1)
+
+        subclouds = []
+        for idx in range(self.mcf_num_subclouds):
+            start = bin_edges[idx]
+            end = bin_edges[idx + 1]
+            if idx == self.mcf_num_subclouds - 1:
+                mask = (yaw >= start) & (yaw <= end)
+            else:
+                mask = (yaw >= start) & (yaw < end)
+
+            if not np.any(mask):
+                continue
+
+            sub_pointcloud = pointcloud[mask]
+            sub_labels = mapped_sem_label[mask]
+            subclouds.append(self._project_pointcloud(sub_pointcloud, sub_labels))
+
+        if len(subclouds) == 0:
+            subclouds.append(self._project_pointcloud(pointcloud, mapped_sem_label))
+
+        return subclouds
+
+    def _apply_mcf(self, subclouds):
+        debug_enabled = self.use_mcf and self.mcf_debug
+        if debug_enabled:
+            def occ(mask):
+                return mask.float().mean().item() * 100.0 if mask.numel() > 0 else 0.0
+
+            occ_str = ', '.join(
+                f'{idx}:{occ(sc["mask"].bool() if sc["mask"].dtype != torch.bool else sc["mask"]):.2f}%'
+                for idx, sc in enumerate(subclouds)
+            )
+            print(f'[MCF] Subcloud occupancies -> {occ_str}')
+
+        valid_indices = [i for i, sc in enumerate(subclouds) if sc['mask'].any()]
+
+        if len(valid_indices) == 0:
+            # Fall back to the first subcloud (already zero-masked)
+            sc = subclouds[0]
+            mask_bool = sc['mask'].bool()
+            mask_float = mask_bool.float()
+            features = sc['features'] * mask_float.unsqueeze(0)
+            labels = sc['labels'] * mask_float
+            if debug_enabled:
+                print('[MCF] No valid subclouds; falling back to primary projection.')
+            return features, labels, mask_bool, 0
+
+        if len(valid_indices) == 1 or not self.use_mcf:
+            idx = valid_indices[0]
+            sc = subclouds[idx]
+            mask_bool = sc['mask'].bool()
+            mask_float = mask_bool.float()
+            features = sc['features'] * mask_float.unsqueeze(0)
+            labels = sc['labels'] * mask_float
+            if debug_enabled:
+                single_occ = mask_float.mean().item() * 100.0
+                print(f'[MCF] Single valid subcloud {idx}; occupancy {single_occ:.2f}%')
+            return features, labels, mask_bool, idx
+
+        selected_idx = int(np.random.choice(valid_indices))
+        target = subclouds[selected_idx]
+        fused_features = target['features'].clone()
+        fused_labels = target['labels'].clone()
+        fused_mask = target['mask'].clone().bool()
+
+        if debug_enabled:
+            base_occ = fused_mask.float().mean().item() * 100.0
+            print(f'[MCF] Selected target subcloud {selected_idx} with occupancy {base_occ:.2f}%')
+
+        donor_indices = [i for i in valid_indices if i != selected_idx]
+        if self.mcf_donor_order == 'random':
+            np.random.shuffle(donor_indices)
+
+        for donor_idx in donor_indices:
+            donor = subclouds[donor_idx]
+            donor_mask = donor['mask'].bool()
+            fill_mask = donor_mask & (~fused_mask)
+            if debug_enabled:
+                donor_occ = donor_mask.float().mean().item() * 100.0
+                fillable = fill_mask.float().mean().item() * 100.0
+                print(f'[MCF] Donor {donor_idx}: occ={donor_occ:.2f}% fillable={fillable:.2f}%')
+            if fill_mask.any():
+                fused_features[:, fill_mask] = donor['features'][:, fill_mask]
+                fused_labels[fill_mask] = donor['labels'][fill_mask]
+                fused_mask[fill_mask] = True
+
+                if (~fused_mask).sum() == 0:
+                    if debug_enabled:
+                        print('[MCF] Target fully filled; early exit.')
+                    break
+
+        fused_mask_float = fused_mask.float()
+        fused_features = fused_features * fused_mask_float.unsqueeze(0)
+        fused_labels = fused_labels * fused_mask_float
+
+        if debug_enabled:
+            final_occ = fused_mask_float.mean().item() * 100.0
+            print(f'[MCF] Final target occupancy {final_occ:.2f}% (gain {final_occ - base_occ:.2f}%)')
+
+        return fused_features, fused_labels, fused_mask, selected_idx
+
+    def _normalize_and_stack(self, features, labels, mask_bool):
+        mask_float = mask_bool.float()
+        norm_features = (features - self.proj_img_mean[:, None, None]) / self.proj_img_stds[:, None, None]
+        norm_features = norm_features * mask_float.unsqueeze(0)
+        masked_labels = labels * mask_float
+        return torch.cat(
+            (norm_features,
+             masked_labels.unsqueeze(0),
+             mask_float.unsqueeze(0)), dim=0)
 
     def get_item_for_kpconv(self, index):
         '''
@@ -140,169 +307,64 @@ class RangeViewLoader(Dataset):
         sem_label = self.dataset.labelMapping(sem_label)
 
         if self.is_train and (self.scan_proj is False):
-            mix_index = (index + 60) % len(self.dataset)
             mix_index = np.random.randint(0, len(self.dataset))
             pointcloud_b, sem_label_b, _ = self.dataset.loadDataByIndex(mix_index)
             sem_label_b = self.dataset.labelMapping(sem_label_b)
-            # print(f'PolaMix 0, {mix_index}')
             pointcloud, sem_label = self.augmentor.polarmix(pointcloud, sem_label, pointcloud_b, sem_label_b)
             points_xyz = pointcloud[:, :3]
-            # pointcloud = self.augmentor.doAugmentation(pointcloud)  # n, 4
 
-        proj_pointcloud, proj_range, proj_idx, proj_mask = self.projection.doProjection(pointcloud)
-        px, py = self.projection.cached_data['px'], self.projection.cached_data['py']
+        full_projection = self._project_pointcloud(pointcloud, sem_label)
+        subclouds = self._build_subcloud_projections(pointcloud, sem_label)
+        features, labels, mask_bool, _ = self._apply_mcf(subclouds)
 
-        proj_mask_tensor = torch.from_numpy(proj_mask)
-        mask = proj_idx > 0
-        proj_sem_label = np.zeros((proj_mask.shape[0], proj_mask.shape[1]), dtype=np.float32)
-        proj_sem_label[mask] = sem_label[proj_idx[mask]]
-        proj_sem_label_tensor = torch.from_numpy(proj_sem_label)
-        proj_sem_label_tensor = proj_sem_label_tensor * proj_mask_tensor.float()
+        range_tensor = features[0].clone()
+        proj_range_np = range_tensor.cpu().numpy()
 
-        proj_range_tensor = torch.from_numpy(proj_range)
-        proj_xyz_tensor = torch.from_numpy(proj_pointcloud[..., :3])
-        proj_intensity_tensor = torch.from_numpy(proj_pointcloud[..., 3])
-        proj_intensity_tensor = proj_intensity_tensor.ne(-1).float() * proj_intensity_tensor
-        proj_existence_tensor = proj_mask_tensor.float()
-        # proj_feature_tensor = torch.cat(
-        #     [proj_range_tensor.unsqueeze(0), proj_xyz_tensor.permute(2, 0, 1), proj_intensity_tensor.unsqueeze(0), proj_existence_tensor.unsqueeze(0)], 0)
-        proj_feature_tensor = torch.cat(
-            [proj_range_tensor.unsqueeze(0), proj_xyz_tensor.permute(2, 0, 1), proj_intensity_tensor.unsqueeze(0)], 0)
-
-        # Apply WPD augmentation (before normalization)
         if self.is_train and self.wpd_augmentor is not None:
-            # Sample a donor frame
             donor_index = np.random.randint(0, len(self.dataset))
             pointcloud_donor, sem_label_donor, _ = self.dataset.loadDataByIndex(donor_index)
             sem_label_donor = self.dataset.labelMapping(sem_label_donor)
 
-            # Apply standard augmentations to donor
-            # pointcloud_donor = self.augmentor.doAugmentation(pointcloud_donor)
+            donor_subclouds = self._build_subcloud_projections(pointcloud_donor, sem_label_donor)
+            donor_features, donor_labels, donor_mask_bool, _ = self._apply_mcf(donor_subclouds)
 
-            # Project donor frame
-            proj_pointcloud_donor, proj_range_donor, proj_idx_donor, proj_mask_donor = self.projection.doProjection(pointcloud_donor)
-
-            # Build donor tensors
-            proj_mask_tensor_donor = torch.from_numpy(proj_mask_donor)
-            mask_donor = proj_idx_donor > 0
-            proj_sem_label_donor = np.zeros((proj_mask_donor.shape[0], proj_mask_donor.shape[1]), dtype=np.float32)
-            proj_sem_label_donor[mask_donor] = sem_label_donor[proj_idx_donor[mask_donor]]
-            proj_sem_label_tensor_donor = torch.from_numpy(proj_sem_label_donor)
-            proj_sem_label_tensor_donor = proj_sem_label_tensor_donor * proj_mask_tensor_donor.float()
-
-            proj_range_tensor_donor = torch.from_numpy(proj_range_donor)
-            proj_xyz_tensor_donor = torch.from_numpy(proj_pointcloud_donor[..., :3])
-            proj_intensity_tensor_donor = torch.from_numpy(proj_pointcloud_donor[..., 3])
-            proj_intensity_tensor_donor = proj_intensity_tensor_donor.ne(-1).float() * proj_intensity_tensor_donor
-
-            proj_feature_tensor_donor = torch.cat(
-                [proj_range_tensor_donor.unsqueeze(0), proj_xyz_tensor_donor.permute(2, 0, 1),
-                 proj_intensity_tensor_donor.unsqueeze(0)], 0)
-
-            # Apply WPD
             frame_a_dict = {
-                'features': proj_feature_tensor,
-                'labels': proj_sem_label_tensor.long(),
-                'mask': proj_mask_tensor,
-                'range': proj_range_tensor,
+                'features': features,
+                'labels': labels.long(),
+                'mask': mask_bool.float(),
+                'range': range_tensor,
             }
             frame_b_dict = {
-                'features': proj_feature_tensor_donor,
-                'labels': proj_sem_label_tensor_donor.long(),
-                'mask': proj_mask_tensor_donor,
-                'range': proj_range_tensor_donor,
+                'features': donor_features,
+                'labels': donor_labels.long(),
+                'mask': donor_mask_bool.float(),
+                'range': donor_features[0].clone(),
             }
 
             result = self.wpd_augmentor(frame_a_dict, frame_b_dict)
-            proj_feature_tensor = result['features']
-            proj_sem_label_tensor = result['labels'].float()
-            proj_mask_tensor = result['mask']
+            features = result['features']
+            labels = result['labels'].float()
+            mask_bool = result['mask'].bool()
+            range_tensor = result['range']
+            proj_range_np = range_tensor.cpu().numpy()
 
-        proj_feature_tensor = (proj_feature_tensor - self.proj_img_mean[:, None, None]) / self.proj_img_stds[:, None, None]
-        proj_feature_tensor = proj_feature_tensor * proj_mask_tensor.unsqueeze(0).float()
-
-        proj_tensor = torch.cat(
-            (proj_feature_tensor,
-            proj_sem_label_tensor.unsqueeze(0),
-            proj_mask_tensor.float().unsqueeze(0)), dim=0)
-
-        if self.is_train:
-            save_path = os.getenv('AUG_VIS_PATH', './aug_visualizations')
-            # if True or np.random.uniform() < self.p_rangemix:
-            #     # Load a random second sample
-            #     mix_index = 3583
-            #     # print(f"{len(self.dataset)}, mix is {mix_index}")
-            #     pointcloud_b, sem_label_b, _ = self.dataset.loadDataByIndex(mix_index)
-
-            #     # Apply point cloud augmentation to second sample
-            #     # pointcloud_b = self.augmentor.doAugmentation(pointcloud_b)
-
-            #     # Project second sample
-            #     proj_pointcloud_b, proj_range_b, proj_idx_b, proj_mask_b = self.projection.doProjection(pointcloud_b)
-
-            #     # Create tensors for second sample
-            #     proj_mask_tensor_b = torch.from_numpy(proj_mask_b)
-            #     mask_b = proj_idx_b > 0
-            #     proj_sem_label_b = np.zeros((proj_mask_b.shape[0], proj_mask_b.shape[1]), dtype=np.float32)
-            #     proj_sem_label_b[mask_b] = self.dataset.labelMapping(sem_label_b[proj_idx_b[mask_b]])
-            #     proj_sem_label_tensor_b = torch.from_numpy(proj_sem_label_b)
-            #     proj_sem_label_tensor_b = proj_sem_label_tensor_b * proj_mask_tensor_b.float()
-
-            #     proj_range_tensor_b = torch.from_numpy(proj_range_b)
-            #     proj_xyz_tensor_b = torch.from_numpy(proj_pointcloud_b[..., :3])
-            #     proj_intensity_tensor_b = torch.from_numpy(proj_pointcloud_b[..., 3])
-            #     proj_intensity_tensor_b = proj_intensity_tensor_b.ne(-1).float() * proj_intensity_tensor_b
-            #     proj_existence_tensor_b = proj_mask_tensor_b.float()
-            #     proj_feature_tensor_b = torch.cat(
-            #         [proj_range_tensor_b.unsqueeze(0), proj_xyz_tensor_b.permute(2, 0, 1),
-            #          proj_intensity_tensor_b.unsqueeze(0), proj_existence_tensor_b.unsqueeze(0)], 0)
-
-            #     proj_feature_tensor_b = (proj_feature_tensor_b - self.proj_img_mean[:, None, None]) / self.proj_img_stds[:, None, None]
-            #     proj_feature_tensor_b = proj_feature_tensor_b * proj_mask_tensor_b.unsqueeze(0).float()
-
-            #     proj_tensor_b = torch.cat(
-            #         (proj_feature_tensor_b,
-            #          proj_sem_label_tensor_b.unsqueeze(0),
-            #          proj_mask_tensor_b.float().unsqueeze(0)), dim=0)
-
-            #     save_proj_tensor_as_images(torch.cat(
-            #         (proj_feature_tensor_b[:5],
-            #          proj_sem_label_tensor_b.unsqueeze(0),
-            #          proj_mask_tensor_b.float().unsqueeze(0)), dim=0), mix_index, save_path)
-            #     # Apply RangeMix
-            #     proj_feature_mixed, proj_label_mixed = augmentor.Augmentor.rangemix(
-            #         proj_tensor[:6], proj_tensor[6], proj_tensor_b[:6], proj_tensor_b[6])
-
-            #     # Reconstruct proj_tensor with mixed features and labels (5 channels + label + mask)
-            #     # Ignore existence channel (channel 5) after RangeMix to maintain C=5
-            #     proj_tensor = torch.cat(
-            #         (proj_feature_mixed[:5],
-            #          proj_label_mixed.unsqueeze(0),
-            #          proj_tensor[7].unsqueeze(0)), dim=0)
-            #     proj_tensor_b = torch.cat(
-            #         (proj_feature_tensor_b[:5],
-            #          proj_sem_label_tensor_b.unsqueeze(0),
-            #          proj_mask_tensor_b.float().unsqueeze(0)), dim=0)
-
-            # Save to image for testing
-            # if True:
-            #     print(f'index: {index}, mix: {mix_index}')
-            #     save_proj_tensor_as_images(proj_tensor, index, save_path, pointcloud=pointcloud, labels=sem_label)
-            #     sys.exit()
-            # proj_tensor = self.aug_ops(proj_tensor)
-            # return proj_tensor[0:5], proj_tensor[6], proj_tensor[7]
-            # save_proj_tensor_as_images(proj_tensor, index, save_path, pointcloud=pointcloud, labels=sem_label)
-            proj_tensor, px, py, points_xyz, sem_label = crop_inputs(
-                proj_tensor, px, py, points_xyz, sem_label,
-                self.crop_size, center_crop=False, p_hflip=self.proj_p_hflip)
-            # sys.exit()
-        else:
-            _, h, w = proj_tensor.shape
-
-            # Normalize them to be between -1 and 1.
-            px = 2.0 * ((px / w) - 0.5)
-            py = 2.0 * ((py / h) - 0.5)
-
+        proj_tensor = self._normalize_and_stack(features, labels, mask_bool)
+        print("[Sanity] fused_mask occ:", mask_bool.float().mean().item())
+        print("[Sanity] label stats:", mask_bool.min().item(), labels.max().item())
+        print("[Sanity] holes where mask==1 but label==0:",
+            (mask_bool & (labels==0)).float().mean().item())
+        save_proj_tensor_as_images(proj_tensor, index, 'mcf')
+        import sys
+        sys.exit(0)
+        proj_tensor, px, py, points_xyz, sem_label = crop_inputs(
+            proj_tensor,
+            full_projection['px'],
+            full_projection['py'],
+            points_xyz,
+            sem_label,
+            self.crop_size,
+            center_crop=False,
+            p_hflip=self.proj_p_hflip)
         tree = kdtree(points_xyz)
         _, knns = tree.query(points_xyz, k=7)
 
@@ -321,11 +383,13 @@ class RangeViewLoader(Dataset):
 
         if self.return_uproj:
             assert self.is_train is False
-
-            output['range'] = torch.from_numpy(proj_range)
-            output['uproj_x'] = torch.from_numpy(self.projection.cached_data['uproj_x_idx']).long()
-            output['uproj_y'] = torch.from_numpy(self.projection.cached_data['uproj_y_idx']).long()
-            output['uproj_depth'] = torch.from_numpy(self.projection.cached_data['uproj_depth']).float()
+            output['range'] = torch.from_numpy(proj_range_np)
+            if full_projection['uproj_x_idx'] is not None:
+                output['uproj_x'] = torch.from_numpy(full_projection['uproj_x_idx']).long()
+            if full_projection['uproj_y_idx'] is not None:
+                output['uproj_y'] = torch.from_numpy(full_projection['uproj_y_idx']).long()
+            if full_projection['uproj_depth'] is not None:
+                output['uproj_depth'] = torch.from_numpy(full_projection['uproj_depth']).float()
 
         return output
 
@@ -341,100 +405,56 @@ class RangeViewLoader(Dataset):
 
         pointcloud, sem_label, inst_label = self.dataset.loadDataByIndex(index)
         if self.is_train:
-            pointcloud = self.augmentor.doAugmentation(pointcloud)  # n, 4
-        proj_pointcloud, proj_range, proj_idx, proj_mask = self.projection.doProjection(pointcloud)
+            pointcloud = self.augmentor.doAugmentation(pointcloud)
 
-        proj_mask_tensor = torch.from_numpy(proj_mask)
-        mask = proj_idx > 0
-        proj_sem_label = np.zeros((proj_mask.shape[0], proj_mask.shape[1]), dtype=np.float32)
-        proj_sem_label[mask] = self.dataset.labelMapping(sem_label[proj_idx[mask]])
-        proj_sem_label_tensor = torch.from_numpy(proj_sem_label)
-        proj_sem_label_tensor = proj_sem_label_tensor * proj_mask_tensor.float()
+        mapped_sem_label = self.dataset.labelMapping(sem_label)
+        full_projection = self._project_pointcloud(pointcloud, mapped_sem_label)
+        subclouds = self._build_subcloud_projections(pointcloud, mapped_sem_label)
+        features, labels, mask_bool, _ = self._apply_mcf(subclouds)
 
-        proj_range_tensor = torch.from_numpy(proj_range)
-        proj_xyz_tensor = torch.from_numpy(proj_pointcloud[..., :3])
-        proj_intensity_tensor = torch.from_numpy(proj_pointcloud[..., 3])
-        proj_intensity_tensor = proj_intensity_tensor.ne(-1).float() * proj_intensity_tensor
-        proj_existence_tensor = proj_mask_tensor.float()
-        proj_feature_tensor = torch.cat(
-            [proj_range_tensor.unsqueeze(0), proj_xyz_tensor.permute(2, 0, 1), proj_intensity_tensor.unsqueeze(0), proj_existence_tensor.unsqueeze(0)], 0)
-
-        proj_feature_tensor = (proj_feature_tensor - self.proj_img_mean[:, None, None]) / self.proj_img_stds[:, None,
-                                                                                          None]
-        proj_feature_tensor = proj_feature_tensor * proj_mask_tensor.unsqueeze(0).float()
+        range_tensor = features[0].clone()
 
         if self.return_uproj:
-            sem_label = self.dataset.labelMapping(sem_label)
-            sem_label = torch.from_numpy(sem_label).long()
+            mask_float = mask_bool.float()
+            sem_label_tensor = torch.from_numpy(mapped_sem_label).long()
+            uproj_x = full_projection['uproj_x_idx']
+            uproj_y = full_projection['uproj_y_idx']
+            uproj_depth = full_projection['uproj_depth']
+            return (
+                features,
+                labels,
+                mask_float,
+                range_tensor,
+                torch.from_numpy(uproj_x).long() if uproj_x is not None else None,
+                torch.from_numpy(uproj_y).long() if uproj_y is not None else None,
+                torch.from_numpy(uproj_depth).float() if uproj_depth is not None else None,
+                sem_label_tensor
+            )
 
-            uproj_x_tensor = torch.from_numpy(self.projection.cached_data['uproj_x_idx']).long()
-            uproj_y_tensor = torch.from_numpy(self.projection.cached_data['uproj_y_idx']).long()
-            uproj_depth_tensor = torch.from_numpy(self.projection.cached_data['uproj_depth']).float()
+        proj_tensor = self._normalize_and_stack(features, labels, mask_bool)
 
-            return proj_feature_tensor, proj_sem_label_tensor, proj_mask_tensor, torch.from_numpy(
-                proj_range), uproj_x_tensor, uproj_y_tensor, uproj_depth_tensor, sem_label
-        else:
+        if self.is_train and np.random.uniform() < self.p_rangemix:
+            mix_index = torch.randint(0, len(self.dataset), (1,)).item()
+            pointcloud_b, sem_label_b, _ = self.dataset.loadDataByIndex(mix_index)
+            pointcloud_b = self.augmentor.doAugmentation(pointcloud_b)
+            mapped_sem_label_b = self.dataset.labelMapping(sem_label_b)
+
+            subclouds_b = self._build_subcloud_projections(pointcloud_b, mapped_sem_label_b)
+            features_b, labels_b, mask_bool_b, _ = self._apply_mcf(subclouds_b)
+            proj_tensor_b = self._normalize_and_stack(features_b, labels_b, mask_bool_b)
+
+            proj_feature_mixed, proj_label_mixed = augmentor.Augmentor.rangemix(
+                proj_tensor[:5], proj_tensor[5], proj_tensor_b[:5], proj_tensor_b[5])
+
+            mask_channel = proj_tensor[6].unsqueeze(0)
             proj_tensor = torch.cat(
-                (proj_feature_tensor,
-                proj_sem_label_tensor.unsqueeze(0),
-                proj_mask_tensor.float().unsqueeze(0)), dim=0)
+                (proj_feature_mixed,
+                 proj_label_mixed.unsqueeze(0),
+                 mask_channel), dim=0)
 
-            # RangeMix augmentation
-            if self.is_train and np.random.uniform() < self.p_rangemix:
-                # Load a random second sample
-                mix_index = torch.randint(0, len(self.dataset), (1,)).item()
-                pointcloud_b, sem_label_b, _ = self.dataset.loadDataByIndex(mix_index)
+        proj_tensor = self.aug_ops(proj_tensor)
 
-                # Apply point cloud augmentation to second sample
-                pointcloud_b = self.augmentor.doAugmentation(pointcloud_b)
-
-                # Project second sample
-                proj_pointcloud_b, proj_range_b, proj_idx_b, proj_mask_b = self.projection.doProjection(pointcloud_b)
-
-                # Create tensors for second sample
-                proj_mask_tensor_b = torch.from_numpy(proj_mask_b)
-                mask_b = proj_idx_b > 0
-                proj_sem_label_b = np.zeros((proj_mask_b.shape[0], proj_mask_b.shape[1]), dtype=np.float32)
-                proj_sem_label_b[mask_b] = self.dataset.labelMapping(sem_label_b[proj_idx_b[mask_b]])
-                proj_sem_label_tensor_b = torch.from_numpy(proj_sem_label_b)
-                proj_sem_label_tensor_b = proj_sem_label_tensor_b * proj_mask_tensor_b.float()
-
-                proj_range_tensor_b = torch.from_numpy(proj_range_b)
-                proj_xyz_tensor_b = torch.from_numpy(proj_pointcloud_b[..., :3])
-                proj_intensity_tensor_b = torch.from_numpy(proj_pointcloud_b[..., 3])
-                proj_intensity_tensor_b = proj_intensity_tensor_b.ne(-1).float() * proj_intensity_tensor_b
-                proj_existence_tensor_b = proj_mask_tensor_b.float()
-                proj_feature_tensor_b = torch.cat(
-                    [proj_range_tensor_b.unsqueeze(0), proj_xyz_tensor_b.permute(2, 0, 1),
-                     proj_intensity_tensor_b.unsqueeze(0), proj_existence_tensor_b.unsqueeze(0)], 0)
-
-                proj_feature_tensor_b = (proj_feature_tensor_b - self.proj_img_mean[:, None, None]) / self.proj_img_stds[:, None, None]
-                proj_feature_tensor_b = proj_feature_tensor_b * proj_mask_tensor_b.unsqueeze(0).float()
-
-                proj_tensor_b = torch.cat(
-                    (proj_feature_tensor_b,
-                     proj_sem_label_tensor_b.unsqueeze(0),
-                     proj_mask_tensor_b.float().unsqueeze(0)), dim=0)
-
-                # Apply RangeMix
-                proj_feature_mixed, proj_label_mixed = augmentor.Augmentor.rangemix(
-                    proj_tensor[:6], proj_tensor[6], proj_tensor_b[:6], proj_tensor_b[6])
-
-                # Reconstruct proj_tensor with mixed features and labels (5 channels + label + mask)
-                # Ignore existence channel (channel 5) after RangeMix to maintain C=5
-                proj_tensor = torch.cat(
-                    (proj_feature_mixed[:5],
-                     proj_label_mixed.unsqueeze(0),
-                     proj_tensor[7].unsqueeze(0)), dim=0)
-
-            # Data augmentation
-            proj_tensor = self.aug_ops(proj_tensor)
-
-            # if self.is_train and os.getenv('SAVE_AUG_VIS'):
-            #     save_path = os.getenv('AUG_VIS_PATH', './aug_visualizations')
-            #     save_proj_tensor_as_images(proj_tensor, index, save_path)
-
-            return proj_tensor[0:5], proj_tensor[6], proj_tensor[7]
+        return proj_tensor[0:5], proj_tensor[5], proj_tensor[6]
 
     def __len__(self):
         if self.data_len > 0 and self.data_len < len(self.dataset):
@@ -496,89 +516,58 @@ def load_color_map():
 
 
 def save_proj_tensor_as_images(proj_tensor, index, save_path, pointcloud=None, labels=None, color_map=None):
-    """
-    Save proj_tensor channels as visualizable images and optionally save pointcloud and labels as .bin files.
-    proj_tensor shape: [8, H, W] where channels are:
-        0: range
-        1-3: xyz
-        4: intensity
-        5: existence
-        6: semantic label
-        7: mask
-    pointcloud: [N, 4] numpy array (x, y, z, intensity)
-    labels: [N] numpy array of semantic labels
-    """
     os.makedirs(save_path, exist_ok=True)
-
-    # Load color map if not provided
     if color_map is None:
-        color_map = load_color_map()
+        color_map = load_color_map()   # BGR
 
-    # Convert to numpy and move channels to last dimension
-    tensor_np = proj_tensor.numpy()  # [8, H, W]
+    tensor_np = proj_tensor.cpu().numpy()  # [7, H, W]  (C,H,W)
+    H, W = tensor_np.shape[1], tensor_np.shape[2]
+    range_ch   = tensor_np[0]
+    x_ch, y_ch, z_ch = tensor_np[1], tensor_np[2], tensor_np[3]
+    intensity  = tensor_np[4]
+    sem_labels = tensor_np[5].astype(np.int32)      # already masked in your pipeline
+    fused_mask = (tensor_np[6] > 0.5)               # fused, post-MCF mask
 
-    # Helper function to normalize to 0-255 range
     def normalize_to_uint8(data):
-        data_min = data.min()
-        data_max = data.max()
-        if data_max - data_min > 1e-6:
-            normalized = (data - data_min) / (data_max - data_min) * 255
-        else:
-            normalized = np.zeros_like(data)
-        return normalized.astype(np.uint8)
+        dmin, dmax = data.min(), data.max()
+        if dmax - dmin > 1e-6:
+            return ((data - dmin) / (dmax - dmin) * 255).astype(np.uint8)
+        return np.zeros_like(data, dtype=np.uint8)
 
-    # Helper function to apply color map to labels
-    def apply_color_map(labels, color_map):
-        h, w = labels.shape
-        colored = np.zeros((h, w, 3), dtype=np.uint8)
-        for label_id, color in color_map.items():
-            mask = labels == label_id
-            # color_map is in BGR format (from YAML)
-            colored[mask] = color
+    def apply_color_map_int(labels_2d, cmap):
+        colored = np.zeros((H, W, 3), dtype=np.uint8)
+        for lid, bgr in cmap.items():
+            colored[labels_2d == lid] = bgr
         return colored
 
-    # Save each channel
-    channel_names = ['range', 'x', 'y', 'z', 'intensity', 'semantic_label', 'mask']
+    # --- Save mask (should be ~0.71–0.76 white)
+    cv2.imwrite(f'{save_path}/sample_{index:06d}_mask.png', (fused_mask * 255).astype(np.uint8))
 
-    for ch_idx, ch_name in enumerate(channel_names):
-        channel_data = tensor_np[ch_idx]
+    # --- Semantic label VIS *with mask applied*
+    # 1) Background color for unmasked area (e.g., gray)
+    bg = np.full((H, W, 3), 80, dtype=np.uint8)
+    # 2) Colorized labels for masked area only
+    sem_color = apply_color_map_int(sem_labels, color_map)
+    sem_vis = bg.copy()
+    sem_vis[fused_mask] = sem_color[fused_mask]
+    cv2.imwrite(f'{save_path}/sample_{index:06d}_semantic_label.png', sem_vis)
 
-        if ch_name == 'semantic_label':
-            # For semantic labels, use the dataset-specific color map
-            label_img = channel_data.astype(np.int32)
-            label_colored = apply_color_map(label_img, color_map)
-            cv2.imwrite(f'{save_path}/sample_{index:06d}_{ch_name}.png', label_colored)
-        elif ch_name == 'mask' or ch_name == 'existence':
-            # Binary masks - save as black/white
-            mask_img = (channel_data * 255).astype(np.uint8)
-            cv2.imwrite(f'{save_path}/sample_{index:06d}_{ch_name}.png', mask_img)
-        else:
-            # For continuous values (range, xyz, intensity), normalize and apply colormap
-            normalized = normalize_to_uint8(channel_data)
-            colored = cv2.applyColorMap(normalized, cv2.COLORMAP_VIRIDIS)
-            cv2.imwrite(f'{save_path}/sample_{index:06d}_{ch_name}.png', colored)
+    # (Optional) Make a transparent PNG instead:
+    # alpha = (fused_mask.astype(np.uint8) * 255)
+    # sem_rgba = np.dstack([sem_color[..., ::-1], alpha])  # if you want RGBA
+    # cv2.imwrite(..., sem_rgba)
 
-    # Also save RGB composite of xyz
-    xyz_data = tensor_np[1:4].transpose(1, 2, 0)  # [H, W, 3]
-    xyz_normalized = np.zeros_like(xyz_data)
-    for i in range(3):
-        xyz_normalized[:, :, i] = normalize_to_uint8(xyz_data[:, :, i])
-    cv2.imwrite(f'{save_path}/sample_{index:06d}_xyz_composite.png', xyz_normalized.astype(np.uint8))
+    # --- Continuous channels: they’re already masked upstream; just save
+    for name, ch in [('range', range_ch), ('x', x_ch), ('y', y_ch), ('z', z_ch), ('intensity', intensity)]:
+        colored = cv2.applyColorMap(normalize_to_uint8(ch), cv2.COLORMAP_VIRIDIS)
+        cv2.imwrite(f'{save_path}/sample_{index:06d}_{name}.png', colored)
 
-    # Save pointcloud as .bin file (if provided)
-    if pointcloud is not None:
-        pointcloud_path = f'{save_path}/sample_{index:06d}.bin'
-        pointcloud.astype(np.float32).tofile(pointcloud_path)
-        print(f'Saved pointcloud to {pointcloud_path}')
+    # --- XYZ composite (debug)
+    xyz = np.stack([normalize_to_uint8(x_ch), normalize_to_uint8(y_ch), normalize_to_uint8(z_ch)], axis=-1)
+    cv2.imwrite(f'{save_path}/sample_{index:06d}_xyz_composite.png', xyz)
 
-    # Save labels as .label file (if provided)
-    if labels is not None:
-        label_path = f'{save_path}/sample_{index:06d}.label'
-        # SemanticKITTI format: labels are saved as uint32
-        labels.astype(np.uint32).tofile(label_path)
-        print(f'Saved labels to {label_path}')
+    # (Point cloud / labels saving unchanged…)
 
-    print(f'Saved augmented visualizations for sample {index} to {save_path}/')
 
 
 def count_num_of_valid_points(py, px, offset_y, offset_x, h, w):

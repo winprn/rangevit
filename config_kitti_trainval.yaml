@@ -81,6 +81,11 @@ augmentation:
   rot_yawmin: 5
   rot_yawmax: -5
 
+mcf:
+  enabled: true
+  num_subclouds: 3
+  donor_order: 'sequential'
+
 sensor:
   name: 'HDL64'
   type: 'spherical'

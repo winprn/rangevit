@@ -4,7 +4,7 @@ id: "exp_kitti"
 
 # MLflow config
 mlflow:
-  enable: true
+  enable: false
   tracking_uri: "http://140.245.117.232:5000" # e.g. 'file:./mlruns' or an HTTP URL
   experiment_name: "rangevit"
   run_name: null # defaults to the CLI-provided id when null
@@ -28,14 +28,14 @@ lr: 0.0004
 train_result_frequency: 100 # printing frequency of the train results
 
 # Model config
-vit_backbone: "vit_small_patch16_384"
+vit_backbone: "vit_tiny_patch16_384"
 in_channels: 5
 patch_size: [2, 8] # patch size = patch stride if a convolutional stem (ConvStem) is used
 patch_stride: [2, 8]
 image_size: [64, 384] # random crop at train
 window_size: [64, 384] # sliding window size
 window_stride: [64, 256] # sliding window stride
-original_image_size: [64, 2048]
+original_image_size: [64, 1920]
 
 # Stem
 conv_stem: "ConvStem" # 'none' or 'ConvStem'
@@ -53,7 +53,7 @@ use_kpconv: true
 
 # Checkpoint model
 checkpoint: null
-pretrained_model: "pretrained_model/vit_base_patch16_384.pth"
+pretrained_model: "pretrained_model/vit_t.pth"
 
 # Loading pre-trained patch and positional embeddings
 reuse_pos_emb: true
@@ -89,7 +89,7 @@ augmentation:
 
   # advance augmentation
   p_rangemix: 0.9
-  p_polarmix: 0.23
+  p_polarmix: 0
 
   # WPD (Weighted Paste and Drop) augmentation
   # Addresses overfitting, context-reliance, and class imbalance
@@ -111,6 +111,12 @@ augmentation:
   # Class-imbalance handling (point cloud level, applied before projection)
   p_instance_paste: 0.5 # Paste instances from other scans
   p_class_mix: 0.5 # Mix minority classes between scans
+
+mcf:
+  enabled: true
+  num_subclouds: 3
+  donor_order: "sequential"
+  debug: true
 
 sensor:
   name: "HDL64"
