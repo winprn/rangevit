@@ -353,9 +353,9 @@ class RangeViewLoader(Dataset):
         print("[Sanity] label stats:", mask_bool.min().item(), labels.max().item())
         print("[Sanity] holes where mask==1 but label==0:",
             (mask_bool & (labels==0)).float().mean().item())
-        save_proj_tensor_as_images(proj_tensor, index, 'mcf')
-        import sys
-        sys.exit(0)
+        # save_proj_tensor_as_images(proj_tensor, index, 'mcf')
+        # import sys
+        # sys.exit(0)
         proj_tensor, px, py, points_xyz, sem_label = crop_inputs(
             proj_tensor,
             full_projection['px'],
