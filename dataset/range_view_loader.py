@@ -349,10 +349,10 @@ class RangeViewLoader(Dataset):
             proj_range_np = range_tensor.cpu().numpy()
 
         proj_tensor = self._normalize_and_stack(features, labels, mask_bool)
-        print("[Sanity] fused_mask occ:", mask_bool.float().mean().item())
-        print("[Sanity] label stats:", mask_bool.min().item(), labels.max().item())
-        print("[Sanity] holes where mask==1 but label==0:",
-            (mask_bool & (labels==0)).float().mean().item())
+        # print("[Sanity] fused_mask occ:", mask_bool.float().mean().item())
+        # print("[Sanity] label stats:", mask_bool.min().item(), labels.max().item())
+        # print("[Sanity] holes where mask==1 but label==0:",
+        #     (mask_bool & (labels==0)).float().mean().item())
         # save_proj_tensor_as_images(proj_tensor, index, 'mcf')
         # import sys
         # sys.exit(0)
