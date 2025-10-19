@@ -6,7 +6,7 @@ id: 'exp_kitti'
 mlflow:
     enabled: true
     experiment: 'rangevit'
-    run_name: '[trainval] rangevit256_small_ft_trainval'            # overrides default if set
+    run_name: '[trainval] rangevit256_small_ft_trainval_knn'            # overrides default if set
 
 # Data config
 dataset: 'SemanticKitti'
@@ -45,7 +45,7 @@ D_h: 256 # hidden dimension of the stem
 
 # Decoder
 decoder: 'up_conv'  # 'linear' or 'up_conv'
-skip_filters: 128 # has to be 0 (no skip) or D_h 
+skip_filters: 256 # has to be 0 (no skip) or D_h 
 
 # 3D refiner (choose one: use_kpconv or use_knn)
 use_kpconv: false
