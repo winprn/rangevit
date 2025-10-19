@@ -86,6 +86,13 @@ class Option(object):
         # 3D refiner
         self.use_kpconv = self.config.get('use_kpconv', True)
 
+        # KNN post-processing
+        self.use_knn = self.config.get('use_knn', False)
+        self.knn_neighbors = self.config.get('knn_neighbors', 5)
+        self.knn_search = self.config.get('knn_search', 13)
+        self.knn_sigma = self.config.get('knn_sigma', 1.0)
+        self.knn_cutoff = self.config.get('knn_cutoff', 1.0)
+
 
         # Checkpoint model
         self.checkpoint = self.config.get('checkpoint', None)
@@ -139,6 +146,14 @@ class Option(object):
         # When using the KPConv layer, the decoder has to be up_conv.
         if self.use_kpconv:
             assert self.decoder == 'up_conv'
+
+        # KNN and KPConv are mutually exclusive - choose one 3D refinement method
+        if self.use_knn and self.use_kpconv:
+            raise ValueError('use_knn and use_kpconv cannot both be True. Choose one 3D refinement method.')
+
+        # Must use at least one refinement method for 3D evaluation
+        if not self.use_knn and not self.use_kpconv:
+            raise ValueError('Either use_knn or use_kpconv must be True for 3D point-wise evaluation.')
 
         # The following hyperparameters have to be tuples or lists with two elements.
         tuple_list = [self.patch_size, self.patch_stride,

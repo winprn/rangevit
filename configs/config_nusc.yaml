@@ -36,8 +36,15 @@ D_h: 256 # hidden dimension of the stem
 decoder: 'up_conv'  # 'linear' or 'up_conv'
 skip_filters: 256 # has to be 0 (no skip) or D_h
 
-# 3D refiner
+# 3D refiner (choose one: use_kpconv or use_knn)
 use_kpconv: true
+use_knn: false
+
+# KNN post-processing parameters (only used if use_knn: true)
+knn_neighbors: 5
+knn_search: 13
+knn_sigma: 1.0
+knn_cutoff: 1.0
 
 
 # Checkpoint model

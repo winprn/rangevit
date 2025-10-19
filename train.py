@@ -69,6 +69,26 @@ class Trainer(object):
             ignore=self.ignore_class, is_distributed=self.settings.distributed)
         self.metrics.reset()
 
+        # Init KNN post-processor if enabled
+        self.knn_post = None
+        self.metrics_3d = None
+        if self.settings.use_knn:
+            knn_params = {
+                'knn': self.settings.knn_neighbors,
+                'search': self.settings.knn_search,
+                'sigma': self.settings.knn_sigma,
+                'cutoff': self.settings.knn_cutoff,
+            }
+            self.knn_post = utils.postproc.KNN(params=knn_params, nclasses=self.settings.n_classes)
+            if self.recorder is not None:
+                self.recorder.logger.info('Using KNN Post-Processing for 3D refinement')
+
+            # Additional 3D metrics for KNN post-processing
+            self.metrics_3d = utils.metrics.IOUEval(
+                n_classes=self.settings.n_classes, device=torch.device('cpu'),
+                ignore=self.ignore_class, is_distributed=self.settings.distributed)
+            self.metrics_3d.reset()
+
         # Define scheduler
         self.scheduler = utils.optim.WarmupCosineLR(
             optimizer=self.optimizer,
@@ -148,6 +168,8 @@ class Trainer(object):
                 has_label=(self.settings.test_split is False),
             )
 
+            self.data_split = 'test' if self.settings.test_split else 'val'
+
         else:
             raise ValueError(
                 'invalid dataset: {}'.format(self.settings.dataset))
@@ -161,6 +183,7 @@ class Trainer(object):
             dataset=valset,
             config=self.settings.config,
             is_train=False,
+            return_uproj=self.settings.use_knn,
             use_kpconv=self.settings.use_kpconv)
 
         collate_fn = dataset.custom_collate_kpconv_fn if self.settings.use_kpconv else None
@@ -267,11 +290,18 @@ class Trainer(object):
         # Init metrics
         loss_meter = tools.AverageMeter()
         self.metrics.reset()
+        if self.settings.use_knn and mode == 'Validation':
+            self.metrics_3d.reset()
 
         total_iter = len(dataloader)
         t_start = time.time()
 
-        for i, (input_feature, input_label, input_mask) in enumerate(dataloader):
+        for i, batch_data in enumerate(dataloader):
+            # Unpack batch data based on whether KNN is enabled
+            if self.settings.use_knn and mode == 'Validation':
+                input_feature, input_label, input_mask, proj_depth, uproj_x_idx, uproj_y_idx, uproj_depth, sem_label_3d = batch_data
+            else:
+                input_feature, input_label, input_mask = batch_data
             # [TESTING] Early exit option for testing (limit iterations per epoch)
             if self.settings.max_iters_per_epoch is not None and i >= self.settings.max_iters_per_epoch:
                 print(f'[TESTING PIPELIONE] Reached max_iters_per_epoch={self.settings.max_iters_per_epoch}, stopping epoch early')
@@ -340,6 +370,43 @@ class Trainer(object):
                 argmax = output.argmax(dim=1)
                 self.metrics.addBatch(argmax, input_label) # 2D predictions
 
+                # Apply KNN post-processing for 3D evaluation
+                if mode == 'Validation' and self.settings.use_knn:
+                    proj_depth = proj_depth[0].cuda()
+                    uproj_x_idx = uproj_x_idx[0].cuda()
+                    uproj_y_idx = uproj_y_idx[0].cuda()
+                    uproj_depth = uproj_depth[0].cuda()
+
+                    pred_argmax = argmax[0]  # Remove batch dim [H, W]
+                    unproj_argmax = self.knn_post(
+                        proj_depth, uproj_depth, pred_argmax,
+                        uproj_x_idx, uproj_y_idx)
+
+                    # Evaluate 3D predictions
+                    pred_np = unproj_argmax.cpu().numpy().reshape((-1)).astype(np.int32)
+                    self.metrics_3d.addBatch(pred_np, sem_label_3d)
+
+                    # Save predictions if path is provided
+                    if save_results_path is not None:
+                        if self.settings.dataset == 'nuScenes':
+                            pred_path = os.path.join(save_results_path, 'lidarseg', self.data_split)
+                            nu_dataset = self.val_range_loader.dataset
+                            lidar_token = nu_dataset.token_list[i]
+                            if not os.path.isdir(pred_path):
+                                os.makedirs(pred_path)
+                            pred_result_path = os.path.join(pred_path, '{}_lidarseg.bin'.format(lidar_token))
+                            pred_np.tofile(pred_result_path)
+
+                        elif self.settings.dataset == 'SemanticKitti':
+                            sk_dataset = self.val_range_loader.dataset
+                            pred_np_origin = sk_dataset.class_map_lut_inv[pred_np]
+                            seq_id, frame_id = sk_dataset.parsePathInfoByIndex(i)
+                            pred_path = os.path.join(save_results_path, 'sequences', seq_id, 'predictions')
+                            if not os.path.isdir(pred_path):
+                                os.makedirs(pred_path)
+                            pred_result_path = os.path.join(pred_path, '{}.label'.format(frame_id))
+                            pred_np_origin.tofile(pred_result_path)
+
             loss_meter.update(loss.item(), input_feature.size(0))
 
             # Timer logger
@@ -386,7 +453,7 @@ class Trainer(object):
             mean_recall, class_recall = self.metrics.getRecall()
             mean_iou, class_iou = self.metrics.getIoU()
 
-            metrics_dict = {
+            metrics_dict_2d = {
                 'mean_acc': mean_acc,
                 'class_acc': class_acc,
                 'mean_recall': mean_recall,
@@ -396,7 +463,27 @@ class Trainer(object):
                 'conf_matrix': self.metrics.conf_matrix.clone().cpu(),
             }
 
-        loss_dict = {
+            # Collect 3D metrics if using KNN
+            metrics_dict_3d = None
+            if mode == 'Validation' and self.settings.use_knn:
+                mean_acc_3d, class_acc_3d = self.metrics_3d.getAcc()
+                mean_recall_3d, class_recall_3d = self.metrics_3d.getRecall()
+                mean_iou_3d, class_iou_3d = self.metrics_3d.getIoU()
+
+                metrics_dict_3d = {
+                    'mean_acc': mean_acc_3d,
+                    'class_acc': class_acc_3d,
+                    'mean_recall': mean_recall_3d,
+                    'class_recall': class_recall_3d,
+                    'mean_iou': mean_iou_3d,
+                    'class_iou': class_iou_3d,
+                    'conf_matrix': self.metrics_3d.conf_matrix.clone().cpu(),
+                }
+
+            # For backward compatibility, keep metrics_dict as 2D metrics
+            metrics_dict = metrics_dict_2d
+
+            loss_dict = {
                 'loss_meter_avg': loss_meter.avg,
                 'loss_focal': loss_focal,
                 'loss_lovasz': loss_lovasz,
@@ -419,9 +506,18 @@ class Trainer(object):
                 eval_results(pixel_or_point='Pixel',
                              settings=self.settings,
                              recorder=self.recorder,
-                             metrics_dict=metrics_dict,
+                             metrics_dict=metrics_dict_2d,
                              dataloader=self.val_range_loader,
                              print_data_distribution=True)
+
+                # Print 3D point-wise results if using KNN
+                if self.settings.use_knn and metrics_dict_3d is not None:
+                    eval_results(pixel_or_point='Point',
+                                 settings=self.settings,
+                                 recorder=self.recorder,
+                                 metrics_dict=metrics_dict_3d,
+                                 dataloader=self.val_range_loader,
+                                 print_data_distribution=True)
 
             # Tensorboard logger (skip for test split - no labels available)
             if not self.settings.test_split:
@@ -430,7 +526,7 @@ class Trainer(object):
                                    recorder=self.recorder,
                                    metrics_dict=metrics_dict,
                                    loss_dict=loss_dict,
-                                   lr=lr,
+                                   lr=lr_value,
                                    mapped_cls_name=self.mapped_cls_name)
 
                 # Results at the end of the epoch
@@ -649,7 +745,7 @@ class Trainer(object):
                 'conf_matrix': self.metrics.conf_matrix.clone().cpu(),
             }
 
-        loss_dict = {
+            loss_dict = {
                 'loss_meter_avg': loss_meter.avg,
                 'loss_focal': loss_focal,
                 'loss_lovasz': loss_lovasz,

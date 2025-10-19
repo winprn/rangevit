@@ -47,6 +47,7 @@ def build_rangevit_model(settings, pretrained_path=None):
     print(f"settings.skip_filters = {settings.skip_filters}")
     print(f"settings.decoder = {settings.decoder}")
     print(f"settings.use_kpconv = {settings.use_kpconv}")
+    print(f"settings.use_knn = {settings.use_knn}")
     print(f"pretrained_path = {pretrained_path}")
     model = models.RangeViT(
         in_channels=settings.in_channels,
