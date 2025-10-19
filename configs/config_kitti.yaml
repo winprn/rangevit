@@ -58,7 +58,7 @@ knn_sigma: 1.0
 knn_cutoff: 1.0
 
 # Checkpoint model
-save_path: "save_rangevit256_small_ft_trainval"
+save_path: "save_rangevit256_small_ft_trainval_knn"
 # checkpoint: null
 pretrained_model: "../pretrained_model/vit_small_p16_384_ft.pth"
 

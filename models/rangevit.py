@@ -390,13 +390,16 @@ class RangeViT(nn.Module):
             #     del pretrained_state_dict['encoder.patch_embed.projection.weight'] # remove patch embedding layers
             #     del pretrained_state_dict['encoder.patch_embed.projection.bias'] # remove patch embedding layers
 
-            # Delete the pre-trained weights of the decoder
-            decoder_keys = []
-            for key in pretrained_state_dict.keys():
-                if 'decoder' in key:
-                    decoder_keys.append(key)
-            # for decoder_key in decoder_keys:
-            #     del pretrained_state_dict[decoder_key]
+            # Delete the pre-trained weights of the decoder head when using no-KPConv
+            # (decoder head shape is different between KPConv and no-KPConv models)
+            if not use_kpconv:
+                decoder_head_keys = []
+                for key in pretrained_state_dict.keys():
+                    if 'decoder.head' in key:
+                        decoder_head_keys.append(key)
+                for decoder_key in decoder_head_keys:
+                    del pretrained_state_dict[decoder_key]
+                    print(f'Removed incompatible key: {decoder_key}')
 
             msg = self.rangevit.load_state_dict(pretrained_state_dict, strict=False)
             print(f'{msg}')
