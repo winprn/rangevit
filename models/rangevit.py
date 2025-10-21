@@ -391,12 +391,16 @@ class RangeViT(nn.Module):
             #     del pretrained_state_dict['encoder.patch_embed.projection.bias'] # remove patch embedding layers
 
             # Delete the pre-trained weights of the decoder
-            decoder_keys = []
-            for key in pretrained_state_dict.keys():
-                if 'decoder' in key:
-                    decoder_keys.append(key)
-            # for decoder_key in decoder_keys:
-            #     del pretrained_state_dict[decoder_key]
+            for key in list(pretrained_state_dict.keys()):
+                if key.startswith('decoder'):
+                    if (key in old_state_dict and
+                            pretrained_state_dict[key].shape != old_state_dict[key].shape):
+                        print(f'Removing decoder weight {key} due to shape mismatch: '
+                              f'{pretrained_state_dict[key].shape} vs {old_state_dict[key].shape}')
+                        del pretrained_state_dict[key]
+                    elif key not in old_state_dict:
+                        # Decoder not present in current architecture
+                        del pretrained_state_dict[key]
 
             msg = self.rangevit.load_state_dict(pretrained_state_dict, strict=False)
             print(f'{msg}')
