@@ -86,6 +86,13 @@ class Option(object):
         # 3D refiner
         self.use_kpconv = self.config.get('use_kpconv', True)
 
+        # 2.5D post-processing
+        self.use_knn = self.config.get('use_knn', False)
+        self.knn_k = self.config.get('knn_k', 5)
+        self.knn_search = self.config.get('knn_search', 13)
+        self.knn_sigma = self.config.get('knn_sigma', 1.0)
+        self.knn_cutoff = self.config.get('knn_cutoff', 1.0)
+
 
         # Checkpoint model
         self.checkpoint = self.config.get('checkpoint', None)
@@ -139,6 +146,15 @@ class Option(object):
         # When using the KPConv layer, the decoder has to be up_conv.
         if self.use_kpconv:
             assert self.decoder == 'up_conv'
+
+        if self.use_knn and self.use_kpconv:
+            raise ValueError('KNN post-processing is only supported when use_kpconv is False.')
+
+        if self.use_knn and (self.knn_search % 2 == 0):
+            raise ValueError('knn_search must be an odd integer for the KNN post-processing.')
+
+        if self.use_knn and self.knn_k <= 0:
+            raise ValueError('knn_k must be a positive integer for the KNN post-processing.')
 
         # The following hyperparameters have to be tuples or lists with two elements.
         tuple_list = [self.patch_size, self.patch_stride,

@@ -4,7 +4,7 @@ id: 'exp_kitti'
 
 # MLflow (optional)
 mlflow:
-    enabled: true
+    enabled: false
     experiment: 'rangevit'
     run_name: '[trainval] rangevit256_small_ft_trainval'            # overrides default if set
 
@@ -20,7 +20,7 @@ val_frequency: 3
 save_frequent: 10
 n_epochs: 60
 warmup_epochs: 10
-batch_size: 32
+batch_size: 8
 batch_size_val: 1
 lr: 0.0004
 train_result_frequency: 100 # printing frequency of the train results
@@ -45,10 +45,17 @@ D_h: 256 # hidden dimension of the stem
 
 # Decoder
 decoder: 'up_conv'  # 'linear' or 'up_conv'
-skip_filters: 128 # has to be 0 (no skip) or D_h 
+skip_filters: 256 # has to be 0 (no skip) or D_h 
 
 # 3D refiner
 use_kpconv: true
+
+# Post-processing
+use_knn: false
+knn_k: 5
+knn_search: 13
+knn_sigma: 1.0
+knn_cutoff: 1.0
 
 # Checkpoint model
 save_path: "save_rangevit256_small_ft_trainval"
@@ -91,7 +98,7 @@ augmentation:
 sensor:
   name: 'HDL64'
   type: 'spherical'
-  scan_proj: false
+  scan_proj: true
   proj_h: 64
   proj_w: 2048
   fov_up: 3.

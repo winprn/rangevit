@@ -47,6 +47,7 @@ def build_rangevit_model(settings, pretrained_path=None):
     print(f"settings.skip_filters = {settings.skip_filters}")
     print(f"settings.decoder = {settings.decoder}")
     print(f"settings.use_kpconv = {settings.use_kpconv}")
+    print(f"settings.use_knn = {getattr(settings, 'use_knn', False)}")
     print(f"pretrained_path = {pretrained_path}")
     model = models.RangeViT(
         in_channels=settings.in_channels,
@@ -164,6 +165,19 @@ def _prepare_settings(args: argparse.Namespace) -> Option:
     settings.log_frequency = args.log_frequency
     settings.num_workers = args.num_workers
     settings.seed = args.seed
+
+    if getattr(args, 'use_knn', False):
+        settings.use_knn = True
+    if getattr(args, 'disable_knn', False):
+        settings.use_knn = False
+    if getattr(args, 'knn_search', None) is not None:
+        settings.knn_search = args.knn_search
+    if getattr(args, 'knn_k', None) is not None:
+        settings.knn_k = args.knn_k
+    if getattr(args, 'knn_sigma', None) is not None:
+        settings.knn_sigma = args.knn_sigma
+    if getattr(args, 'knn_cutoff', None) is not None:
+        settings.knn_cutoff = args.knn_cutoff
 
     save_frequent = settings.save_frequent if hasattr(settings, 'save_frequent') else 0
     if save_frequent is None:
@@ -587,6 +601,18 @@ if __name__ == '__main__':
     parser.add_argument('--save_frequent', type=int, default=None,
                         help='frequency (in epochs) to save checkpoints as epoch_*.pth; 0 disables extra saves')
     parser.add_argument('--seed', type=int, default=1, help='random seed')
+    parser.add_argument('--use_knn', action='store_true',
+                        help='enable KNN post-processing for the no-KPConv flow')
+    parser.add_argument('--disable_knn', action='store_true',
+                        help='disable KNN post-processing even if enabled in the config')
+    parser.add_argument('--knn_search', type=int, default=None,
+                        help='search window size (odd integer) for the KNN post-processing')
+    parser.add_argument('--knn_k', type=int, default=None,
+                        help='number of nearest neighbours for the KNN post-processing')
+    parser.add_argument('--knn_sigma', type=float, default=None,
+                        help='Gaussian sigma used to weigh neighbour distances in the KNN post-processing')
+    parser.add_argument('--knn_cutoff', type=float, default=None,
+                        help='range distance cutoff after which neighbours are ignored in the KNN post-processing')
 
     args = parser.parse_args()
     settings = _prepare_settings(args)
