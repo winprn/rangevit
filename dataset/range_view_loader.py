@@ -348,23 +348,31 @@ class RangeViewLoader(Dataset):
             range_tensor = result['range']
             proj_range_np = range_tensor.cpu().numpy()
 
-        proj_tensor = self._normalize_and_stack(features, labels, mask_bool)
-        # print("[Sanity] fused_mask occ:", mask_bool.float().mean().item())
-        # print("[Sanity] label stats:", mask_bool.min().item(), labels.max().item())
-        # print("[Sanity] holes where mask==1 but label==0:",
-        #     (mask_bool & (labels==0)).float().mean().item())
-        # save_proj_tensor_as_images(proj_tensor, index, 'mcf')
-        # import sys
-        # sys.exit(0)
-        proj_tensor, px, py, points_xyz, sem_label = crop_inputs(
-            proj_tensor,
-            full_projection['px'],
-            full_projection['py'],
-            points_xyz,
-            sem_label,
-            self.crop_size,
-            center_crop=False,
-            p_hflip=self.proj_p_hflip)
+        if self.is_train:
+            proj_tensor = self._normalize_and_stack(features, labels, mask_bool)
+            proj_tensor, px, py, points_xyz, sem_label = crop_inputs(
+                proj_tensor,
+                full_projection['px'],
+                full_projection['py'],
+                points_xyz,
+                sem_label,
+                self.crop_size,
+                center_crop=False,
+                p_hflip=self.proj_p_hflip)
+        else:
+            mask_float = mask_bool.float()
+            features = features * mask_float.unsqueeze(0)
+            labels = labels * mask_float
+            proj_tensor = torch.cat(
+                (features,
+                 labels.unsqueeze(0),
+                 mask_float.unsqueeze(0)), dim=0)
+
+            _, h, w = proj_tensor.shape
+            px = full_projection['px']
+            py = full_projection['py']
+            px = 2.0 * ((px / w) - 0.5)
+            py = 2.0 * ((py / h) - 0.5)
         tree = kdtree(points_xyz)
         _, knns = tree.query(points_xyz, k=7)
 
