@@ -540,12 +540,13 @@ class Trainer(object):
 
             # Tensorboard logger (skip for test split - no labels available)
             if not self.settings.test_split:
+                lr_to_log = lr_value if lr_value is not None else 0.0
                 tensorboard_logger(epoch=epoch,
                                    mode=mode,
                                    recorder=self.recorder,
                                    metrics_dict=metrics_dict,
                                    loss_dict=loss_dict,
-                                   lr=lr,
+                                   lr=lr_to_log,
                                    mapped_cls_name=self.mapped_cls_name)
 
                 # Results at the end of the epoch
