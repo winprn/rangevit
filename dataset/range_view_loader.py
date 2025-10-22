@@ -314,8 +314,13 @@ class RangeViewLoader(Dataset):
             points_xyz = pointcloud[:, :3]
 
         full_projection = self._project_pointcloud(pointcloud, sem_label)
-        subclouds = self._build_subcloud_projections(pointcloud, sem_label)
-        features, labels, mask_bool, _ = self._apply_mcf(subclouds)
+        if self.use_mcf:
+            subclouds = self._build_subcloud_projections(pointcloud, sem_label)
+            features, labels, mask_bool, _ = self._apply_mcf(subclouds)
+        else:
+            features = full_projection['features']
+            labels = full_projection['labels']
+            mask_bool = full_projection['mask'].bool()
 
         range_tensor = features[0].clone()
         proj_range_np = range_tensor.cpu().numpy()
@@ -325,8 +330,14 @@ class RangeViewLoader(Dataset):
             pointcloud_donor, sem_label_donor, _ = self.dataset.loadDataByIndex(donor_index)
             sem_label_donor = self.dataset.labelMapping(sem_label_donor)
 
-            donor_subclouds = self._build_subcloud_projections(pointcloud_donor, sem_label_donor)
-            donor_features, donor_labels, donor_mask_bool, _ = self._apply_mcf(donor_subclouds)
+            if self.use_mcf:
+                donor_subclouds = self._build_subcloud_projections(pointcloud_donor, sem_label_donor)
+                donor_features, donor_labels, donor_mask_bool, _ = self._apply_mcf(donor_subclouds)
+            else:
+                donor_proj = self._project_pointcloud(pointcloud_donor, sem_label_donor)
+                donor_features = donor_proj['features']
+                donor_labels = donor_proj['labels']
+                donor_mask_bool = donor_proj['mask'].bool()
 
             frame_a_dict = {
                 'features': features,
@@ -417,8 +428,13 @@ class RangeViewLoader(Dataset):
 
         mapped_sem_label = self.dataset.labelMapping(sem_label)
         full_projection = self._project_pointcloud(pointcloud, mapped_sem_label)
-        subclouds = self._build_subcloud_projections(pointcloud, mapped_sem_label)
-        features, labels, mask_bool, _ = self._apply_mcf(subclouds)
+        if self.use_mcf:
+            subclouds = self._build_subcloud_projections(pointcloud, mapped_sem_label)
+            features, labels, mask_bool, _ = self._apply_mcf(subclouds)
+        else:
+            features = full_projection['features']
+            labels = full_projection['labels']
+            mask_bool = full_projection['mask'].bool()
 
         range_tensor = features[0].clone()
 
