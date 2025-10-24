@@ -406,7 +406,7 @@ class RangeViT(nn.Module):
 
             # Delete the pre-trained weights of the decoder
             decoder_keys = []
-            for key in pretrained_state_dict['state_dict'].keys():
+            for key in pretrained_state_dict.keys():
                 if 'decoder' in key:
                     decoder_keys.append(key)
             # for decoder_key in decoder_keys:
