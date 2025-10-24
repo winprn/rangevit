@@ -511,6 +511,13 @@ def _run_pipeline(
             mlflow_utils.set_tags(mlflow_utils.collect_tags_from_settings(settings))
             mlflow_utils.log_params(mlflow_utils.collect_params_from_settings(settings))
             mlflow_utils.log_input_dataset(getattr(settings, 'dataset', "SemanticKitti"), context="training")
+            # Log the active config file as an MLflow artifact
+            try:
+                cfg_path = getattr(settings, 'config_path', None) or getattr(args, 'config_path', None)
+                if cfg_path and os.path.isfile(cfg_path):
+                    mlflow_utils.log_artifact(cfg_path, artifact_path="configs")
+            except Exception:
+                pass
 
         run_start = time.time()
         start_context_lines = _build_run_context_lines(args, settings)
