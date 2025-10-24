@@ -280,7 +280,14 @@ class Trainer(object):
             t_process_start = time.time()
 
             # Feature: range, x, y, z, intensity
-            input_feature = input_feature.cuda() # shape: B x 5 x H x W
+            # If dataset returns multiple crops per frame, merge them into the batch dim
+            if input_feature.dim() == 5:  # [B, K, C, H, W]
+                B, K, C, H, W = input_feature.shape
+                input_feature = input_feature.view(B * K, C, H, W)
+                input_label = input_label.view(B * K, H, W)
+                input_mask = input_mask.view(B * K, H, W)
+
+            input_feature = input_feature.cuda() # shape: B x 5 x H x W or (B*K) x 5 x H x W
 
             input_label = input_label.cuda().long()
             input_label = input_label * input_label.ge(1).long()

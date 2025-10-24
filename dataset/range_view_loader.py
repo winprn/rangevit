@@ -30,6 +30,7 @@ class RangeViewLoader(Dataset):
         self.data_len = data_len
         self.return_uproj = return_uproj
         self.use_kpconv = use_kpconv
+        self.train_crops_per_frame = int(self.config.get('train_crops_per_frame', 1))
 
         augment_params = augmentor.AugmentParams()
         augment_config = self.config['augmentation']
@@ -85,6 +86,7 @@ class RangeViewLoader(Dataset):
         # Image augmentations
         if self.is_train:
             self.crop_size = self.config['image_size']
+            # Keep a single-crop transform for the common case K=1
             self.aug_ops = T.Compose([
                 T.RandomCrop(
                     size=(self.config['image_size'][0],
@@ -135,6 +137,13 @@ class RangeViewLoader(Dataset):
             proj_mask_tensor.float().unsqueeze(0)), dim=0)
 
         if self.is_train:
+            if self.train_crops_per_frame > 1:
+                # Multi-crop for KPConv path is not supported yet; fallback to 1 and warn once per worker
+                try:
+                    import warnings
+                    warnings.warn('train_crops_per_frame>1 with use_kpconv=True is not supported; using 1 crop per frame')
+                except Exception:
+                    pass
             proj_tensor, px, py, points_xyz, sem_label = crop_inputs(
                 proj_tensor, px, py, points_xyz, sem_label,
                 self.crop_size, center_crop=False, p_hflip=self.proj_p_hflip)
@@ -220,10 +229,25 @@ class RangeViewLoader(Dataset):
                 proj_sem_label_tensor.unsqueeze(0),
                 proj_mask_tensor.float().unsqueeze(0)), dim=0)
 
-            # Data augmentation
-            proj_tensor = self.aug_ops(proj_tensor)
-
-            return proj_tensor[0:5], proj_tensor[5], proj_tensor[6]
+            # Training-time random crops
+            if self.is_train and self.train_crops_per_frame > 1:
+                crops_feat = []
+                crops_lbl = []
+                crops_msk = []
+                for _ in range(self.train_crops_per_frame):
+                    off_y, off_x, h, w = T.RandomCrop.get_params(proj_tensor, self.crop_size)
+                    crop = TF.crop(proj_tensor, off_y, off_x, h, w)
+                    crops_feat.append(crop[0:5])
+                    crops_lbl.append(crop[5])
+                    crops_msk.append(crop[6])
+                input2d = torch.stack(crops_feat, dim=0)  # [K, 5, H, W]
+                label2d = torch.stack(crops_lbl, dim=0)   # [K, H, W]
+                mask2d = torch.stack(crops_msk, dim=0)    # [K, H, W]
+                return input2d, label2d, mask2d
+            else:
+                # Single random crop (original behavior)
+                proj_tensor = self.aug_ops(proj_tensor)
+                return proj_tensor[0:5], proj_tensor[5], proj_tensor[6]
 
     def __len__(self):
         if self.data_len > 0 and self.data_len < len(self.dataset):
