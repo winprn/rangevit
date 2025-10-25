@@ -139,7 +139,7 @@ class RangeViewLoader(Dataset):
         points_xyz = pointcloud[:, :3]
         sem_label = self.dataset.labelMapping(sem_label)
 
-        if self.is_train and (self.scan_proj is False):
+        if self.is_train:
             mix_index = (index + 60) % len(self.dataset)
             mix_index = np.random.randint(0, len(self.dataset))
             pointcloud_b, sem_label_b, _ = self.dataset.loadDataByIndex(mix_index)
