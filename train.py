@@ -498,6 +498,11 @@ class Trainer(object):
             input_feature = batch_dict['input2d'].cuda(non_blocking=True)
             assert self.settings.in_channels == 5
 
+            # If dataset returns multiple crops per frame, merge them into the batch dim
+            if input_feature.dim() == 5:  # [B, K, C, H, W]
+                B, K, C, H, W = input_feature.shape
+                input_feature = input_feature.view(B * K, C, H, W)
+
             # 3D inputs
             py = batch_dict['py'].cuda(non_blocking=True)
             px = batch_dict['px'].cuda(non_blocking=True)
@@ -507,6 +512,9 @@ class Trainer(object):
             labels3d = labels3d * labels3d.ge(1).long()
             mask_3d = labels3d.ge(1).float()
             num_points = batch_dict['num_points']
+            # Flatten num_points if it is [B, K]
+            if isinstance(num_points, torch.Tensor) and num_points.dim() == 2:
+                num_points = num_points.reshape(-1)
 
             # Forward propagation
             if mode == 'Train':

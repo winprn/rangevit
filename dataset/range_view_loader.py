@@ -138,12 +138,67 @@ class RangeViewLoader(Dataset):
 
         if self.is_train:
             if self.train_crops_per_frame > 1:
-                # Multi-crop for KPConv path is not supported yet; fallback to 1 and warn once per worker
-                try:
-                    import warnings
-                    warnings.warn('train_crops_per_frame>1 with use_kpconv=True is not supported; using 1 crop per frame')
-                except Exception:
-                    pass
+                # Generate K random crops and corresponding 3D point subsets
+                crops_feat, crops_lbl, crops_msk = [], [], []
+                px_list, py_list, pxyz_list, labels_list, knns_list, npts_list = [], [], [], [], [], []
+
+                for _ in range(self.train_crops_per_frame):
+                    proj_tensor_k, px_k, py_k, points_xyz_k, labels_k = crop_inputs(
+                        proj_tensor, px, py, points_xyz, sem_label,
+                        self.crop_size, center_crop=False, p_hflip=self.proj_p_hflip)
+
+                    # Build kNN graph for cropped points
+                    tree_k = kdtree(points_xyz_k)
+                    _, knns_k = tree_k.query(points_xyz_k, k=7)
+
+                    # Accumulate 2D crops
+                    crops_feat.append(proj_tensor_k[:5])
+                    crops_lbl.append(proj_tensor_k[5])
+                    crops_msk.append(proj_tensor_k[6])
+
+                    # Accumulate 3D per-crop data (will be concatenated across crops)
+                    px_list.append(torch.from_numpy(px_k).float())
+                    py_list.append(torch.from_numpy(py_k).float())
+                    pxyz_list.append(torch.from_numpy(points_xyz_k).float())
+                    labels_list.append(torch.from_numpy(labels_k).long())
+                    knns_list.append(torch.from_numpy(knns_k).long())
+                    npts_list.append(points_xyz_k.shape[0])
+
+                # Stack 2D crops per frame: [K, C/H/W]
+                input2d = torch.stack(crops_feat, dim=0)
+                label2d = torch.stack(crops_lbl, dim=0)
+                mask2d = torch.stack(crops_msk, dim=0)
+
+                # Concatenate 3D points across crops (indices in knns are local per-crop)
+                px_t = torch.cat(px_list, dim=0)
+                py_t = torch.cat(py_list, dim=0)
+                pxyz_t = torch.cat(pxyz_list, dim=0)
+                labels_t = torch.cat(labels_list, dim=0)
+                knns_t = torch.cat(knns_list, dim=0)
+
+                output = {
+                    'input2d': input2d,
+                    'label2d': label2d,
+                    'mask2d': mask2d,
+                    'px': px_t,
+                    'py': py_t,
+                    'points_xyz': pxyz_t,
+                    'knns': knns_t,
+                    'labels': labels_t,
+                    'num_points': npts_list,  # list[int], one per crop
+                    'index': index,
+                }
+
+                if self.return_uproj:
+                    assert self.is_train is False
+                    output['range'] = torch.from_numpy(proj_range)
+                    output['uproj_x'] = torch.from_numpy(self.projection.cached_data['uproj_x_idx']).long()
+                    output['uproj_y'] = torch.from_numpy(self.projection.cached_data['uproj_y_idx']).long()
+                    output['uproj_depth'] = torch.from_numpy(self.projection.cached_data['uproj_depth']).float()
+
+                return output
+
+            # Single-crop training (original behavior)
             proj_tensor, px, py, points_xyz, sem_label = crop_inputs(
                 proj_tensor, px, py, points_xyz, sem_label,
                 self.crop_size, center_crop=False, p_hflip=self.proj_p_hflip)
