@@ -45,16 +45,17 @@ class Inference(object):
 
         self.use_knn = settings.use_knn
 
-        knn_params = {
-            'knn': 5,
-            'search': settings.knn_search,
-            'sigma': 1.0,
-            'cutoff': 1.0,
-        }
-
-        self.knn_post = utils.postproc.KNN(
-            params=knn_params,
-            nclasses=self.settings.n_classes)
+        self.knn_post = None
+        if self.use_knn:
+            knn_params = {
+                'knn': settings.knn_k,
+                'search': settings.knn_search,
+                'sigma': settings.knn_sigma,
+                'cutoff': settings.knn_cutoff,
+            }
+            self.knn_post = utils.postproc.KNN(
+                params=knn_params,
+                nclasses=self.settings.n_classes)
 
         if self.use_knn and self.recorder is not None:
             self.recorder.logger.info('Using KNN Post Process')
@@ -127,9 +128,20 @@ class Inference(object):
         
         with torch.no_grad():
             t_start = time.time()
-            for i, (input_feature, input_label, _, proj_depth, uproj_x_idx, uproj_y_idx, uproj_depth, sem_label) in enumerate(self.val_loader):
+            for i, batch in enumerate(self.val_loader):
+                (
+                    input_feature,
+                    input_label,
+                    _,
+                    proj_depth,
+                    uproj_x_idx,
+                    uproj_y_idx,
+                    uproj_depth,
+                    sem_label,
+                    sample_index,
+                ) = batch
                 t_process_start = time.time()             
-                
+
                 # Feature: range, x, y, z, intensity
                 input_feature = input_feature.cuda() # shape: 1 x 5 x H x W
 
@@ -138,6 +150,7 @@ class Inference(object):
                 uproj_y_idx = uproj_y_idx[0].cuda()
                 uproj_depth = uproj_depth[0].cuda()
                 proj_depth = proj_depth[0].cuda()
+                sample_index_value = int(sample_index[0].item())
                 
                 assert input_feature.shape[0] == 1 # batch size has to be 1
 
@@ -185,7 +198,7 @@ class Inference(object):
                 if self.settings.save_eval_results:
                     if self.settings.dataset == 'NuScenes':
                         pred_path = os.path.join(self.prediction_path, 'lidarseg', self.data_split)
-                        lidar_token = self.val_range_loader.dataset.token_list[i]
+                        lidar_token = self.val_range_loader.dataset.token_list[sample_index_value]
                         
                         if not os.path.isdir(pred_path):
                             os.makedirs(pred_path)
@@ -194,7 +207,7 @@ class Inference(object):
 
                     elif self.settings.dataset == 'SemanticKitti':
                         pred_np_origin = self.val_range_loader.dataset.class_map_lut_inv[pred_np]
-                        seq_id, frame_id = self.val_range_loader.dataset.parsePathInfoByIndex(i)
+                        seq_id, frame_id = self.val_range_loader.dataset.parsePathInfoByIndex(sample_index_value)
                         pred_path = os.path.join(self.prediction_path, 'sequences', seq_id, 'predictions')
                         
                         if not os.path.isdir(pred_path):
@@ -338,8 +351,12 @@ if __name__ == '__main__':
     parser.add_argument('--mini', type=bool, help='use mini version of the dataset, type: bool')
     parser.add_argument('--save_eval_results', type=bool)
     parser.add_argument('--log_frequency', type=int)
-    parser.add_argument('--knn', type=bool, default=False)
-    parser.add_argument('--knn_search', type=int, default=13)
+    parser.add_argument('--knn', action='store_true', help='enable KNN post-processing')
+    parser.add_argument('--disable_knn', action='store_true', help='disable KNN post-processing even if enabled in the config')
+    parser.add_argument('--knn_search', type=int, default=None, help='search window size (odd integer) for the KNN post-processing')
+    parser.add_argument('--knn_k', type=int, default=None, help='number of nearest neighbours for the KNN post-processing')
+    parser.add_argument('--knn_sigma', type=float, default=None, help='Gaussian sigma used to weigh neighbour distances in the KNN post-processing')
+    parser.add_argument('--knn_cutoff', type=float, default=None, help='range distance cutoff after which neighbours are ignored in the KNN post-processing')
 
     args = parser.parse_args()
     settings = Option(args.config_path, args)
@@ -354,13 +371,23 @@ if __name__ == '__main__':
     settings.save_eval_results = args.save_eval_results if args.save_eval_results is not None else settings.save_eval_results
     settings.log_frequency = args.log_frequency if args.log_frequency is not None else settings.log_frequency
 
-    settings.use_knn = args.knn
-    settings.knn_search = args.knn_search
+    if args.knn:
+        settings.use_knn = True
+    if args.disable_knn:
+        settings.use_knn = False
+    if args.knn_search is not None:
+        settings.knn_search = args.knn_search
+    if args.knn_k is not None:
+        settings.knn_k = args.knn_k
+    if args.knn_sigma is not None:
+        settings.knn_sigma = args.knn_sigma
+    if args.knn_cutoff is not None:
+        settings.knn_cutoff = args.knn_cutoff
 
     if not os.path.isdir(settings.save_path):
         raise ValueError('Training path does not exists: {}'.format(settings.save_path))
 
-    knn_str = f'_KNN_{args.knn_search}' if args.knn else ''
+    knn_str = f'_KNN_{settings.knn_search}' if settings.use_knn else ''
     settings.save_path = os.path.join(
         settings.save_path, f'Eval{knn_str}_{args.id}')
 

@@ -69,6 +69,25 @@ class Trainer(object):
             ignore=self.ignore_class, is_distributed=self.settings.distributed)
         self.metrics.reset()
 
+        self.point_metrics = None
+        self.knn_post = None
+        if (not self.settings.use_kpconv) and self.settings.use_knn:
+            knn_params = {
+                'knn': self.settings.knn_k,
+                'search': self.settings.knn_search,
+                'sigma': self.settings.knn_sigma,
+                'cutoff': self.settings.knn_cutoff,
+            }
+            self.knn_post = utils.postproc.KNN(
+                params=knn_params,
+                nclasses=self.settings.n_classes)
+            self.point_metrics = utils.metrics.IOUEval(
+                n_classes=self.settings.n_classes,
+                device=torch.device('cpu'),
+                ignore=self.ignore_class,
+                is_distributed=self.settings.distributed)
+            self.point_metrics.reset()
+
         # Define scheduler
         self.scheduler = utils.optim.WarmupCosineLR(
             optimizer=self.optimizer,
@@ -161,6 +180,7 @@ class Trainer(object):
             dataset=valset,
             config=self.settings.config,
             is_train=False,
+            return_uproj=((not self.settings.use_kpconv) and self.settings.use_knn),
             use_kpconv=self.settings.use_kpconv)
 
         collate_fn = dataset.custom_collate_kpconv_fn if self.settings.use_kpconv else None
@@ -267,17 +287,40 @@ class Trainer(object):
         # Init metrics
         loss_meter = tools.AverageMeter()
         self.metrics.reset()
+        if self.point_metrics is not None:
+            self.point_metrics.reset()
 
         total_iter = len(dataloader)
         t_start = time.time()
 
-        for i, (input_feature, input_label, input_mask) in enumerate(dataloader):
+        knn_eval_active = (self.point_metrics is not None) and (mode != 'Train')
+
+        for i, batch in enumerate(dataloader):
+            if knn_eval_active:
+                (
+                    input_feature,
+                    input_label,
+                    input_mask,
+                    proj_depth,
+                    uproj_x_idx,
+                    uproj_y_idx,
+                    uproj_depth,
+                    sem_label,
+                    sample_index,
+                ) = batch
+                sample_index_value = int(sample_index[0].item())
+            else:
+                input_feature, input_label, input_mask = batch
+                proj_depth = uproj_x_idx = uproj_y_idx = uproj_depth = None
+                sem_label = None
+                sample_index_value = None
             # [TESTING] Early exit option for testing (limit iterations per epoch)
             if self.settings.max_iters_per_epoch is not None and i >= self.settings.max_iters_per_epoch:
                 print(f'[TESTING PIPELIONE] Reached max_iters_per_epoch={self.settings.max_iters_per_epoch}, stopping epoch early')
                 break
 
             t_process_start = time.time()
+            point_pred_np = None
 
             # Feature: range, x, y, z, intensity
             # If dataset returns multiple crops per frame, merge them into the batch dim
@@ -336,6 +379,24 @@ class Trainer(object):
                     output = lidar_pred.unsqueeze(0) # [C, H, W] ==> [1, C, H, W]
                     output_softmax = F.softmax(output, dim=1)
 
+                    if knn_eval_active:
+                        device = input_feature.device
+                        proj_depth_gpu = proj_depth[0].to(device=device, non_blocking=True)
+                        uproj_x_gpu = uproj_x_idx[0].to(device=device, non_blocking=True).long()
+                        uproj_y_gpu = uproj_y_idx[0].to(device=device, non_blocking=True).long()
+                        uproj_depth_gpu = uproj_depth[0].to(device=device, non_blocking=True)
+                        pred_argmax = output_softmax[0].argmax(dim=0)
+                        unproj_argmax = self.knn_post(
+                            proj_depth_gpu,
+                            uproj_depth_gpu,
+                            pred_argmax,
+                            uproj_x_gpu,
+                            uproj_y_gpu)
+                        point_pred_np = unproj_argmax.cpu().numpy().reshape((-1)).astype(np.int32)
+                        if sem_label is not None and self.settings.has_label:
+                            sem_label_np = sem_label[0].cpu().numpy()
+                            self.point_metrics.addBatch(point_pred_np, sem_label_np)
+
                     # Loss calculation
                     total_loss, loss_lovasz, loss_focal = self.compute_losses(
                         output, output_softmax, input_label, input_mask)
@@ -348,6 +409,30 @@ class Trainer(object):
                 self.metrics.addBatch(argmax, input_label) # 2D predictions
 
             loss_meter.update(loss.item(), input_feature.size(0))
+
+            if (
+                mode == 'Validation'
+                and save_results_path is not None
+                and point_pred_np is not None
+                and sample_index_value is not None
+            ):
+                index = sample_index_value
+                pred_np = point_pred_np
+                if self.settings.dataset == 'nuScenes':
+                    pred_path = os.path.join(save_results_path, 'lidarseg', self.data_split)
+                    nu_dataset = self.val_loader.dataset.dataset
+                    lidar_token = nu_dataset.token_list[index]
+                    os.makedirs(pred_path, exist_ok=True)
+                    pred_result_path = os.path.join(pred_path, f'{lidar_token}_lidarseg.bin')
+                    pred_np.tofile(pred_result_path)
+                elif self.settings.dataset == 'SemanticKitti':
+                    sk_dataset = self.val_loader.dataset.dataset
+                    pred_np_origin = sk_dataset.class_map_lut_inv[pred_np]
+                    seq_id, frame_id = sk_dataset.parsePathInfoByIndex(index)
+                    pred_path = os.path.join(save_results_path, 'sequences', seq_id, 'predictions')
+                    os.makedirs(pred_path, exist_ok=True)
+                    pred_result_path = os.path.join(pred_path, f'{frame_id}.label')
+                    pred_np_origin.tofile(pred_result_path)
 
             # Timer logger
             t_process_end = time.time()
@@ -374,6 +459,10 @@ class Trainer(object):
                         mode, self.settings.n_epochs, epoch+1, total_iter, i+1, data_cost_time, process_cost_time)
                     log_str += 'LR {} Loss {:0.4f} Acc {:0.4f} IOU {:0.4F} '.format(
                         lr_value, loss.item(), mean_acc.item(), mean_iou.item())
+                    if knn_eval_active and self.settings.has_label:
+                        p_mean_iou, _, p_mean_acc, _ = self.point_metrics.getIoUnAcc()
+                        log_str += 'PointAcc {:0.4f} PointIOU {:0.4f} '.format(
+                            p_mean_acc.item(), p_mean_iou.item())
                     log_str += 'RT {}'.format(remain_time)
                     self.recorder.logger.info(log_str)
 
@@ -403,6 +492,25 @@ class Trainer(object):
                 'conf_matrix': self.metrics.conf_matrix.clone().cpu(),
             }
 
+            point_metrics_dict = None
+            if (
+                self.point_metrics is not None
+                and self.settings.has_label
+                and mode != 'Train'
+            ):
+                mean_acc_3d, class_acc_3d = self.point_metrics.getAcc()
+                mean_recall_3d, class_recall_3d = self.point_metrics.getRecall()
+                mean_iou_3d, class_iou_3d = self.point_metrics.getIoU()
+                point_metrics_dict = {
+                    'mean_acc': mean_acc_3d,
+                    'class_acc': class_acc_3d,
+                    'mean_recall': mean_recall_3d,
+                    'class_recall': class_recall_3d,
+                    'mean_iou': mean_iou_3d,
+                    'class_iou': class_iou_3d,
+                    'conf_matrix': self.point_metrics.conf_matrix.clone().cpu(),
+                }
+
         loss_dict = {
                 'loss_meter_avg': loss_meter.avg,
                 'loss_focal': loss_focal,
@@ -429,20 +537,33 @@ class Trainer(object):
                              metrics_dict=metrics_dict,
                              dataloader=self.val_range_loader,
                              print_data_distribution=True)
+                if point_metrics_dict is not None:
+                    eval_results(pixel_or_point='Point',
+                                 settings=self.settings,
+                                 recorder=self.recorder,
+                                 metrics_dict=point_metrics_dict,
+                                 dataloader=self.val_range_loader,
+                                 print_data_distribution=True)
 
             # Tensorboard logger (skip for test split - no labels available)
             if not self.settings.test_split:
+                lr_to_log = lr_value if lr_value is not None else 0.0
                 tensorboard_logger(epoch=epoch,
                                    mode=mode,
                                    recorder=self.recorder,
                                    metrics_dict=metrics_dict,
                                    loss_dict=loss_dict,
-                                   lr=lr,
+                                   lr=lr_to_log,
                                    mapped_cls_name=self.mapped_cls_name)
 
                 # Results at the end of the epoch
                 log_str = '>>> {} Loss {:0.4f} Acc {:0.4f} IOU {:0.4F} Recall {:0.4f}'.format(
                     mode, loss_meter.avg, mean_acc.item(), mean_iou.item(), mean_recall.item())
+                if point_metrics_dict is not None:
+                    log_str += ' | PointAcc {:0.4f} PointIOU {:0.4f} PointRecall {:0.4f}'.format(
+                        point_metrics_dict['mean_acc'].item(),
+                        point_metrics_dict['mean_iou'].item(),
+                        point_metrics_dict['mean_recall'].item())
                 self.recorder.logger.info(log_str)
             else:
                 self.recorder.logger.info(f'>>> {mode} on test split completed - predictions saved')
@@ -455,6 +576,12 @@ class Trainer(object):
                 'IOU': mean_iou.item(),
                 'Recall': mean_recall.item()
             }
+            if point_metrics_dict is not None:
+                result_metrics.update({
+                    'PointAcc': point_metrics_dict['mean_acc'].item(),
+                    'PointIOU': point_metrics_dict['mean_iou'].item(),
+                    'PointRecall': point_metrics_dict['mean_recall'].item(),
+                })
             return result_metrics
         else:
             # Test split has no labels, return None or dummy metrics

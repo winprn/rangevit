@@ -276,8 +276,17 @@ class RangeViewLoader(Dataset):
             uproj_y_tensor = torch.from_numpy(self.projection.cached_data['uproj_y_idx']).long()
             uproj_depth_tensor = torch.from_numpy(self.projection.cached_data['uproj_depth']).float()
 
-            return proj_feature_tensor, proj_sem_label_tensor, proj_mask_tensor, torch.from_numpy(
-                proj_range), uproj_x_tensor, uproj_y_tensor, uproj_depth_tensor, sem_label
+            return (
+                proj_feature_tensor,
+                proj_sem_label_tensor,
+                proj_mask_tensor,
+                torch.from_numpy(proj_range),
+                uproj_x_tensor,
+                uproj_y_tensor,
+                uproj_depth_tensor,
+                sem_label,
+                torch.tensor(index, dtype=torch.long),
+            )
         else:
             proj_tensor = torch.cat(
                 (proj_feature_tensor,
