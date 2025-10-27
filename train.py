@@ -242,6 +242,7 @@ class Trainer(object):
         """
         Compute boundary loss as the L1 distance between predicted probability boundaries and
         ground-truth one-hot boundaries, masked to ignore invalid pixels.
+        Normalized by both number of valid pixels and number of channels.
         """
         num_classes = prob_map.shape[1]
         valid_prob_map = prob_map[:, 1:, :, :]  # drop ignore class channel
@@ -264,7 +265,10 @@ class Trainer(object):
         normalizer = valid_mask.sum()
         if normalizer <= 0:
             return prob_map.new_tensor(0.0)
-        return masked_diff.sum() / normalizer
+
+        # Normalize by both number of valid pixels AND number of channels
+        num_channels = valid_prob_map.shape[1]
+        return masked_diff.sum() / (normalizer * num_channels)
 
     @staticmethod
     def _boundary_map(tensor):
