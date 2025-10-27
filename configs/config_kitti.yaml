@@ -25,6 +25,9 @@ batch_size_val: 1
 lr: 0.0004
 train_result_frequency: 100 # printing frequency of the train results
 boundary_loss_weight: 0.1  # Reduced from 1.0 - loss now properly normalized per channel
+boundary_loss_use_huber: false  # optional robust penalty for boundary loss
+boundary_loss_huber_delta: 1.0  # Huber delta parameter
+boundary_sharpen_temp: 1.0      # softmax temperature for boundary computation (1.0 disables sharpening)
 
 
 # Model config

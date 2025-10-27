@@ -181,6 +181,14 @@ def _prepare_settings(args: argparse.Namespace) -> Option:
         raise ValueError(f"Invalid boundary_loss_weight value: {boundary_loss_weight}. Expected a non-negative float.")
     settings.boundary_loss_weight = boundary_loss_weight
 
+    # Boundary loss optional controls
+    if args.boundary_loss_use_huber:
+        settings.boundary_loss_use_huber = True
+    if args.boundary_loss_huber_delta is not None:
+        settings.boundary_loss_huber_delta = args.boundary_loss_huber_delta
+    if args.boundary_sharpen_temp is not None:
+        settings.boundary_sharpen_temp = args.boundary_sharpen_temp
+
     # No patch and positional embeddings are loaded when training from scratch.
     if settings.pretrained_model is None:
         settings.reuse_patch_emb = False
@@ -602,6 +610,12 @@ if __name__ == '__main__':
                         help='frequency (in epochs) to save checkpoints as epoch_*.pth; 0 disables extra saves')
     parser.add_argument('--boundary_loss_weight', type=float, default=None,
                         help='weight for boundary loss added to the total loss')
+    parser.add_argument('--boundary_loss_use_huber', action='store_true',
+                        help='use Huber (smooth L1) penalty for boundary loss')
+    parser.add_argument('--boundary_loss_huber_delta', type=float, default=None,
+                        help='Huber delta parameter for boundary loss (default: 1.0)')
+    parser.add_argument('--boundary_sharpen_temp', type=float, default=None,
+                        help='temperature for softmax sharpening used in boundary computation (default: 1.0)')
     parser.add_argument('--seed', type=int, default=1, help='random seed')
 
     args = parser.parse_args()

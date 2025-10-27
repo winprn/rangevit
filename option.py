@@ -55,6 +55,10 @@ class Option(object):
         self.save_frequent = self.config.get('save_frequent', 0)
         self.train_result_frequency = self.config.get('train_result_frequency', 100)
         self.boundary_loss_weight = float(self.config.get('boundary_loss_weight', 0.0))
+        # Boundary loss optional knobs
+        self.boundary_loss_use_huber = self.config.get('boundary_loss_use_huber', False)
+        self.boundary_loss_huber_delta = float(self.config.get('boundary_loss_huber_delta', 1.0))
+        self.boundary_sharpen_temp = float(self.config.get('boundary_sharpen_temp', 1.0))
         self.use_fp16 = self.config.get('use_fp16', False) # for mixed-precision training
         self.max_iters_per_epoch = self.config.get('max_iters_per_epoch', None) # limit iterations per epoch for testing
 

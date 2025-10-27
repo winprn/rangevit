@@ -233,16 +233,24 @@ class Trainer(object):
         boundary_loss_weight = getattr(self.settings, 'boundary_loss_weight', 0.0)
         loss_boundary = output_softmax.new_tensor(0.0)
         if boundary_loss_weight > 0:
-            loss_boundary = self._compute_boundary_loss(output_softmax, label, mask)
+            # Optional softmax sharpening for crisper boundaries
+            temp = float(getattr(self.settings, 'boundary_sharpen_temp', 1.0))
+            if temp != 1.0:
+                prob_for_boundary = F.softmax(output / temp, dim=1)
+            else:
+                prob_for_boundary = output_softmax
+            loss_boundary = self._compute_boundary_loss(prob_for_boundary, label, mask)
 
         total_loss = loss_focal + loss_lovasz + boundary_loss_weight * loss_boundary
         return total_loss, loss_lovasz, loss_focal, loss_boundary
 
     def _compute_boundary_loss(self, prob_map, label, mask):
         """
-        Compute boundary loss as the L1 distance between predicted probability boundaries and
-        ground-truth one-hot boundaries, masked to ignore invalid pixels.
-        Normalized by both number of valid pixels and number of channels.
+        Compute boundary loss between predicted probability boundaries and
+        ground-truth one-hot boundaries. Uses replicate padding + Sobel edge
+        operator, masks invalid pixels, and normalizes over GT boundary weight
+        mass (boundary-only normalization). Optional Huber smoothing and
+        softmax sharpening are supported (configured via settings).
         """
         num_classes = prob_map.shape[1]
         valid_prob_map = prob_map[:, 1:, :, :]  # drop ignore class channel
@@ -259,29 +267,49 @@ class Trainer(object):
         boundary_pred = self._boundary_map(valid_prob_map)
         boundary_gt = self._boundary_map(valid_one_hot)
 
+        # Difference between predicted and GT boundaries
         diff = torch.abs(boundary_pred - boundary_gt)
-        masked_diff = diff * valid_mask
 
-        normalizer = valid_mask.sum()
-        if normalizer <= 0:
+        # Optional robust penalty (Huber / smooth L1) for stability
+        use_huber = bool(getattr(self.settings, 'boundary_loss_use_huber', False))
+        if use_huber:
+            delta = float(getattr(self.settings, 'boundary_loss_huber_delta', 1.0))
+            diff = torch.where(
+                diff <= delta,
+                0.5 * (diff * diff) / max(delta, 1e-6),
+                diff - 0.5 * delta,
+            )
+
+        # Focus the loss on GT boundary locations using GT boundary magnitude as weights
+        # Also enforce valid mask
+        weights = boundary_gt * valid_mask
+        numerator = (diff * weights).sum()
+        denominator = weights.sum()
+
+        if denominator <= 0:
             return prob_map.new_tensor(0.0)
 
-        # Normalize by both number of valid pixels AND number of channels
-        num_channels = valid_prob_map.shape[1]
-        return masked_diff.sum() / (normalizer * num_channels)
+        return numerator / denominator
 
     @staticmethod
     def _boundary_map(tensor):
         channels = tensor.size(1)
-        kernel_x = tensor.new_zeros((channels, 1, 1, 2))
-        kernel_x[:, :, 0, 0] = 1.0
-        kernel_x[:, :, 0, 1] = -1.0
-        kernel_y = tensor.new_zeros((channels, 1, 2, 1))
-        kernel_y[:, :, 0, 0] = 1.0
-        kernel_y[:, :, 1, 0] = -1.0
 
-        grad_x = torch.nn.functional.conv2d(tensor, kernel_x, padding=(0, 1), groups=channels)
-        grad_y = torch.nn.functional.conv2d(tensor, kernel_y, padding=(1, 0), groups=channels)
+        # Replicate padding to avoid artificial edges at image borders
+        padded = F.pad(tensor, (1, 1, 1, 1), mode='replicate')
+
+        # Sobel kernels (3x3) per channel
+        kx = tensor.new_tensor([[1.0, 0.0, -1.0],
+                                [2.0, 0.0, -2.0],
+                                [1.0, 0.0, -1.0]]).view(1, 1, 3, 3)
+        ky = tensor.new_tensor([[1.0, 2.0, 1.0],
+                                [0.0, 0.0, 0.0],
+                                [-1.0, -2.0, -1.0]]).view(1, 1, 3, 3)
+        kernel_x = kx.repeat(channels, 1, 1, 1)
+        kernel_y = ky.repeat(channels, 1, 1, 1)
+
+        grad_x = F.conv2d(padded, kernel_x, padding=0, groups=channels)
+        grad_y = F.conv2d(padded, kernel_y, padding=0, groups=channels)
 
         return torch.sqrt(grad_x * grad_x + grad_y * grad_y + 1e-6)
 
@@ -488,7 +516,7 @@ class Trainer(object):
                                    recorder=self.recorder,
                                    metrics_dict=metrics_dict,
                                    loss_dict=loss_dict,
-                                   lr=lr,
+                                   lr=lr_value,
                                    mapped_cls_name=self.mapped_cls_name)
 
                 # Results at the end of the epoch
