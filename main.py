@@ -18,6 +18,9 @@ import os
 import datetime
 import time
 import numpy as np
+import signal
+import sys
+import atexit
 
 from option import Option
 from train import Trainer
@@ -92,6 +95,12 @@ class Experiment(object):
         self.epoch_start = 0
         self._mlflow_finalized = False
 
+        # Setup signal handlers for graceful shutdown
+        self._setup_signal_handlers()
+
+        # Register cleanup handler
+        atexit.register(self._cleanup)
+
         # Init model
         self.model = self._initModel()
 
@@ -100,6 +109,25 @@ class Experiment(object):
 
         # Load checkpoint
         self._loadCheckpoint()
+
+    def _setup_signal_handlers(self):
+        """Setup handlers for SIGINT and SIGTERM to gracefully end MLflow runs."""
+        def signal_handler(signum, frame):
+            signame = 'SIGINT' if signum == signal.SIGINT else 'SIGTERM'
+            if self.recorder is not None:
+                self.recorder.logger.info(f'Received {signame}, cleaning up...')
+            else:
+                print(f'Received {signame}, cleaning up...')
+            self._finalize_mlflow(status='KILLED')
+            sys.exit(1)
+
+        signal.signal(signal.SIGINT, signal_handler)
+        signal.signal(signal.SIGTERM, signal_handler)
+
+    def _cleanup(self):
+        """Cleanup handler called on exit."""
+        if not self._mlflow_finalized:
+            self._finalize_mlflow(status='FAILED')
 
 
     def _initModel(self):
@@ -227,7 +255,7 @@ class Experiment(object):
                     datetime.timedelta(seconds=cost_time)))
             self.mlflow_manager.log_metrics({'total_runtime_sec': cost_time}, step=self.epoch_start)
             self._finalize_mlflow()
-            return
+            return None
         best_val_result = None
 
         #self.trainer.scheduler.step(self.epoch_start*len(self.trainer.train_loader))
@@ -306,6 +334,12 @@ class Experiment(object):
         self.mlflow_manager.log_metrics({'total_runtime_sec': cost_time}, step=self.settings.n_epochs)
         self._finalize_mlflow()
 
+        # Return checkpoint path for potential inference
+        if self.recorder is not None:
+            checkpoint_path = os.path.join(self.recorder.checkpoint_path, 'checkpoint.pth')
+            return checkpoint_path if os.path.exists(checkpoint_path) else None
+        return None
+
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Experiment Options')
@@ -331,6 +365,7 @@ if __name__ == '__main__':
     parser.add_argument('--save_eval_results', action='store_true', help='save the predictions')
     parser.add_argument('--log_frequency', type=int, default=100, help='logging frequency')
     parser.add_argument('--seed', type=int, default=1, help='random seed')
+    parser.add_argument('--full', action='store_true', help='run full experiment: training followed by inference with best checkpoint')
 
     args = parser.parse_args()
     settings = Option(args.config_path, args)
@@ -364,6 +399,90 @@ if __name__ == '__main__':
     if settings.val_only:
         settings.save_path = os.path.join(settings.save_path, f'Eval_{settings.id}')
 
-    mlflow_utils.setup()
-    exp = Experiment(settings)
-    exp.run()
+    # Handle full mode (training + inference)
+    if args.full:
+        if args.val_only:
+            print('ERROR: --full and --val_only cannot be used together')
+            sys.exit(1)
+
+        print('=' * 80)
+        print('FULL MODE: Training phase')
+        print('=' * 80)
+
+        # Training phase
+        exp = Experiment(settings)
+        try:
+            checkpoint_path = exp.run()
+        except KeyboardInterrupt:
+            print('\nInterrupted by user during training')
+            exp._finalize_mlflow(status='KILLED')
+            sys.exit(1)
+        except Exception as e:
+            print(f'\nTraining failed with exception: {e}')
+            if exp.recorder is not None:
+                exp.recorder.logger.error(f'Training failed: {e}', exc_info=True)
+            exp._finalize_mlflow(status='FAILED')
+            raise
+
+        if checkpoint_path is None or not os.path.exists(checkpoint_path):
+            print('ERROR: No checkpoint found after training')
+            sys.exit(1)
+
+        print('\n' + '=' * 80)
+        print('FULL MODE: Inference phase')
+        print(f'Using checkpoint: {checkpoint_path}')
+        print('=' * 80)
+
+        # Inference phase - create new settings and experiment
+        settings_infer = Option(args.config_path, args)
+        settings_infer.id = args.id if args.id is not None else settings_infer.id
+        settings_infer.data_root = args.data_root
+        settings_infer.use_mini_version = args.mini
+        settings_infer.val_only = True
+        settings_infer.test_split = args.test_split
+        settings_infer.save_eval_results = True  # Always save results in full mode
+        settings_infer.log_frequency = args.log_frequency
+        settings_infer.num_workers = args.num_workers
+        settings_infer.seed = args.seed
+        settings_infer.checkpoint = checkpoint_path
+        settings_infer.pretrained_model = None
+        settings_infer.finetune_pretrained_model = False
+        settings_infer.save_path = os.path.join(args.save_path, f'Inference_{settings_infer.id}')
+
+        if args.window_stride is not None:
+            settings_infer.window_stride = [settings_infer.window_stride[0], args.window_stride]
+
+        exp_infer = Experiment(settings_infer)
+        try:
+            exp_infer.run()
+        except KeyboardInterrupt:
+            print('\nInterrupted by user during inference')
+            exp_infer._finalize_mlflow(status='KILLED')
+            sys.exit(1)
+        except Exception as e:
+            print(f'\nInference failed with exception: {e}')
+            if exp_infer.recorder is not None:
+                exp_infer.recorder.logger.error(f'Inference failed: {e}', exc_info=True)
+            exp_infer._finalize_mlflow(status='FAILED')
+            raise
+
+        print('\n' + '=' * 80)
+        print('FULL MODE: Completed successfully')
+        print('=' * 80)
+
+    else:
+        # Standard mode (training or inference only)
+        exp = Experiment(settings)
+
+        try:
+            exp.run()
+        except KeyboardInterrupt:
+            print('\nInterrupted by user')
+            exp._finalize_mlflow(status='KILLED')
+            sys.exit(1)
+        except Exception as e:
+            print(f'\nExperiment failed with exception: {e}')
+            if exp.recorder is not None:
+                exp.recorder.logger.error(f'Experiment failed: {e}', exc_info=True)
+            exp._finalize_mlflow(status='FAILED')
+            raise
