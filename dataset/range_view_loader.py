@@ -371,14 +371,7 @@ class RangeViewLoader(Dataset):
                 center_crop=False,
                 p_hflip=self.proj_p_hflip)
         else:
-            mask_float = mask_bool.float()
-            features = features * mask_float.unsqueeze(0)
-            labels = labels * mask_float
-            proj_tensor = torch.cat(
-                (features,
-                 labels.unsqueeze(0),
-                 mask_float.unsqueeze(0)), dim=0)
-
+            proj_tensor = self._normalize_and_stack(features, labels, mask_bool)
             _, h, w = proj_tensor.shape
             px = full_projection['px']
             py = full_projection['py']
@@ -439,7 +432,10 @@ class RangeViewLoader(Dataset):
         range_tensor = features[0].clone()
 
         if self.return_uproj:
-            mask_float = mask_bool.float()
+            proj_tensor = self._normalize_and_stack(features, labels, mask_bool)
+            features = proj_tensor[0:5]
+            labels = proj_tensor[5]
+            mask_float = proj_tensor[6]
             sem_label_tensor = torch.from_numpy(mapped_sem_label).long()
             uproj_x = full_projection['uproj_x_idx']
             uproj_y = full_projection['uproj_y_idx']
