@@ -15,6 +15,7 @@ batch_size: 8
 batch_size_val: 1
 lr: 0.0008 # when using DINO ViT-S/16 encoder as initialization use 0.0002.
 train_result_frequency: 100 # printing frequency of the train results
+sequential_crops: false  # process crops sequentially (2D and KPConv) to reduce peak memory
 
 
 # Model config

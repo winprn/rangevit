@@ -323,42 +323,93 @@ class Trainer(object):
             point_pred_np = None
 
             # Feature: range, x, y, z, intensity
-            # If dataset returns multiple crops per frame, merge them into the batch dim
+            # If dataset returns multiple crops per frame, merge them into the batch dim (unless sequential processing)
             if input_feature.dim() == 5:  # [B, K, C, H, W]
                 B, K, C, H, W = input_feature.shape
-                input_feature = input_feature.view(B * K, C, H, W)
-                input_label = input_label.view(B * K, H, W)
-                input_mask = input_mask.view(B * K, H, W)
+                if not getattr(self.settings, 'sequential_crops', False):
+                    input_feature = input_feature.view(B * K, C, H, W)
+                    input_label = input_label.view(B * K, H, W)
+                    input_mask = input_mask.view(B * K, H, W)
 
-            input_feature = input_feature.cuda() # shape: B x 5 x H x W or (B*K) x 5 x H x W
-
-            input_label = input_label.cuda().long()
-            input_label = input_label * input_label.ge(1).long()
-            input_mask = input_mask.cuda() * input_label.ge(1).float()
+            if getattr(self.settings, 'sequential_crops', False) and input_feature.dim() == 5:
+                # Keep tensors on CPU; move per-crop slices during sequential loop
+                input_label = input_label.long()
+                input_label = input_label * input_label.ge(1).long()
+                input_mask = input_mask * input_label.ge(1).float()
+            else:
+                input_feature = input_feature.cuda() # shape: B x 5 x H x W or (B*K) x 5 x H x W
+                input_label = input_label.cuda().long()
+                input_label = input_label * input_label.ge(1).long()
+                input_mask = input_mask.cuda() * input_label.ge(1).float()
 
             # Forward propagation
             if mode == 'Train':
-                with torch.amp.autocast('cuda', enabled=self.fp16_scaler is not None):
-                    output = self.model(input_feature)
-                    output_softmax = F.softmax(output, dim=1)
+                if getattr(self.settings, 'sequential_crops', False) and input_feature.dim() == 5:
+                    # Process crops sequentially in the 2D-only path
+                    B, K, C, H, W = input_feature.shape
+                    total_items = B * K
+                    self.optimizer.zero_grad()
+                    loss_accum = 0.0
+                    for b in range(B):
+                        for k in range(K):
+                            im_i = input_feature[b:b+1, k:k+1, ...].view(1, C, H, W).cuda()
+                            lbl_i = input_label[b:b+1, k:k+1, ...].view(1, H, W).cuda().long()
+                            msk_i = input_mask[b:b+1, k:k+1, ...].view(1, H, W).cuda()
 
-                    # Loss calculation
-                    total_loss, loss_lovasz, loss_focal = self.compute_losses(
-                        output, output_softmax, input_label, input_mask)
+                            with torch.amp.autocast('cuda', enabled=self.fp16_scaler is not None):
+                                output_i = self.model(im_i)
+                                output_softmax_i = F.softmax(output_i, dim=1)
+                                loss_i, loss_lovasz, loss_focal = self.compute_losses(
+                                    output_i, output_softmax_i, lbl_i, msk_i)
+                                loss_i = loss_i / float(total_items)
 
-                # Backward
-                self.optimizer.zero_grad()
-                if self.fp16_scaler is None:
-                    total_loss.backward()
-                    self.optimizer.step()
-                    # Update lr after optimizer step (required by pytorch)
-                    self.scheduler.step()
+                            # Backward accumulate
+                            if self.fp16_scaler is None:
+                                loss_i.backward()
+                            else:
+                                self.fp16_scaler.scale(loss_i).backward()
+
+                            # Metrics per-crop
+                            with torch.no_grad():
+                                argmax_i = output_i.argmax(dim=1)
+                                self.metrics.addBatch(argmax_i, lbl_i)
+
+                            loss_accum += float(loss_i.detach().cpu().item())
+
+                            del im_i, lbl_i, msk_i, output_i, output_softmax_i
+
+                    # Optimizer step
+                    if self.fp16_scaler is None:
+                        self.optimizer.step()
+                        self.scheduler.step()
+                    else:
+                        self.fp16_scaler.step(self.optimizer)
+                        self.scheduler.step()
+                        self.fp16_scaler.update()
+
+                    total_loss = torch.tensor(loss_accum, device=input_feature.device)
                 else:
-                    self.fp16_scaler.scale(total_loss).backward()
-                    self.fp16_scaler.step(self.optimizer)
-                    # Update lr after optimizer step (required by pytorch)
-                    self.scheduler.step()
-                    self.fp16_scaler.update()
+                    with torch.amp.autocast('cuda', enabled=self.fp16_scaler is not None):
+                        output = self.model(input_feature)
+                        output_softmax = F.softmax(output, dim=1)
+
+                        # Loss calculation
+                        total_loss, loss_lovasz, loss_focal = self.compute_losses(
+                            output, output_softmax, input_label, input_mask)
+
+                    # Backward
+                    self.optimizer.zero_grad()
+                    if self.fp16_scaler is None:
+                        total_loss.backward()
+                        self.optimizer.step()
+                        # Update lr after optimizer step (required by pytorch)
+                        self.scheduler.step()
+                    else:
+                        self.fp16_scaler.scale(total_loss).backward()
+                        self.fp16_scaler.step(self.optimizer)
+                        # Update lr after optimizer step (required by pytorch)
+                        self.scheduler.step()
+                        self.fp16_scaler.update()
             else:
                 with torch.no_grad():
                     assert input_feature.shape[0] == 1 # validation batch size has to be 1
@@ -403,12 +454,18 @@ class Trainer(object):
 
 
             # Measure IoU and record loss
-            loss = total_loss.mean()
-            with torch.no_grad():
-                argmax = output.argmax(dim=1)
-                self.metrics.addBatch(argmax, input_label) # 2D predictions
-
-            loss_meter.update(loss.item(), input_feature.size(0))
+            if getattr(self.settings, 'sequential_crops', False) and input_feature.dim() == 5:
+                loss = total_loss
+                # In sequential mode we normalized by total_items = B*K
+                B = input_feature.shape[0]
+                K = input_feature.shape[1]
+                loss_meter.update(loss.item(), B * K)
+            else:
+                loss = total_loss.mean()
+                with torch.no_grad():
+                    argmax = output.argmax(dim=1)
+                    self.metrics.addBatch(argmax, input_label) # 2D predictions
+                loss_meter.update(loss.item(), input_feature.size(0))
 
             if (
                 mode == 'Validation'
@@ -645,28 +702,94 @@ class Trainer(object):
 
             # Forward propagation
             if mode == 'Train':
-                with torch.amp.autocast('cuda', enabled=self.fp16_scaler is not None):
-                    output3d = self.model(input_feature, px, py, pxyz, knns, num_points)
+                if getattr(self.settings, 'sequential_crops', False):
+                    # Process crops sequentially (micro-batch=1) to reduce peak memory
+                    # num_points is per-item (length = B*K). Build cumulative offsets for slicing flat point arrays.
+                    if isinstance(num_points, torch.Tensor):
+                        np_cpu = num_points.detach().cpu().long()
+                    else:
+                        np_cpu = torch.tensor(num_points, dtype=torch.long)
+                    offsets = torch.zeros(len(np_cpu) + 1, dtype=torch.long)
+                    offsets[1:] = torch.cumsum(np_cpu, dim=0)
 
-                    output3d_softmax = F.softmax(output3d, dim=1)
+                    total_items = input_feature.shape[0]
+                    assert total_items == len(np_cpu), "Mismatch between items and num_points length"
 
-                    # Loss calculation
-                    total_loss, loss_lovasz, loss_focal = self.compute_losses(
-                        output3d, output3d_softmax, labels3d, mask_3d)
+                    # Accumulate gradients across items; step once
+                    self.optimizer.zero_grad()
+                    loss_accum = 0.0
+                    for i_item in range(total_items):
+                        s = int(offsets[i_item].item())
+                        e = int(offsets[i_item + 1].item())
+                        # Slice per-crop tensors
+                        im_i = input_feature[i_item:i_item + 1]
+                        px_i = px[s:e]
+                        py_i = py[s:e]
+                        pxyz_i = pxyz[s:e]
+                        knns_i = knns[s:e]
+                        labels3d_i = labels3d[s:e]
+                        mask3d_i = mask_3d[s:e]
+                        num_points_i = torch.tensor([e - s], device=np_cpu.device)
 
-                # Backward
-                self.optimizer.zero_grad()
-                if self.fp16_scaler is None:
-                    total_loss.backward()
-                    self.optimizer.step()
-                    # Update lr after optimizer step (required by pytorch)
-                    self.scheduler.step()
+                        with torch.amp.autocast('cuda', enabled=self.fp16_scaler is not None):
+                            output3d_i = self.model(im_i, px_i, py_i, pxyz_i, knns_i, num_points_i)
+                            output3d_softmax_i = F.softmax(output3d_i, dim=1)
+                            loss_i, loss_lovasz, loss_focal = self.compute_losses(
+                                output3d_i, output3d_softmax_i, labels3d_i, mask3d_i)
+                            # Normalize by number of items to match full-batch loss scale
+                            loss_i = loss_i / float(total_items)
+
+                        # Backward accumulate
+                        if self.fp16_scaler is None:
+                            loss_i.backward()
+                        else:
+                            self.fp16_scaler.scale(loss_i).backward()
+
+                        # For training metrics, update per-chunk to avoid storing the full output
+                        with torch.no_grad():
+                            argmax3d_i = output3d_i.argmax(dim=1)
+                            self.metrics.addBatch(argmax3d_i, labels3d_i)
+
+                        # Track scalar loss
+                        loss_accum += float(loss_i.detach().cpu().item())
+
+                        # Explicitly free per-item tensors early
+                        del im_i, px_i, py_i, pxyz_i, knns_i, labels3d_i, mask3d_i, output3d_i, output3d_softmax_i
+
+                    # Optimizer step after accumulating all items
+                    if self.fp16_scaler is None:
+                        self.optimizer.step()
+                        self.scheduler.step()
+                    else:
+                        self.fp16_scaler.step(self.optimizer)
+                        self.scheduler.step()
+                        self.fp16_scaler.update()
+
+                    # Compose placeholders for logging
+                    total_loss = torch.tensor(loss_accum, device=input_feature.device)
                 else:
-                    self.fp16_scaler.scale(total_loss).backward()
-                    self.fp16_scaler.step(self.optimizer)
-                    # Update lr after optimizer step (required by pytorch)
-                    self.scheduler.step()
-                    self.fp16_scaler.update()
+                    with torch.amp.autocast('cuda', enabled=self.fp16_scaler is not None):
+                        output3d = self.model(input_feature, px, py, pxyz, knns, num_points)
+
+                        output3d_softmax = F.softmax(output3d, dim=1)
+
+                        # Loss calculation
+                        total_loss, loss_lovasz, loss_focal = self.compute_losses(
+                            output3d, output3d_softmax, labels3d, mask_3d)
+
+                    # Backward
+                    self.optimizer.zero_grad()
+                    if self.fp16_scaler is None:
+                        total_loss.backward()
+                        self.optimizer.step()
+                        # Update lr after optimizer step (required by pytorch)
+                        self.scheduler.step()
+                    else:
+                        self.fp16_scaler.scale(total_loss).backward()
+                        self.fp16_scaler.step(self.optimizer)
+                        # Update lr after optimizer step (required by pytorch)
+                        self.scheduler.step()
+                        self.fp16_scaler.update()
             else:
                 with torch.no_grad():
                     assert input_feature.shape[0] == 1 # validation batch size has to be 1
@@ -697,12 +820,15 @@ class Trainer(object):
                         output3d, output3d_softmax, labels3d, mask_3d)
 
             # Measure IoU and record loss
-            loss = total_loss.mean()
-            with torch.no_grad():
-                argmax3d = output3d.argmax(dim=1)
-                self.metrics.addBatch(argmax3d, labels3d) # 3D predictions
-
-            loss_meter.update(loss.item(), input_feature.size(0))
+            if getattr(self.settings, 'sequential_crops', False):
+                loss = total_loss  # scalar tensor we built above
+                loss_meter.update(loss.item(), input_feature.size(0))
+            else:
+                loss = total_loss.mean()
+                with torch.no_grad():
+                    argmax3d = output3d.argmax(dim=1)
+                    self.metrics.addBatch(argmax3d, labels3d) # 3D predictions
+                loss_meter.update(loss.item(), input_feature.size(0))
 
             # Save the predictions
             if (mode == 'Validation' and save_results_path is not None):

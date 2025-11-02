@@ -86,6 +86,8 @@ class Option(object):
 
         # 3D refiner
         self.use_kpconv = self.config.get('use_kpconv', True)
+        # Process crops sequentially to reduce peak memory (applies to both KPConv and 2D-only paths)
+        self.sequential_crops = self.config.get('sequential_crops', self.config.get('kpconv_sequential_crops', False))
 
         # 2.5D post-processing
         self.use_knn = self.config.get('use_knn', False)
