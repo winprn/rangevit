@@ -134,6 +134,26 @@ def compute_wpd_statistics(data_root, kitti_config_path, output_path='wpd_stats.
     d_semantic = np.maximum(0, threshold - w_semantic)
     d_panoptic = np.maximum(0, threshold - w_panoptic)
 
+    # Print summary table for verification
+    header = (
+        f"\n{'ID':>3}  {'Class':<20}  {'Points':>12}  {'Freq':>10}  "
+        f"{'Alpha':>10}  {'Instances':>10}  {'w_norm':>10}  {'LongTail':>8}"
+    )
+    print(header)
+    print("-" * len(header))
+    for cls in range(n_classes):
+        class_name = kitti_config['mapped_class_name'].get(cls, f"class_{cls}")
+        point_count = class_point_counts.get(cls, 0)
+        freq = class_frequencies[cls]
+        alpha_val = alpha[cls]
+        inst_count = class_instance_counts.get(cls, 0)
+        w_val = w_semantic[cls]
+        tail_flag = "Y" if long_tail_semantic[cls] else "N"
+        print(
+            f"{cls:3d}  {class_name:<20}  {point_count:12d}  {freq:10.6f}  "
+            f"{alpha_val:10.2f}  {inst_count:10d}  {w_val:10.6f}  {tail_flag:>8}"
+        )
+
     # Prepare output
     stats = {
         'threshold': float(threshold),
