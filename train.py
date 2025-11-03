@@ -820,7 +820,7 @@ class Trainer(object):
                         output3d, output3d_softmax, labels3d, mask_3d)
 
             # Measure IoU and record loss
-            if getattr(self.settings, 'sequential_crops', False):
+            if (mode == 'Train') and getattr(self.settings, 'sequential_crops', False):
                 loss = total_loss  # scalar tensor we built above
                 loss_meter.update(loss.item(), input_feature.size(0))
             else:

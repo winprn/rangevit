@@ -6,7 +6,7 @@ id: 'exp_kitti'
 mlflow:
     enabled: true
     experiment: 'rangevit'
-    run_name: '[trainval] rangevit256_small_ft_trainval_knn_multiscan'            # overrides default if set
+    run_name: '[trainval][run 2] rangevit256_small_ft_trainval_kpconv_multiscan'            # overrides default if set
 
 # Data config
 dataset: 'SemanticKitti'
@@ -20,7 +20,7 @@ val_frequency: 3
 save_frequent: 10
 n_epochs: 70
 warmup_epochs: 10
-batch_size: 8
+batch_size: 16
 batch_size_val: 1
 lr: 0.0004
 train_result_frequency: 100 # printing frequency of the train results
