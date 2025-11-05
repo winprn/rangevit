@@ -43,21 +43,35 @@ class Inference(object):
         self.model = model.cuda()
         self.recorder = recorder
 
-        self.use_knn = settings.use_knn
+        self.postproc_method = getattr(settings, "postproc", "none").lower()
+        if getattr(settings, "use_knn", False):
+            self.postproc_method = 'knn'
 
-        knn_params = {
-            'knn': 5,
-            'search': settings.knn_search,
-            'sigma': 1.0,
-            'cutoff': 1.0,
-        }
+        self.post_processor = None
+        if self.postproc_method == 'knn':
+            knn_params = {
+                'knn': 5,
+                'search': settings.knn_search,
+                'sigma': 1.0,
+                'cutoff': 1.0,
+            }
+            self.post_processor = utils.postproc.KNN(
+                params=knn_params,
+                nclasses=self.settings.n_classes)
+        elif self.postproc_method == 'nnri':
+            sensor_cfg = self.settings.config['sensor']
+            range_mean = sensor_cfg['img_mean'][0]
+            range_std = sensor_cfg['img_stds'][0]
+            self.post_processor = utils.postproc.NNRI(
+                kernel_size=settings.nnri_kernel_size,
+                alpha=settings.nnri_alpha,
+                range_mean=range_mean,
+                range_std=range_std,
+            )
 
-        self.knn_post = utils.postproc.KNN(
-            params=knn_params,
-            nclasses=self.settings.n_classes)
-
-        if self.use_knn and self.recorder is not None:
-            self.recorder.logger.info('Using KNN Post Process')
+        if self.post_processor is not None and self.recorder is not None:
+            self.recorder.logger.info(
+                f'Using {self.postproc_method.upper()} Post Process')
 
         self.val_loader, self.val_range_loader = self._initDataloader()
 
@@ -162,15 +176,24 @@ class Inference(object):
                 model_process_time = t_model_process_end - t_process_start
                 
                 # KNN post process
-                if self.use_knn:
-                    unproj_argmax = self.knn_post(
+                if self.post_processor is None:
+                    unproj_argmax = pred_argmax[uproj_y_idx, uproj_x_idx]
+                elif self.postproc_method == 'knn':
+                    unproj_argmax = self.post_processor(
                         proj_depth,
                         uproj_depth,
                         pred_argmax,
                         uproj_x_idx,
                         uproj_y_idx)
+                elif self.postproc_method == 'nnri':
+                    unproj_argmax = self.post_processor(
+                        proj_depth,
+                        uproj_depth,
+                        pred_output,
+                        uproj_x_idx,
+                        uproj_y_idx)
                 else:
-                    unproj_argmax = pred_argmax[uproj_y_idx, uproj_x_idx]
+                    raise ValueError(f'Unsupported post-processing method: {self.postproc_method}')
 
                 post_process_time = time.time() - t_model_process_end
 
@@ -340,6 +363,9 @@ if __name__ == '__main__':
     parser.add_argument('--log_frequency', type=int)
     parser.add_argument('--knn', type=bool, default=False)
     parser.add_argument('--knn_search', type=int, default=13)
+    parser.add_argument('--postproc', type=str, choices=['none', 'knn', 'nnri'])
+    parser.add_argument('--nnri_kernel', type=int)
+    parser.add_argument('--nnri_alpha', type=float)
 
     args = parser.parse_args()
     settings = Option(args.config_path, args)
@@ -354,15 +380,36 @@ if __name__ == '__main__':
     settings.save_eval_results = args.save_eval_results if args.save_eval_results is not None else settings.save_eval_results
     settings.log_frequency = args.log_frequency if args.log_frequency is not None else settings.log_frequency
 
-    settings.use_knn = args.knn
-    settings.knn_search = args.knn_search
+    settings.knn_search = args.knn_search if args.knn_search is not None else settings.knn_search
+
+    if args.postproc is not None:
+        settings.postproc = args.postproc.lower()
+    else:
+        settings.postproc = getattr(settings, "postproc", "none").lower()
+
+    if args.nnri_kernel is not None:
+        settings.nnri_kernel_size = args.nnri_kernel
+    if args.nnri_alpha is not None:
+        settings.nnri_alpha = args.nnri_alpha
+
+    if args.knn:
+        settings.postproc = 'knn'
+
+    settings.use_knn = settings.postproc == 'knn'
 
     if not os.path.isdir(settings.save_path):
         raise ValueError('Training path does not exists: {}'.format(settings.save_path))
 
-    knn_str = f'_KNN_{args.knn_search}' if args.knn else ''
+    if settings.postproc == 'knn':
+        postproc_suffix = f'_KNN_{settings.knn_search}'
+    elif settings.postproc == 'nnri':
+        postproc_suffix = f'_NNRI_k{settings.nnri_kernel_size}_a{settings.nnri_alpha}'
+    else:
+        postproc_suffix = ''
+
+    run_identifier = settings.id if args.id is None else args.id
     settings.save_path = os.path.join(
-        settings.save_path, f'Eval{knn_str}_{args.id}')
+        settings.save_path, f'Eval{postproc_suffix}_{run_identifier}')
 
     exp = Experiment(settings)
     exp.run()

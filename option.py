@@ -86,6 +86,13 @@ class Option(object):
         # 3D refiner
         self.use_kpconv = self.config.get('use_kpconv', True)
 
+        # Post-processing defaults
+        self.postproc = self.config.get('postproc', 'none')
+        self.knn_search = self.config.get('knn_search', 13)
+        nnri_cfg = self.config.get('nnri', {})
+        self.nnri_kernel_size = nnri_cfg.get('kernel_size', 3)
+        self.nnri_alpha = nnri_cfg.get('alpha', 1.0)
+
 
         # Checkpoint model
         self.checkpoint = self.config.get('checkpoint', None)

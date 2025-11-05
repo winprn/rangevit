@@ -39,6 +39,12 @@ skip_filters: 256 # has to be 0 (no skip) or D_h
 # 3D refiner
 use_kpconv: true
 
+# Post-processing config (for inference)
+postproc: 'nnri'  # 'none', 'knn', or 'nnri'
+knn_search: 13    # KNN search radius (only used if postproc='knn')
+nnri:
+  kernel_size: 3  # Kernel size for NNRI (must be odd: 3, 5, 7, etc.)
+  alpha: 1.0      # Cut-off factor for adaptive thresholding
 
 # Checkpoint model
 checkpoint: null
