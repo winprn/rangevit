@@ -270,6 +270,7 @@ class Trainer(object):
 
         total_iter = len(dataloader)
         t_start = time.time()
+        lr_value = None  # Initialize lr_value for tensorboard logging
 
         for i, (input_feature, input_label, input_mask) in enumerate(dataloader):
             # [TESTING] Early exit option for testing (limit iterations per epoch)
@@ -430,7 +431,7 @@ class Trainer(object):
                                    recorder=self.recorder,
                                    metrics_dict=metrics_dict,
                                    loss_dict=loss_dict,
-                                   lr=lr,
+                                   lr=lr_value,
                                    mapped_cls_name=self.mapped_cls_name)
 
                 # Results at the end of the epoch
