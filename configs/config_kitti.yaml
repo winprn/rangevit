@@ -58,7 +58,7 @@ nnri:
   alpha: 1.0      # Cut-off factor for adaptive thresholding
 
 # Checkpoint model
-save_path: "save_rangevit256_small_ft_trainval"
+save_path: "save_rangevit_base_nnri"
 # checkpoint: null
 pretrained_model: "../pretrained_model/vit_small_p16_384_ft.pth"
 

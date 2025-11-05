@@ -395,8 +395,17 @@ class RangeViT(nn.Module):
             for key in pretrained_state_dict.keys():
                 if 'decoder' in key:
                     decoder_keys.append(key)
-            # for decoder_key in decoder_keys:
-            #     del pretrained_state_dict[decoder_key]
+            for decoder_key in decoder_keys:
+                del pretrained_state_dict[decoder_key]
+
+            # Delete KPConv weights if not using KPConv
+            if not use_kpconv:
+                kpconv_keys = []
+                for key in pretrained_state_dict.keys():
+                    if 'kpclassifier' in key or 'kpconv' in key.lower():
+                        kpconv_keys.append(key)
+                for kpconv_key in kpconv_keys:
+                    del pretrained_state_dict[kpconv_key]
 
             msg = self.rangevit.load_state_dict(pretrained_state_dict, strict=False)
             print(f'{msg}')
