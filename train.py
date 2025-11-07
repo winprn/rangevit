@@ -50,6 +50,10 @@ class Trainer(object):
 
         # Init data loader
         self.train_loader, self.val_loader, self.train_sampler, self.val_sampler = self._initDataloader()
+        self.prediction_postproc = None
+        self.prediction_postproc_method = getattr(self.settings, 'postproc', 'none').lower()
+        if getattr(self, 'save_eval_requires_unproj', False):
+            self._init_post_processor()
 
         # Init criterion
         self.criterion = self._initCriterion()
@@ -88,6 +92,79 @@ class Trainer(object):
                                 lr=self.settings.lr,
                                 weight_decay=0.01)
         return adamw_optimizer
+
+    def _init_post_processor(self):
+        method = self.prediction_postproc_method
+        self.prediction_postproc = None
+
+        if method == 'knn':
+            knn_params = {
+                'knn': 5,
+                'search': self.settings.knn_search,
+                'sigma': 1.0,
+                'cutoff': 1.0,
+            }
+            self.prediction_postproc = utils.postproc.KNN(
+                params=knn_params,
+                nclasses=self.settings.n_classes)
+        elif method == 'nnri':
+            sensor_cfg = self.settings.config['sensor']
+            range_mean = sensor_cfg['img_mean'][0]
+            range_std = sensor_cfg['img_stds'][0]
+            self.prediction_postproc = utils.postproc.NNRI(
+                kernel_size=self.settings.nnri_kernel_size,
+                alpha=self.settings.nnri_alpha,
+                range_mean=range_mean,
+                range_std=range_std,
+            )
+
+    def _project_predictions_to_points(
+        self,
+        proj_argmax: torch.Tensor,
+        proj_softmax: torch.Tensor,
+        proj_depth: torch.Tensor,
+        unproj_depth: torch.Tensor,
+        px: torch.Tensor,
+        py: torch.Tensor,
+    ) -> torch.Tensor:
+        if self.prediction_postproc is None or self.prediction_postproc_method == 'none':
+            return proj_argmax[py, px]
+        if self.prediction_postproc_method == 'knn':
+            return self.prediction_postproc(
+                proj_depth,
+                unproj_depth,
+                proj_argmax,
+                px,
+                py)
+        if self.prediction_postproc_method == 'nnri':
+            return self.prediction_postproc(
+                proj_depth,
+                unproj_depth,
+                proj_softmax,
+                px,
+                py)
+        raise ValueError(f'Unsupported post-processing method: {self.prediction_postproc_method}')
+
+    def _export_predictions(self, pred_np: np.ndarray, index: int, save_results_path: str):
+        if self.settings.dataset == 'nuScenes':
+            pred_path = os.path.join(save_results_path, 'lidarseg', self.data_split)
+            nu_dataset = self.val_loader.dataset.dataset
+            lidar_token = nu_dataset.token_list[index]
+            if not os.path.isdir(pred_path):
+                os.makedirs(pred_path)
+            pred_result_path = os.path.join(pred_path, f'{lidar_token}_lidarseg.bin')
+            pred_np.tofile(pred_result_path)
+        elif self.settings.dataset == 'SemanticKitti':
+            sk_dataset = self.val_loader.dataset.dataset
+            pred_np_origin = sk_dataset.class_map_lut_inv[pred_np]
+            seq_id, frame_id = sk_dataset.parsePathInfoByIndex(index)
+            pred_path = os.path.join(save_results_path, 'sequences', seq_id, 'predictions')
+            if not os.path.isdir(pred_path):
+                os.makedirs(pred_path)
+            pred_result_path = os.path.join(pred_path, f'{frame_id}.label')
+            pred_np_origin.tofile(pred_result_path)
+        else:
+            raise ValueError(f'Unsupported dataset for export: {self.settings.dataset}')
 
     def _initDataloader(self):
         # NuScenes dataset
@@ -152,6 +229,9 @@ class Trainer(object):
             raise ValueError(
                 'invalid dataset: {}'.format(self.settings.dataset))
 
+        eval_requires_unproj = (not self.settings.use_kpconv) and self.settings.save_eval_results
+        self.save_eval_requires_unproj = eval_requires_unproj
+
         self.train_range_loader = dataset.RangeViewLoader(
             dataset=trainset,
             config=self.settings.config,
@@ -161,7 +241,9 @@ class Trainer(object):
             dataset=valset,
             config=self.settings.config,
             is_train=False,
-            use_kpconv=self.settings.use_kpconv)
+            return_uproj=eval_requires_unproj,
+            use_kpconv=self.settings.use_kpconv,
+            return_index=eval_requires_unproj)
 
         collate_fn = dataset.custom_collate_kpconv_fn if self.settings.use_kpconv else None
         if tools.is_dist_avail_and_initialized():
@@ -272,7 +354,26 @@ class Trainer(object):
         t_start = time.time()
         lr_value = None  # Initialize lr_value for tensorboard logging
 
-        for i, (input_feature, input_label, input_mask) in enumerate(dataloader):
+        for i, batch in enumerate(dataloader):
+            if mode == 'Validation' and self.save_eval_requires_unproj:
+                (input_feature,
+                 input_label,
+                 input_mask,
+                 proj_depth,
+                 uproj_x_idx,
+                 uproj_y_idx,
+                 uproj_depth,
+                 _,
+                 batch_index) = batch
+                proj_depth = proj_depth.cuda(non_blocking=True)
+                uproj_x_idx = uproj_x_idx.cuda(non_blocking=True)
+                uproj_y_idx = uproj_y_idx.cuda(non_blocking=True)
+                uproj_depth = uproj_depth.cuda(non_blocking=True)
+                batch_index_value = int(batch_index.item())
+            else:
+                input_feature, input_label, input_mask = batch
+                proj_depth = uproj_x_idx = uproj_y_idx = uproj_depth = None
+                batch_index_value = None
             # [TESTING] Early exit option for testing (limit iterations per epoch)
             if self.settings.max_iters_per_epoch is not None and i >= self.settings.max_iters_per_epoch:
                 print(f'[TESTING PIPELIONE] Reached max_iters_per_epoch={self.settings.max_iters_per_epoch}, stopping epoch early')
@@ -342,6 +443,24 @@ class Trainer(object):
                 self.metrics.addBatch(argmax, input_label) # 2D predictions
 
             loss_meter.update(loss.item(), input_feature.size(0))
+
+            if (mode == 'Validation' and save_results_path is not None
+                    and self.save_eval_requires_unproj and batch_index_value is not None):
+                proj_depth_map = proj_depth[0]
+                unproj_depth_vec = uproj_depth[0]
+                px = uproj_x_idx[0].long()
+                py = uproj_y_idx[0].long()
+                proj_argmax = argmax[0]
+                proj_scores = output_softmax[0]
+                unproj_pred = self._project_predictions_to_points(
+                    proj_argmax=proj_argmax,
+                    proj_softmax=proj_scores,
+                    proj_depth=proj_depth_map,
+                    unproj_depth=unproj_depth_vec,
+                    px=px,
+                    py=py)
+                pred_np = unproj_pred.cpu().numpy().reshape(-1).astype(np.int32)
+                self._export_predictions(pred_np, batch_index_value, save_results_path)
 
             # Timer logger
             t_process_end = time.time()
@@ -569,25 +688,7 @@ class Trainer(object):
                 pred_np = pred_np.reshape((-1)).astype(np.int32)
                 index = batch_dict['index']
                 assert index.shape[0] == 1
-                index = index.item()
-                if self.settings.dataset == 'nuScenes':
-                    pred_path = os.path.join(save_results_path, 'lidarseg', self.data_split)
-                    nu_dataset = self.val_loader.dataset.dataset
-                    lidar_token = nu_dataset.token_list[index]
-                    if not os.path.isdir(pred_path):
-                        os.makedirs(pred_path)
-                    pred_result_path = os.path.join(pred_path, '{}_lidarseg.bin'.format(lidar_token))
-                    pred_np.tofile(pred_result_path)
-
-                elif self.settings.dataset == 'SemanticKitti':
-                    sk_dataset = self.val_loader.dataset.dataset
-                    pred_np_origin = sk_dataset.class_map_lut_inv[pred_np]
-                    seq_id, frame_id = sk_dataset.parsePathInfoByIndex(index)
-                    pred_path = os.path.join(save_results_path, 'sequences', seq_id, 'predictions')
-                    if not os.path.isdir(pred_path):
-                        os.makedirs(pred_path)
-                    pred_result_path = os.path.join(pred_path, '{}.label'.format(frame_id))
-                    pred_np_origin.tofile(pred_result_path)
+                self._export_predictions(pred_np, int(index.item()), save_results_path)
 
             # Timer logger
             t_process_end = time.time()

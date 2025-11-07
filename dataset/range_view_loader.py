@@ -23,13 +23,23 @@ from .preprocess import augmentor, projection
 
 
 class RangeViewLoader(Dataset):
-    def __init__(self, dataset, config, data_len=-1, is_train=True, return_uproj=False, use_kpconv=False):
+    def __init__(
+        self,
+        dataset,
+        config,
+        data_len=-1,
+        is_train=True,
+        return_uproj=False,
+        use_kpconv=False,
+        return_index=False,
+    ):
         self.dataset = dataset
         self.config = config
         self.is_train = is_train
         self.data_len = data_len
         self.return_uproj = return_uproj
         self.use_kpconv = use_kpconv
+        self.return_index = return_index
 
         augment_params = augmentor.AugmentParams()
         augment_config = self.config['augmentation']
@@ -212,8 +222,19 @@ class RangeViewLoader(Dataset):
             uproj_y_tensor = torch.from_numpy(self.projection.cached_data['uproj_y_idx']).long()
             uproj_depth_tensor = torch.from_numpy(self.projection.cached_data['uproj_depth']).float()
 
-            return proj_feature_tensor, proj_sem_label_tensor, proj_mask_tensor, torch.from_numpy(
-                proj_range), uproj_x_tensor, uproj_y_tensor, uproj_depth_tensor, sem_label
+            outputs = [
+                proj_feature_tensor,
+                proj_sem_label_tensor,
+                proj_mask_tensor,
+                torch.from_numpy(proj_range),
+                uproj_x_tensor,
+                uproj_y_tensor,
+                uproj_depth_tensor,
+                sem_label,
+            ]
+            if self.return_index:
+                outputs.append(torch.tensor(index).long())
+            return tuple(outputs)
         else:
             proj_tensor = torch.cat(
                 (proj_feature_tensor,
@@ -223,7 +244,10 @@ class RangeViewLoader(Dataset):
             # Data augmentation
             proj_tensor = self.aug_ops(proj_tensor)
 
-            return proj_tensor[0:5], proj_tensor[5], proj_tensor[6]
+            outputs = [proj_tensor[0:5], proj_tensor[5], proj_tensor[6]]
+            if self.return_index:
+                outputs.append(torch.tensor(index).long())
+            return tuple(outputs)
 
     def __len__(self):
         if self.data_len > 0 and self.data_len < len(self.dataset):
