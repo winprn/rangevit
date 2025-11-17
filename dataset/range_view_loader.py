@@ -63,10 +63,6 @@ class RangeViewLoader(Dataset):
                     scale_min=augment_config['scale_min'],
                     scale_max=augment_config['scale_max'])
                 print(f'Adding scaling augmentation with range [{augment_params.scale_min}, {augment_params.scale_max}] and probability {augment_params.p_scale}')
-            if 'p_rangemix' in augment_config:
-                augment_params.setRangeMixParams(augment_config['p_rangemix'])
-                self.p_rangemix = augment_config['p_rangemix']
-                print(f'Adding RangeMix augmentation with probability {self.p_rangemix}')
             if 'p_polarmix' in augment_config:
                 augment_params.setPolarMixParams(augment_config['p_polarmix'])
                 print(f'Adding PolarMix with probability {augment_params.p_polarmix}')
@@ -90,7 +86,6 @@ class RangeViewLoader(Dataset):
         else:
             self.augmentor = None
             self.wpd_augmentor = None
-            self.p_rangemix = 0.0
 
         self.proj_p_hflip = augment_config.get('p_hflip', 0.0)
         if self.proj_p_hflip > 0.0:
@@ -127,7 +122,7 @@ class RangeViewLoader(Dataset):
                               self.config['original_image_size'][1]))
             ])
 
-        # self.get_item_for_kpconv(0)
+        self.get_item_for_kpconv(0)
 
     def get_item_for_kpconv(self, index):
         '''
@@ -135,19 +130,9 @@ class RangeViewLoader(Dataset):
         proj_sem_label_tensor: HxW
         proj_mask_tensor: HxW
         '''
-        pointcloud, sem_label, inst_label = self.dataset.loadDataByIndex(index)
+        pointcloud, sem_label, _ = self.dataset.loadDataByIndex(index)
         points_xyz = pointcloud[:, :3]
         sem_label = self.dataset.labelMapping(sem_label)
-
-        if self.is_train:
-            mix_index = (index + 60) % len(self.dataset)
-            mix_index = np.random.randint(0, len(self.dataset))
-            pointcloud_b, sem_label_b, _ = self.dataset.loadDataByIndex(mix_index)
-            sem_label_b = self.dataset.labelMapping(sem_label_b)
-            # print(f'PolaMix 0, {mix_index}')
-            pointcloud, sem_label = self.augmentor.polarmix(pointcloud, sem_label, pointcloud_b, sem_label_b)
-            points_xyz = pointcloud[:, :3]
-            # pointcloud = self.augmentor.doAugmentation(pointcloud)  # n, 4
 
         proj_pointcloud, proj_range, proj_idx, proj_mask = self.projection.doProjection(pointcloud)
         px, py = self.projection.cached_data['px'], self.projection.cached_data['py']
@@ -171,52 +156,13 @@ class RangeViewLoader(Dataset):
 
         # Apply WPD augmentation (before normalization)
         if self.is_train and self.wpd_augmentor is not None:
-            # Sample a donor frame
-            donor_index = np.random.randint(0, len(self.dataset))
-            pointcloud_donor, sem_label_donor, _ = self.dataset.loadDataByIndex(donor_index)
-            sem_label_donor = self.dataset.labelMapping(sem_label_donor)
-
-            # Apply standard augmentations to donor
-            # pointcloud_donor = self.augmentor.doAugmentation(pointcloud_donor)
-
-            # Project donor frame
-            proj_pointcloud_donor, proj_range_donor, proj_idx_donor, proj_mask_donor = self.projection.doProjection(pointcloud_donor)
-
-            # Build donor tensors
-            proj_mask_tensor_donor = torch.from_numpy(proj_mask_donor)
-            mask_donor = proj_idx_donor > 0
-            proj_sem_label_donor = np.zeros((proj_mask_donor.shape[0], proj_mask_donor.shape[1]), dtype=np.float32)
-            proj_sem_label_donor[mask_donor] = sem_label_donor[proj_idx_donor[mask_donor]]
-            proj_sem_label_tensor_donor = torch.from_numpy(proj_sem_label_donor)
-            proj_sem_label_tensor_donor = proj_sem_label_tensor_donor * proj_mask_tensor_donor.float()
-
-            proj_range_tensor_donor = torch.from_numpy(proj_range_donor)
-            proj_xyz_tensor_donor = torch.from_numpy(proj_pointcloud_donor[..., :3])
-            proj_intensity_tensor_donor = torch.from_numpy(proj_pointcloud_donor[..., 3])
-            proj_intensity_tensor_donor = proj_intensity_tensor_donor.ne(-1).float() * proj_intensity_tensor_donor
-
-            proj_feature_tensor_donor = torch.cat(
-                [proj_range_tensor_donor.unsqueeze(0), proj_xyz_tensor_donor.permute(2, 0, 1),
-                 proj_intensity_tensor_donor.unsqueeze(0)], 0)
-
-            # Apply WPD
-            frame_a_dict = {
-                'features': proj_feature_tensor,
-                'labels': proj_sem_label_tensor.long(),
-                'mask': proj_mask_tensor,
-                'range': proj_range_tensor,
-            }
-            frame_b_dict = {
-                'features': proj_feature_tensor_donor,
-                'labels': proj_sem_label_tensor_donor.long(),
-                'mask': proj_mask_tensor_donor,
-                'range': proj_range_tensor_donor,
-            }
-
-            result = self.wpd_augmentor(frame_a_dict, frame_b_dict)
-            proj_feature_tensor = result['features']
-            proj_sem_label_tensor = result['labels'].float()
-            proj_mask_tensor = result['mask']
+            proj_feature_tensor, proj_sem_label_tensor, proj_mask_tensor, proj_range_tensor = \
+                self._apply_wpd_augmentation(
+                    proj_feature_tensor,
+                    proj_sem_label_tensor,
+                    proj_mask_tensor,
+                    proj_range_tensor,
+                    include_existence_channel=False)
 
         proj_feature_tensor = (proj_feature_tensor - self.proj_img_mean[:, None, None]) / self.proj_img_stds[:, None, None]
         proj_feature_tensor = proj_feature_tensor * proj_mask_tensor.unsqueeze(0).float()
@@ -228,74 +174,11 @@ class RangeViewLoader(Dataset):
 
         if self.is_train:
             save_path = os.getenv('AUG_VIS_PATH', './aug_visualizations')
-            # if True or np.random.uniform() < self.p_rangemix:
-            #     # Load a random second sample
-            #     mix_index = 3583
-            #     # print(f"{len(self.dataset)}, mix is {mix_index}")
-            #     pointcloud_b, sem_label_b, _ = self.dataset.loadDataByIndex(mix_index)
-
-            #     # Apply point cloud augmentation to second sample
-            #     # pointcloud_b = self.augmentor.doAugmentation(pointcloud_b)
-
-            #     # Project second sample
-            #     proj_pointcloud_b, proj_range_b, proj_idx_b, proj_mask_b = self.projection.doProjection(pointcloud_b)
-
-            #     # Create tensors for second sample
-            #     proj_mask_tensor_b = torch.from_numpy(proj_mask_b)
-            #     mask_b = proj_idx_b > 0
-            #     proj_sem_label_b = np.zeros((proj_mask_b.shape[0], proj_mask_b.shape[1]), dtype=np.float32)
-            #     proj_sem_label_b[mask_b] = self.dataset.labelMapping(sem_label_b[proj_idx_b[mask_b]])
-            #     proj_sem_label_tensor_b = torch.from_numpy(proj_sem_label_b)
-            #     proj_sem_label_tensor_b = proj_sem_label_tensor_b * proj_mask_tensor_b.float()
-
-            #     proj_range_tensor_b = torch.from_numpy(proj_range_b)
-            #     proj_xyz_tensor_b = torch.from_numpy(proj_pointcloud_b[..., :3])
-            #     proj_intensity_tensor_b = torch.from_numpy(proj_pointcloud_b[..., 3])
-            #     proj_intensity_tensor_b = proj_intensity_tensor_b.ne(-1).float() * proj_intensity_tensor_b
-            #     proj_existence_tensor_b = proj_mask_tensor_b.float()
-            #     proj_feature_tensor_b = torch.cat(
-            #         [proj_range_tensor_b.unsqueeze(0), proj_xyz_tensor_b.permute(2, 0, 1),
-            #          proj_intensity_tensor_b.unsqueeze(0), proj_existence_tensor_b.unsqueeze(0)], 0)
-
-            #     proj_feature_tensor_b = (proj_feature_tensor_b - self.proj_img_mean[:, None, None]) / self.proj_img_stds[:, None, None]
-            #     proj_feature_tensor_b = proj_feature_tensor_b * proj_mask_tensor_b.unsqueeze(0).float()
-
-            #     proj_tensor_b = torch.cat(
-            #         (proj_feature_tensor_b,
-            #          proj_sem_label_tensor_b.unsqueeze(0),
-            #          proj_mask_tensor_b.float().unsqueeze(0)), dim=0)
-
-            #     save_proj_tensor_as_images(torch.cat(
-            #         (proj_feature_tensor_b[:5],
-            #          proj_sem_label_tensor_b.unsqueeze(0),
-            #          proj_mask_tensor_b.float().unsqueeze(0)), dim=0), mix_index, save_path)
-            #     # Apply RangeMix
-            #     proj_feature_mixed, proj_label_mixed = augmentor.Augmentor.rangemix(
-            #         proj_tensor[:6], proj_tensor[6], proj_tensor_b[:6], proj_tensor_b[6])
-
-            #     # Reconstruct proj_tensor with mixed features and labels (5 channels + label + mask)
-            #     # Ignore existence channel (channel 5) after RangeMix to maintain C=5
-            #     proj_tensor = torch.cat(
-            #         (proj_feature_mixed[:5],
-            #          proj_label_mixed.unsqueeze(0),
-            #          proj_tensor[7].unsqueeze(0)), dim=0)
-            #     proj_tensor_b = torch.cat(
-            #         (proj_feature_tensor_b[:5],
-            #          proj_sem_label_tensor_b.unsqueeze(0),
-            #          proj_mask_tensor_b.float().unsqueeze(0)), dim=0)
-
-            # Save to image for testing
-            # if True:
-            #     print(f'index: {index}, mix: {mix_index}')
-            #     save_proj_tensor_as_images(proj_tensor, index, save_path, pointcloud=pointcloud, labels=sem_label)
-            #     sys.exit()
-            # proj_tensor = self.aug_ops(proj_tensor)
-            # return proj_tensor[0:5], proj_tensor[6], proj_tensor[7]
-            # save_proj_tensor_as_images(proj_tensor, index, save_path, pointcloud=pointcloud, labels=sem_label)
+            if os.getenv('SAVE_AUG_VIS'):
+                save_proj_tensor_as_images(proj_tensor, index, save_path, pointcloud=pointcloud, labels=sem_label)
             proj_tensor, px, py, points_xyz, sem_label = crop_inputs(
                 proj_tensor, px, py, points_xyz, sem_label,
                 self.crop_size, center_crop=False, p_hflip=self.proj_p_hflip)
-            # sys.exit()
         else:
             _, h, w = proj_tensor.shape
 
@@ -339,7 +222,7 @@ class RangeViewLoader(Dataset):
         if self.use_kpconv:
             return self.get_item_for_kpconv(index)
 
-        pointcloud, sem_label, inst_label = self.dataset.loadDataByIndex(index)
+        pointcloud, sem_label, _ = self.dataset.loadDataByIndex(index)
         if self.is_train:
             pointcloud = self.augmentor.doAugmentation(pointcloud)  # n, 4
         proj_pointcloud, proj_range, proj_idx, proj_mask = self.projection.doProjection(pointcloud)
@@ -359,8 +242,17 @@ class RangeViewLoader(Dataset):
         proj_feature_tensor = torch.cat(
             [proj_range_tensor.unsqueeze(0), proj_xyz_tensor.permute(2, 0, 1), proj_intensity_tensor.unsqueeze(0), proj_existence_tensor.unsqueeze(0)], 0)
 
-        proj_feature_tensor = (proj_feature_tensor - self.proj_img_mean[:, None, None]) / self.proj_img_stds[:, None,
-                                                                                          None]
+        if self.is_train and self.wpd_augmentor is not None:
+            proj_feature_tensor, proj_sem_label_tensor, proj_mask_tensor, proj_range_tensor = \
+                self._apply_wpd_augmentation(
+                    proj_feature_tensor,
+                    proj_sem_label_tensor,
+                    proj_mask_tensor,
+                    proj_range_tensor,
+                    include_existence_channel=True)
+            proj_range = proj_range_tensor.numpy()
+
+        proj_feature_tensor = (proj_feature_tensor - self.proj_img_mean[:, None, None]) / self.proj_img_stds[:, None, None]
         proj_feature_tensor = proj_feature_tensor * proj_mask_tensor.unsqueeze(0).float()
 
         if self.return_uproj:
@@ -379,54 +271,6 @@ class RangeViewLoader(Dataset):
                 proj_sem_label_tensor.unsqueeze(0),
                 proj_mask_tensor.float().unsqueeze(0)), dim=0)
 
-            # RangeMix augmentation
-            if self.is_train and np.random.uniform() < self.p_rangemix:
-                # Load a random second sample
-                mix_index = torch.randint(0, len(self.dataset), (1,)).item()
-                pointcloud_b, sem_label_b, _ = self.dataset.loadDataByIndex(mix_index)
-
-                # Apply point cloud augmentation to second sample
-                pointcloud_b = self.augmentor.doAugmentation(pointcloud_b)
-
-                # Project second sample
-                proj_pointcloud_b, proj_range_b, proj_idx_b, proj_mask_b = self.projection.doProjection(pointcloud_b)
-
-                # Create tensors for second sample
-                proj_mask_tensor_b = torch.from_numpy(proj_mask_b)
-                mask_b = proj_idx_b > 0
-                proj_sem_label_b = np.zeros((proj_mask_b.shape[0], proj_mask_b.shape[1]), dtype=np.float32)
-                proj_sem_label_b[mask_b] = self.dataset.labelMapping(sem_label_b[proj_idx_b[mask_b]])
-                proj_sem_label_tensor_b = torch.from_numpy(proj_sem_label_b)
-                proj_sem_label_tensor_b = proj_sem_label_tensor_b * proj_mask_tensor_b.float()
-
-                proj_range_tensor_b = torch.from_numpy(proj_range_b)
-                proj_xyz_tensor_b = torch.from_numpy(proj_pointcloud_b[..., :3])
-                proj_intensity_tensor_b = torch.from_numpy(proj_pointcloud_b[..., 3])
-                proj_intensity_tensor_b = proj_intensity_tensor_b.ne(-1).float() * proj_intensity_tensor_b
-                proj_existence_tensor_b = proj_mask_tensor_b.float()
-                proj_feature_tensor_b = torch.cat(
-                    [proj_range_tensor_b.unsqueeze(0), proj_xyz_tensor_b.permute(2, 0, 1),
-                     proj_intensity_tensor_b.unsqueeze(0), proj_existence_tensor_b.unsqueeze(0)], 0)
-
-                proj_feature_tensor_b = (proj_feature_tensor_b - self.proj_img_mean[:, None, None]) / self.proj_img_stds[:, None, None]
-                proj_feature_tensor_b = proj_feature_tensor_b * proj_mask_tensor_b.unsqueeze(0).float()
-
-                proj_tensor_b = torch.cat(
-                    (proj_feature_tensor_b,
-                     proj_sem_label_tensor_b.unsqueeze(0),
-                     proj_mask_tensor_b.float().unsqueeze(0)), dim=0)
-
-                # Apply RangeMix
-                proj_feature_mixed, proj_label_mixed = augmentor.Augmentor.rangemix(
-                    proj_tensor[:6], proj_tensor[6], proj_tensor_b[:6], proj_tensor_b[6])
-
-                # Reconstruct proj_tensor with mixed features and labels (5 channels + label + mask)
-                # Ignore existence channel (channel 5) after RangeMix to maintain C=5
-                proj_tensor = torch.cat(
-                    (proj_feature_mixed[:5],
-                     proj_label_mixed.unsqueeze(0),
-                     proj_tensor[7].unsqueeze(0)), dim=0)
-
             # Data augmentation
             proj_tensor = self.aug_ops(proj_tensor)
 
@@ -441,6 +285,57 @@ class RangeViewLoader(Dataset):
             return self.data_len
         else:
             return len(self.dataset)
+
+    def _apply_wpd_augmentation(self, proj_feature_tensor, proj_sem_label_tensor,
+                                proj_mask_tensor, proj_range_tensor,
+                                include_existence_channel):
+        """
+        Apply WPD augmentation by sampling a donor frame and mixing range-view tensors.
+        """
+        donor_index = np.random.randint(0, len(self.dataset))
+        pointcloud_donor, sem_label_donor, _ = self.dataset.loadDataByIndex(donor_index)
+        sem_label_donor = self.dataset.labelMapping(sem_label_donor)
+
+        pointcloud_donor = self.augmentor.doAugmentation(pointcloud_donor)
+        proj_pointcloud_donor, proj_range_donor, proj_idx_donor, proj_mask_donor = self.projection.doProjection(pointcloud_donor)
+
+        proj_mask_tensor_donor = torch.from_numpy(proj_mask_donor)
+        mask_donor = proj_idx_donor > 0
+        proj_sem_label_donor = np.zeros((proj_mask_donor.shape[0], proj_mask_donor.shape[1]), dtype=np.float32)
+        proj_sem_label_donor[mask_donor] = sem_label_donor[proj_idx_donor[mask_donor]]
+        proj_sem_label_tensor_donor = torch.from_numpy(proj_sem_label_donor)
+        proj_sem_label_tensor_donor = proj_sem_label_tensor_donor * proj_mask_tensor_donor.float()
+
+        proj_range_tensor_donor = torch.from_numpy(proj_range_donor)
+        proj_xyz_tensor_donor = torch.from_numpy(proj_pointcloud_donor[..., :3])
+        proj_intensity_tensor_donor = torch.from_numpy(proj_pointcloud_donor[..., 3])
+        proj_intensity_tensor_donor = proj_intensity_tensor_donor.ne(-1).float() * proj_intensity_tensor_donor
+
+        donor_channels = [
+            proj_range_tensor_donor.unsqueeze(0),
+            proj_xyz_tensor_donor.permute(2, 0, 1),
+            proj_intensity_tensor_donor.unsqueeze(0),
+        ]
+        if include_existence_channel:
+            donor_channels.append(proj_mask_tensor_donor.float().unsqueeze(0))
+        proj_feature_tensor_donor = torch.cat(donor_channels, 0)
+
+        frame_a_dict = {
+            'features': proj_feature_tensor,
+            'labels': proj_sem_label_tensor.long(),
+            'mask': proj_mask_tensor,
+            'range': proj_range_tensor,
+        }
+        frame_b_dict = {
+            'features': proj_feature_tensor_donor,
+            'labels': proj_sem_label_tensor_donor.long(),
+            'mask': proj_mask_tensor_donor,
+            'range': proj_range_tensor_donor,
+        }
+
+        result = self.wpd_augmentor(frame_a_dict, frame_b_dict)
+
+        return result['features'], result['labels'].float(), result['mask'], result['range']
 
 
 def load_color_map():
