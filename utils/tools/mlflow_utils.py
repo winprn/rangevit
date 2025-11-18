@@ -32,21 +32,29 @@ class MLflowManager:
 
         tracking_uri = getattr(self.settings, 'mlflow_tracking_uri', None)
         if tracking_uri:
-            mlflow.set_tracking_uri(tracking_uri)
+            self._safe_mlflow_call('set tracking URI', mlflow.set_tracking_uri, tracking_uri)
+            if not self.enabled:
+                return
 
         experiment_name = getattr(self.settings, 'mlflow_experiment_name', 'RangeViT')
-        mlflow.set_experiment(experiment_name)
+        self._safe_mlflow_call('set experiment', mlflow.set_experiment, experiment_name)
+        if not self.enabled:
+            return
 
         tags = dict(getattr(self.settings, 'mlflow_tags', {}))
         description = getattr(self.settings, 'mlflow_description', None)
         if description:
             tags.setdefault('mlflow.note.content', description)
 
-        self._active_run = mlflow.start_run(
+        run = self._safe_mlflow_call(
+            'start run',
+            mlflow.start_run,
             run_name=getattr(self.settings, 'mlflow_run_name', None),
             nested=bool(getattr(self.settings, 'mlflow_nested', False)),
             tags=tags if tags else None,
         )
+        if run is not None and self.enabled:
+            self._active_run = run
 
     def log_settings(self):
         if not self.enabled or self._mlflow is None:
@@ -61,7 +69,9 @@ class MLflowManager:
         if params:
             # MLflow recommends logging at most 100 params.
             for chunk in self._chunk_dict(params, chunk_size=100):
-                self._mlflow.log_params(chunk)
+                if not self.enabled:
+                    break
+                self._safe_mlflow_call('log params', self._mlflow.log_params, chunk)
 
     def log_metrics(self, metrics: Dict[str, Any], step: Optional[int] = None):
         if not self.enabled or self._mlflow is None or not metrics:
@@ -72,16 +82,16 @@ class MLflowManager:
             if sanitized_value is not None:
                 sanitized[key] = sanitized_value
         if sanitized:
-            self._mlflow.log_metrics(sanitized, step=step)
+            self._safe_mlflow_call('log metrics', self._mlflow.log_metrics, sanitized, step=step)
 
     def log_artifact(self, path: str, artifact_path: Optional[str] = None):
         if not self.enabled or self._mlflow is None:
             return
         if path and os.path.exists(path):
             if os.path.isdir(path):
-                self._mlflow.log_artifacts(path, artifact_path=artifact_path)
+                self._safe_mlflow_call('log artifacts', self._mlflow.log_artifacts, path, artifact_path=artifact_path)
             else:
-                self._mlflow.log_artifact(path, artifact_path=artifact_path)
+                self._safe_mlflow_call('log artifact', self._mlflow.log_artifact, path, artifact_path=artifact_path)
 
     def log_config(self, config: Optional[Dict[str, Any]], artifact_path: str = 'config', filename: str = 'config_used.yaml'):
         if not self.enabled or self._mlflow is None or config is None:
@@ -109,8 +119,16 @@ class MLflowManager:
         if not self.enabled or self._mlflow is None:
             return
         if self._active_run is not None:
-            self._mlflow.end_run(status=status)
+            self._safe_mlflow_call('end run', self._mlflow.end_run, status=status)
             self._active_run = None
+
+    def _safe_mlflow_call(self, action: str, func, *args, **kwargs):
+        """Execute MLflow API calls and gracefully handle failures."""
+        try:
+            return func(*args, **kwargs)
+        except Exception as exc:  # noqa: broad-except - best effort logging only
+            print(f'WARNING: Failed to {action} via MLflow: {exc}. Disabling MLflow logging.')
+            return None
 
     @staticmethod
     def _serialize_param(value: Any) -> Optional[str]:
