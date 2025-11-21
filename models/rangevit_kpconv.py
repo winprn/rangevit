@@ -110,12 +110,16 @@ class RangeViT_KPConv(nn.Module):
         )
         return nwd_params
 
-    def forward_2d_features(self, im):
+    def forward_2d_features(self, im, bev_image=None):
         H_ori, W_ori = im.size(2), im.size(3)
         im = padding(im, self.patch_size)
         H, W = im.size(2), im.size(3)
         
-        x, skip = self.encoder(im, return_features=True) # x.shape = [16, 577, 384]
+        encoder_outputs = self.encoder(im, bev_image=bev_image, return_features=True) # x.shape = [16, 577, 384]
+        if len(encoder_outputs) == 2:
+            x, skip = encoder_outputs
+        else:
+            x, skip, _ = encoder_outputs
         
         # remove CLS tokens for decoding
         num_extra_tokens = 1
@@ -126,7 +130,7 @@ class RangeViT_KPConv(nn.Module):
         feats = unpadding(feats, (H_ori, W_ori))
         return feats
 
-    def forward(self, im, px, py, pxyz, pknn, num_points):
-        feats = self.forward_2d_features(im)
+    def forward(self, im, px, py, pxyz, pknn, num_points, bev_image=None):
+        feats = self.forward_2d_features(im, bev_image=bev_image)
         masks3d = self.kpclassifier(feats, px, py, pxyz, pknn, num_points)
         return masks3d

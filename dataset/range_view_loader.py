@@ -25,6 +25,7 @@ import yaml
 
 from .preprocess import augmentor, projection
 from .preprocess.wpd import WPDConfig, WPDAugmentor
+from .preprocess.bev_projection import BEVProjection
 
 
 class RangeViewLoader(Dataset):
@@ -35,6 +36,24 @@ class RangeViewLoader(Dataset):
         self.data_len = data_len
         self.return_uproj = return_uproj
         self.use_kpconv = use_kpconv
+
+        # BEV projection setup
+        self.use_bev = config.get('use_bev', False)
+        if self.use_bev:
+            bev_config = config.get('bev', {})
+            x_range = bev_config.get('x_range', [-50, 50])
+            y_range = bev_config.get('y_range', [-50, 50])
+            grid_size = tuple(bev_config.get('grid_size', [256, 256]))
+            feature_channels = bev_config.get('channels', 8)
+            self.bev_projection = BEVProjection(
+                x_range=tuple(x_range),
+                y_range=tuple(y_range),
+                grid_size=grid_size,
+                feature_channels=feature_channels
+            )
+            print(f'BEV projection enabled: grid_size={grid_size}, x_range={x_range}, y_range={y_range}, channels={feature_channels}')
+        else:
+            self.bev_projection = None
 
         augment_params = augmentor.AugmentParams()
         augment_config = self.config['augmentation']
@@ -202,6 +221,11 @@ class RangeViewLoader(Dataset):
             'index': index,
         }
 
+        # Add BEV projection if enabled
+        if self.bev_projection is not None:
+            bev_features = self.bev_projection.doProjection(pointcloud)
+            output['bev'] = torch.from_numpy(bev_features).float()
+
         if self.return_uproj:
             assert self.is_train is False
 
@@ -278,7 +302,13 @@ class RangeViewLoader(Dataset):
             #     save_path = os.getenv('AUG_VIS_PATH', './aug_visualizations')
             #     save_proj_tensor_as_images(proj_tensor, index, save_path)
 
-            return proj_tensor[0:5], proj_tensor[6], proj_tensor[7]
+            # Add BEV projection if enabled
+            if self.bev_projection is not None:
+                bev_features = self.bev_projection.doProjection(pointcloud)
+                bev_tensor = torch.from_numpy(bev_features).float()
+                return proj_tensor[0:5], proj_tensor[6], proj_tensor[7], bev_tensor
+            else:
+                return proj_tensor[0:5], proj_tensor[6], proj_tensor[7]
 
     def __len__(self):
         if self.data_len > 0 and self.data_len < len(self.dataset):

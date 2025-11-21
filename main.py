@@ -30,6 +30,11 @@ from utils.tools.mlflow_utils import MLflowManager
 
 
 def build_rangevit_model(settings, pretrained_path=None):
+    # Get BEV configuration if enabled
+    bev_channels = None
+    if getattr(settings, 'use_bev', False) and hasattr(settings, 'bev'):
+        bev_channels = settings.bev.get('channels', 8)
+
     model = models.RangeViT(
         in_channels=settings.in_channels,
         n_cls=settings.n_classes,
@@ -47,7 +52,18 @@ def build_rangevit_model(settings, pretrained_path=None):
         decoder=settings.decoder,
         up_conv_d_decoder=settings.D_h,
         up_conv_scale_factor=settings.patch_stride,
-        use_kpconv=settings.use_kpconv)
+        use_kpconv=settings.use_kpconv,
+        # BALViT parameters
+        bev_channels=bev_channels,
+        bev_base_channels=getattr(settings, 'bev', {}).get('base_channels', 64) if hasattr(settings, 'bev') else 64,
+        bev_num_layers=getattr(settings, 'bev', {}).get('num_layers', 3) if hasattr(settings, 'bev') else 3,
+        adapter_indices=getattr(settings, 'adapter_indices', None),
+        adapter_mlp_ratio=getattr(settings, 'adapter_mlp_ratio', 4.0),
+        freeze_vit=getattr(settings, 'freeze_vit', False),
+        use_bev_decoder=getattr(settings, 'use_bev_decoder', False),
+        bev_decoder_hidden=getattr(settings, 'bev_decoder_hidden', 128),
+        use_bev_fusion=getattr(settings, 'use_bev_fusion', False),
+    )
     return model
 
 

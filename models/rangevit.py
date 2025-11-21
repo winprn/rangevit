@@ -17,7 +17,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import copy
 import timm
-from timm.models.layers import trunc_normal_
+from timm.models.layers import DropPath, trunc_normal_
 
 from .blocks import Block
 from .model_utils import adapt_input_conv, padding, unpadding, resize_pos_embed, init_weights
@@ -25,6 +25,123 @@ from .stems import PatchEmbedding, ConvStem
 from .decoders import DecoderLinear, DecoderUpConv
 from .rangevit_kpconv import RangeViT_KPConv, KPClassifier
 from .swin_transformer_v2 import SwinTransformerV2, create_swin_v2
+
+
+def project_to_bev(points, bev_size=None, **kwargs):
+    """
+    Placeholder for projecting 3D point clouds to a BEV raster.
+    This is intentionally minimal; BEV projection is now handled in the data loader.
+    See dataset.preprocess.bev_projection.BEVProjection for the actual implementation.
+    """
+    raise NotImplementedError(
+        "BEV projection should be done in the data loader. "
+        "See dataset/preprocess/bev_projection.py for implementation. "
+        "Enable BEV by setting use_bev=True in your config file."
+    )
+
+
+class BEVEncoder(nn.Module):
+    """
+    Lightweight BEV encoder that downsamples a rasterized BEV tensor and projects it
+    to the ViT token dimension. GroupNorm is used to stay consistent with transformer
+    normalization choices.
+    """
+    def __init__(self, in_channels, embed_dim, base_channels=64, num_layers=3, dropout=0.0):
+        super().__init__()
+        layers = []
+        in_ch = in_channels
+        out_ch = base_channels
+        for i in range(num_layers):
+            stride = 2 if i < num_layers - 1 else 1
+            layers.append(nn.Conv2d(in_ch, out_ch, kernel_size=3, stride=stride, padding=1))
+            layers.append(nn.GroupNorm(num_groups=8, num_channels=out_ch))
+            layers.append(nn.GELU())
+            if dropout > 0:
+                layers.append(nn.Dropout2d(dropout))
+            in_ch = out_ch
+            out_ch = min(out_ch * 2, embed_dim)
+        self.body = nn.Sequential(*layers)
+        self.proj = nn.Conv2d(in_ch, embed_dim, kernel_size=1)
+
+    def forward(self, bev_image):
+        """
+        Args:
+            bev_image: [B, C_b, H_b, W_b]
+        Returns:
+            torch.Tensor: [B, embed_dim, H_b, W_b]
+        """
+        input_hw = bev_image.shape[-2:]
+        x = self.body(bev_image)
+        # Restore the original BEV grid resolution if downsampled.
+        if x.shape[-2:] != input_hw:
+            x = F.interpolate(x, size=input_hw, mode='bilinear', align_corners=False)
+        return self.proj(x)
+
+
+class CrossModalAdapter(nn.Module):
+    """
+    BALViT-style adapter that lets range-view tokens attend to BEV tokens.
+    Queries come from RV tokens, keys/values from BEV tokens.
+    """
+    def __init__(self, dim, num_heads, mlp_ratio=4.0, dropout=0.0, drop_path=0.0):
+        super().__init__()
+        self.norm_q = nn.LayerNorm(dim)
+        self.norm_kv = nn.LayerNorm(dim)
+        self.attn = nn.MultiheadAttention(dim, num_heads, dropout=dropout, batch_first=True)
+        hidden_dim = int(dim * mlp_ratio)
+        self.norm_mlp = nn.LayerNorm(dim)
+        self.mlp = nn.Sequential(
+            nn.Linear(dim, hidden_dim),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim, dim),
+            nn.Dropout(dropout),
+        )
+        self.drop_path = DropPath(drop_path) if drop_path > 0.0 else nn.Identity()
+
+    def forward(self, rv_tokens, bev_tokens):
+        """
+        Args:
+            rv_tokens: [B, N_r, C] range-view tokens (queries)
+            bev_tokens: [B, N_b, C] BEV tokens (keys/values)
+        Returns:
+            torch.Tensor: [B, N_r, C] enhanced RV tokens
+        """
+        q = self.norm_q(rv_tokens)
+        kv = self.norm_kv(bev_tokens)
+        attn_out, _ = self.attn(q, kv, kv)
+        rv_tokens = rv_tokens + self.drop_path(attn_out)
+        rv_tokens = rv_tokens + self.drop_path(self.mlp(self.norm_mlp(rv_tokens)))
+        return rv_tokens
+
+
+class BEVDecoder(nn.Module):
+    """
+    Minimal BEV decoder that maps BEV features back to class logits on the BEV grid.
+    """
+    def __init__(self, in_channels, n_cls, hidden_channels=128, dropout=0.0):
+        super().__init__()
+        layers = [
+            nn.Conv2d(in_channels, hidden_channels, kernel_size=3, padding=1),
+            nn.GroupNorm(num_groups=8, num_channels=hidden_channels),
+            nn.GELU(),
+            nn.Conv2d(hidden_channels, hidden_channels, kernel_size=3, padding=1),
+            nn.GroupNorm(num_groups=8, num_channels=hidden_channels),
+            nn.GELU(),
+        ]
+        if dropout > 0:
+            layers.append(nn.Dropout2d(dropout))
+        self.body = nn.Sequential(*layers)
+        self.head = nn.Conv2d(hidden_channels, n_cls, kernel_size=1)
+        self.apply(init_weights)
+
+    @torch.jit.ignore
+    def no_weight_decay(self):
+        return set()
+
+    def forward(self, bev_feat):
+        logits = self.body(bev_feat)
+        return self.head(logits)
 
 
 class VisionTransformer(nn.Module):
@@ -45,6 +162,12 @@ class VisionTransformer(nn.Module):
         conv_stem='none',
         stem_base_channels=32,
         stem_hidden_dim=None,
+        bev_channels=None,
+        bev_base_channels=64,
+        bev_num_layers=3,
+        adapter_indices=None,
+        adapter_mlp_ratio=4.0,
+        freeze_vit=False,
     ):
         super().__init__()
 
@@ -79,6 +202,7 @@ class VisionTransformer(nn.Module):
         self.dropout = nn.Dropout(dropout)
         self.n_cls = n_cls
         self.image_size = image_size
+        self.adapter_indices = sorted(adapter_indices) if adapter_indices else []
 
         # cls and pos tokens
         self.cls_token = nn.Parameter(torch.zeros(1, 1, d_model))
@@ -98,14 +222,57 @@ class VisionTransformer(nn.Module):
 
         self.apply(init_weights)
 
+        # Optional BEV branch
+        self.bev_encoder = None
+        if bev_channels is not None:
+            self.bev_encoder = BEVEncoder(
+                in_channels=bev_channels,
+                embed_dim=d_model,
+                base_channels=bev_base_channels,
+                num_layers=bev_num_layers,
+                dropout=dropout,
+            )
+
+        self.cross_modal_adapters = nn.ModuleDict()
+        if self.adapter_indices:
+            for idx in self.adapter_indices:
+                # Align drop path with the matching encoder block index.
+                adapter_drop_path = dpr[idx] if idx < len(dpr) else 0.0
+                self.cross_modal_adapters[str(idx)] = CrossModalAdapter(
+                    dim=d_model,
+                    num_heads=n_heads,
+                    mlp_ratio=adapter_mlp_ratio,
+                    dropout=dropout,
+                    drop_path=adapter_drop_path,
+                )
+
+        if freeze_vit:
+            self._freeze_vit_backbone()
+
     @torch.jit.ignore
     def no_weight_decay(self):
         return {'pos_embed', 'cls_token'}
 
+    def _freeze_vit_backbone(self):
+        """
+        Freeze most of the ViT encoder while keeping norms trainable.
+        """
+        for name, param in self.named_parameters():
+            if name.startswith('bev_encoder') or name.startswith('cross_modal_adapters'):
+                continue  # keep BEV/adapter trainable
+            if 'norm' in name:
+                continue  # allow LayerNorm fine-tuning
+            param.requires_grad = False
+
     def get_grid_size(self, H, W):
         return self.patch_embed.get_grid_size(H, W)
 
-    def forward(self, im, return_features=False):
+    def _encode_bev_to_tokens(self, bev_image):
+        bev_feat = self.bev_encoder(bev_image)
+        bev_tokens = bev_feat.flatten(2).transpose(1, 2)
+        return bev_feat, bev_tokens
+
+    def forward(self, im, bev_image=None, return_features=False):
         B, _, H, W = im.shape
         x, skip = self.patch_embed(im) # x.shape = [16, 576, 384]
 
@@ -127,11 +294,23 @@ class VisionTransformer(nn.Module):
         x = x + pos_embed
         x = self.dropout(x)
 
-        for blk in self.blocks:
+        bev_tokens = None
+        bev_feat = None
+        if bev_image is not None and self.bev_encoder is not None:
+            bev_feat, bev_tokens = self._encode_bev_to_tokens(bev_image)
+
+        for i, blk in enumerate(self.blocks):
             x = blk(x)
+            if bev_tokens is not None and str(i) in self.cross_modal_adapters:
+                # Do not mix the CLS token in cross-modal attention.
+                cls_token, rv_tokens = x[:, :1], x[:, 1:]
+                rv_tokens = self.cross_modal_adapters[str(i)](rv_tokens, bev_tokens)
+                x = torch.cat([cls_token, rv_tokens], dim=1)
 
         x = self.norm(x)
 
+        if bev_feat is not None:
+            return x, skip, {'bev_feat': bev_feat, 'bev_tokens': bev_tokens}
         return x, skip  # x.shape = [16, 577, 384]
 
 
@@ -176,15 +355,27 @@ def create_rangevit(model_cfg, use_kpconv=False):
     model_cfg = model_cfg.copy()
     decoder_cfg = model_cfg.pop('decoder')
     decoder_cfg['n_cls'] = model_cfg['n_cls']
+    use_bev_decoder = model_cfg.pop('use_bev_decoder', False)
+    bev_decoder_hidden = model_cfg.pop('bev_decoder_hidden', 128)
+    use_bev_fusion = model_cfg.pop('use_bev_fusion', False)
 
     # Choose encoder architecture
     backbone = model_cfg.get('backbone', 'vit_small_patch16_384')
     if backbone.startswith('swin'):
+        # Swin backbone currently does not support the BALViT adapters/BEV path.
+        if model_cfg.get('bev_channels') is not None:
+            raise ValueError('BALViT BEV/adapters are only supported with ViT backbones, not Swin.')
         encoder = create_swin_v2(model_cfg)
     else:
         encoder = create_vit(model_cfg)
     
     decoder = create_decoder(encoder, decoder_cfg)
+    bev_decoder = None
+    if use_bev_decoder:
+        bev_decoder = BEVDecoder(
+            in_channels=encoder.d_model,
+            n_cls=model_cfg['n_cls'],
+            hidden_channels=bev_decoder_hidden)
 
     if use_kpconv:
         kpclassifier = KPClassifier(
@@ -193,7 +384,12 @@ def create_rangevit(model_cfg, use_kpconv=False):
             num_classes=model_cfg['n_cls'])
         model = RangeViT_KPConv(encoder, decoder, kpclassifier, n_cls=model_cfg['n_cls'])
     else:
-        model = RangeViT_noKPConv(encoder, decoder, n_cls=model_cfg['n_cls'])
+        model = RangeViT_noKPConv(
+            encoder,
+            decoder,
+            n_cls=model_cfg['n_cls'],
+            bev_decoder=bev_decoder,
+            use_bev_fusion=use_bev_fusion)
 
     return model
 
@@ -204,6 +400,8 @@ class RangeViT_noKPConv(nn.Module):
         encoder,
         decoder,
         n_cls,
+        bev_decoder=None,
+        use_bev_fusion=False,
     ):
         super().__init__()
         self.n_cls = n_cls
@@ -211,6 +409,8 @@ class RangeViT_noKPConv(nn.Module):
         self.patch_stride = encoder.patch_stride
         self.encoder = encoder
         self.decoder = decoder
+        self.bev_decoder = bev_decoder
+        self.use_bev_fusion = use_bev_fusion
 
     @torch.jit.ignore
     def no_weight_decay(self):
@@ -220,24 +420,42 @@ class RangeViT_noKPConv(nn.Module):
         nwd_params = append_prefix_no_weight_decay('encoder.', self.encoder).union(
             append_prefix_no_weight_decay('decoder.', self.decoder)
         )
+        if self.bev_decoder is not None:
+            nwd_params = nwd_params.union(
+                append_prefix_no_weight_decay('bev_decoder.', self.bev_decoder)
+            )
         return nwd_params
 
-    def forward(self, im):
+    def forward(self, im, bev_image=None):
         H_ori, W_ori = im.size(2), im.size(3)
         im = padding(im, self.patch_size)
         H, W = im.size(2), im.size(3)
 
-        x, skip = self.encoder(im, return_features=True) # x.shape = [16, 577, 384]
+        encoder_outputs = self.encoder(im, bev_image=bev_image, return_features=True) # x.shape = [16, 577, 384]
+        if len(encoder_outputs) == 2:
+            x, skip = encoder_outputs
+            bev_ctx = {}
+        else:
+            x, skip, bev_ctx = encoder_outputs
 
         # remove CLS tokens for decoding
         num_extra_tokens = 1
         x = x[:, num_extra_tokens:] # x.shape = [16, 576, 384]
 
-        feats = self.decoder(x, (H, W), skip) # feats.shape = [16, 17, 24, 24]
-        feats = F.interpolate(feats, size=(H, W), mode='bilinear')
-        feats = unpadding(feats, (H_ori, W_ori)) # feats.shape = [16, 17, 384, 384]
+        rv_logits = self.decoder(x, (H, W), skip) # feats.shape = [16, 17, 24, 24]
+        rv_logits = F.interpolate(rv_logits, size=(H, W), mode='bilinear')
+        rv_logits = unpadding(rv_logits, (H_ori, W_ori)) # feats.shape = [16, 17, 384, 384]
 
-        return feats
+        bev_logits = None
+        if self.bev_decoder is not None and bev_ctx.get('bev_feat') is not None:
+            bev_logits = self.bev_decoder(bev_ctx['bev_feat'])
+            bev_logits = F.interpolate(
+                bev_logits, size=rv_logits.shape[-2:], mode='bilinear', align_corners=False)
+
+        if self.use_bev_fusion and bev_logits is not None:
+            return (rv_logits + bev_logits) / 2.0
+
+        return rv_logits
 
 
 class RangeViT(nn.Module):
@@ -260,6 +478,15 @@ class RangeViT(nn.Module):
         up_conv_d_decoder=64,
         up_conv_scale_factor=(2, 8),
         use_kpconv=False,
+        bev_channels=None,
+        bev_base_channels=64,
+        bev_num_layers=3,
+        adapter_indices=None,
+        adapter_mlp_ratio=4.0,
+        freeze_vit=False,
+        use_bev_decoder=False,
+        bev_decoder_hidden=128,
+        use_bev_fusion=False,
         ):
         super(RangeViT, self).__init__()
 
@@ -345,6 +572,15 @@ class RangeViT(nn.Module):
             'conv_stem': conv_stem,
             'stem_base_channels': stem_base_channels,
             'stem_hidden_dim': stem_hidden_dim,
+            'bev_channels': bev_channels,
+            'bev_base_channels': bev_base_channels,
+            'bev_num_layers': bev_num_layers,
+            'adapter_indices': adapter_indices,
+            'adapter_mlp_ratio': adapter_mlp_ratio,
+            'freeze_vit': freeze_vit,
+            'use_bev_decoder': use_bev_decoder,
+            'bev_decoder_hidden': bev_decoder_hidden,
+            'use_bev_fusion': use_bev_fusion,
         }
 
 
@@ -430,8 +666,8 @@ class RangeViT(nn.Module):
         stats['encoder_num_parameters'] = count_parameters(self.rangevit.encoder) - stats['stem_num_parameters']
         return stats
 
-    def forward(self, *args):
-        return self.rangevit(*args)
+    def forward(self, *args, **kwargs):
+        return self.rangevit(*args, **kwargs)
 
 def count_parameters(model):
     return sum(p.numel() for p in model.parameters() if p.requires_grad)

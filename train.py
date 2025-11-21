@@ -270,9 +270,17 @@ class Trainer(object):
 
         log_frequency = max(1, self.settings.log_frequency)
 
-        for i, (input_feature, input_label, input_mask) in enumerate(dataloader):
+        for i, batch_data in enumerate(dataloader):
             t_process_start = time.time()
             current_lr = None
+
+            # Unpack batch data (support both with and without BEV)
+            if len(batch_data) == 4:
+                input_feature, input_label, input_mask, bev_image = batch_data
+                bev_image = bev_image.cuda()
+            else:
+                input_feature, input_label, input_mask = batch_data
+                bev_image = None
 
             # Feature: range, x, y, z, intensity
             input_feature = input_feature.cuda() # shape: B x 5 x H x W
@@ -284,7 +292,7 @@ class Trainer(object):
             # Forward propagation
             if mode == 'Train':
                 with torch.cuda.amp.autocast(self.fp16_scaler is not None):
-                    output = self.model(input_feature)
+                    output = self.model(input_feature, bev_image=bev_image)
                     output_softmax = F.softmax(output, dim=1)
 
                     # Loss calculation
@@ -494,6 +502,9 @@ class Trainer(object):
             input_feature = batch_dict['input2d'].cuda(non_blocking=True)
             assert self.settings.in_channels == 5
 
+            # BEV input (optional)
+            bev_image = batch_dict['bev'].cuda(non_blocking=True) if 'bev' in batch_dict else None
+
             # 3D inputs
             py = batch_dict['py'].cuda(non_blocking=True)
             px = batch_dict['px'].cuda(non_blocking=True)
@@ -507,7 +518,7 @@ class Trainer(object):
             # Forward propagation
             if mode == 'Train':
                 with torch.cuda.amp.autocast(self.fp16_scaler is not None):
-                    output3d = self.model(input_feature, px, py, pxyz, knns, num_points)
+                    output3d = self.model(input_feature, px, py, pxyz, knns, num_points, bev_image=bev_image)
 
                     output3d_softmax = F.softmax(output3d, dim=1)
 

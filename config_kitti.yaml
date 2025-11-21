@@ -51,6 +51,26 @@ skip_filters: 128 # has to be 0 (no skip) or D_h
 # 3D refiner
 use_kpconv: true
 
+# BALViT BEV branch config
+use_bev: false # Enable/disable BEV branch (set to true to use BALViT-style 2D-3D adapters)
+bev:
+  x_range: [-50, 50] # BEV x-axis range in meters (forward direction)
+  y_range: [-50, 50] # BEV y-axis range in meters (left-right direction)
+  grid_size: [256, 256] # BEV grid resolution [H, W]
+  channels: 8 # Number of BEV feature channels (height stats, intensity, density, occupancy)
+  base_channels: 64 # Base channels for BEV encoder CNN
+  num_layers: 3 # Number of layers in BEV encoder
+
+# Cross-modal adapter config (for BALViT)
+adapter_indices: null # Insert adapters after these ViT blocks, e.g., [3, 7, 11] for 12-layer ViT
+adapter_mlp_ratio: 4.0 # MLP expansion ratio in adapters
+freeze_vit: false # Freeze ViT backbone weights (useful for fine-tuning with adapters)
+
+# BEV decoder config (for BALViT)
+use_bev_decoder: false # Add a BEV decoder branch
+bev_decoder_hidden: 128 # Hidden channels in BEV decoder
+use_bev_fusion: false # Fuse range-view and BEV predictions
+
 # Checkpoint model
 checkpoint: null
 pretrained_model: "pretrained_model/vit_base_patch16_384.pth"
