@@ -33,6 +33,18 @@ from utils.discord import notify_run_completion, post_message
 
 
 def build_rangevit_model(settings, pretrained_path=None):
+    if settings.model_type.lower() == 'rangeformer':
+        print('==> Building RangeFormer model ...')
+        print(f"settings.in_channels = {settings.in_channels}")
+        print(f"settings.n_classes = {settings.n_classes}")
+        print(f"settings.use_kpconv = {settings.use_kpconv}")
+        model = models.RangeFormerModel(
+            in_channels=settings.in_channels,
+            n_cls=settings.n_classes,
+            use_kpconv=settings.use_kpconv,
+        )
+        return model
+
     print('==> Building RangeViT model ...')
     print(f"settings.in_channels = {settings.in_channels}")
     print(f"settings.vit_backbone = {settings.vit_backbone}")
@@ -271,7 +283,7 @@ class Experiment(object):
             pretrained_path=self.settings.pretrained_model)
 
         # Freezing the ViT encoder weights.
-        if self.settings.freeze_vit_encoder:
+        if self.settings.model_type == 'rangevit' and self.settings.freeze_vit_encoder:
             print('==> Freeze the ViT encoder (without the pos_embed and stem)')
             for param in model.rangevit.encoder.blocks.parameters():
                 param.requires_grad = False
@@ -329,7 +341,7 @@ class Experiment(object):
 
             checkpoint_data = torch.load(self.settings.checkpoint, map_location='cpu')
 
-            if self.settings.finetune_pretrained_model:
+            if self.settings.finetune_pretrained_model and self.settings.model_type == 'rangevit':
                 # When fine-tuning a segmentation model previously pre-trained to another dataset then it
                 # is necessary to adapt the (a) pos_embeds and (b) to remove the classification head.
                 image_size = self.model.rangevit.encoder.image_size

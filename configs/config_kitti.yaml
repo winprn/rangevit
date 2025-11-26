@@ -16,17 +16,18 @@ data_root: "../dataset/SemanticKitti/data_odometry_velodyne/dataset/sequences"
 
 # Train config
 has_label: true
-val_frequency: 3
+val_frequency: 10
 save_frequent: 10
-n_epochs: 60
+n_epochs: 70
 warmup_epochs: 10
-batch_size: 32
+batch_size: 16
 batch_size_val: 1
-lr: 0.0004
+lr: 0.001
 train_result_frequency: 100 # printing frequency of the train results
 
 
 # Model config
+model_type: 'rangeformer'
 vit_backbone: 'vit_small_p16_384'
 in_channels: 5
 patch_size: [2, 8]  # patch size = patch stride if a convolutional stem (ConvStem) is used
@@ -45,13 +46,13 @@ D_h: 256 # hidden dimension of the stem
 
 # Decoder
 decoder: 'up_conv'  # 'linear' or 'up_conv'
-skip_filters: 128 # has to be 0 (no skip) or D_h 
+skip_filters: 256 # has to be 0 (no skip) or D_h 
 
 # 3D refiner
 use_kpconv: true
 
 # Checkpoint model
-save_path: "save_rangevit256_small_ft_trainval"
+save_path: "save_rangeformer"
 # checkpoint: null
 pretrained_model: "../pretrained_model/vit_small_p16_384_ft.pth"
 
@@ -91,7 +92,7 @@ augmentation:
 sensor:
   name: 'HDL64'
   type: 'spherical'
-  scan_proj: false
+  scan_proj: true
   proj_h: 64
   proj_w: 2048
   fov_up: 3.

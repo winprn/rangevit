@@ -59,6 +59,7 @@ class Option(object):
 
 
         # Model config
+        self.model_type = self.config.get('model_type', 'rangevit')
         self.vit_backbone = self.config.get('vit_backbone', 'vit_small_patch16_384')
         self.in_channels = self.config.get('in_channels', 5)
         self.patch_size = self.config.get('patch_size', [2, 8])
