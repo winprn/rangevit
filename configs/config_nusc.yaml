@@ -77,6 +77,21 @@ augmentation:
   rot_yawmin: 5
   rot_yawmax: -5
 
+  # Kimi augmentation (rare class copy-paste in 3D)
+  kimi:
+    enabled: false           # set true to activate
+    prob: 0.35               # probability of applying per frame
+    minor_freq_ratio: 0.015  # classes with <= this ratio are considered minor
+    max_minor_classes: 6     # keep the rarest N classes (optional)
+    min_points: 20           # discard clusters with fewer points
+    max_clusters_per_frame: 1
+    translation_std: [2.0, 2.0, 0.3]
+    rotation_deg: 12.0
+    scale_range: [0.95, 1.05]
+    anchor_percentile: 5.0
+    cache_dir: "./cache"     # where dataset stats cache is stored
+    ignore_classes: [0]
+
 sensor:
   name: 'HDL64'
   type: 'spherical'

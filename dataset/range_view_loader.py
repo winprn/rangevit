@@ -19,7 +19,7 @@ import torchvision.transforms as T
 import torchvision.transforms.functional as TF
 from scipy.spatial.ckdtree import cKDTree as kdtree
 
-from .preprocess import augmentor, projection
+from .preprocess import augmentor, projection, kimi_augment
 
 
 class RangeViewLoader(Dataset):
@@ -61,6 +61,24 @@ class RangeViewLoader(Dataset):
             self.augmentor = augmentor.Augmentor(augment_params)
         else:
             self.augmentor = None
+
+        kimi_config = augment_config.get('kimi', {})
+        self.kimi_augmentor = None
+        if self.is_train and kimi_config.get('enabled', False):
+            n_classes = self.config.get('n_classes', 0)
+            if n_classes == 0 and hasattr(self.dataset, 'mapped_cls_name'):
+                n_classes = len(self.dataset.mapped_cls_name)
+            if n_classes > 0:
+                self.kimi_augmentor = kimi_augment.KimiAugmentor(
+                    dataset=self.dataset,
+                    label_mapper=self.dataset.labelMapping,
+                    n_classes=n_classes,
+                    kimi_config=kimi_config,
+                    dataset_name=self.config.get('dataset', 'dataset'),
+                )
+                print(f'Kimi augmentation enabled with p={self.kimi_augmentor.prob} and minor classes={self.kimi_augmentor.minor_classes}')
+            else:
+                print('Kimi augmentation disabled: invalid n_classes value')
 
         self.proj_p_hflip = augment_config.get('p_hflip', 0.0)
         if self.proj_p_hflip > 0.0:
@@ -104,6 +122,8 @@ class RangeViewLoader(Dataset):
         proj_mask_tensor: HxW
         '''
         pointcloud, sem_label, inst_label = self.dataset.loadDataByIndex(index)
+        if self.is_train and self.kimi_augmentor is not None:
+            pointcloud, sem_label = self.kimi_augmentor.maybe_apply(pointcloud, sem_label, index)
         points_xyz = pointcloud[:, :3]
         sem_label = self.dataset.labelMapping(sem_label)
 
@@ -182,6 +202,8 @@ class RangeViewLoader(Dataset):
             return self.get_item_for_kpconv(index)
 
         pointcloud, sem_label, inst_label = self.dataset.loadDataByIndex(index)
+        if self.is_train and self.kimi_augmentor is not None:
+            pointcloud, sem_label = self.kimi_augmentor.maybe_apply(pointcloud, sem_label, index)
         if self.is_train:
             pointcloud = self.augmentor.doAugmentation(pointcloud)  # n, 4
         proj_pointcloud, proj_range, proj_idx, proj_mask = self.projection.doProjection(pointcloud)
