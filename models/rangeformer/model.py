@@ -48,10 +48,10 @@ class RangeFormerModel(nn.Module):
         self,
         in_channels: int,
         n_cls: int,
-        backbone_depths=(3, 3, 6, 3), # layers per stage
+        backbone_depths=(3, 4, 6, 3), # layers per stage
         backbone_embed_dims=(128, 128, 320, 512),
-        backbone_heads=(2, 2, 5, 8),
-        backbone_sr_ratios=(4, 4, 2, 1),
+        backbone_heads=(1, 2, 5, 8),
+        backbone_sr_ratios=(8, 4, 2, 1),
         drop_path_rate: float = 0.1,
         use_kpconv: bool = False,
     ):
@@ -102,6 +102,6 @@ def count_parameters(model: nn.Module) -> int:
 
 if __name__ == "__main__":
     # params count test
-    model = RangeFormerModel(in_channels=5, n_cls=20, use_kpconv=True)
+    model = RangeFormerModel(in_channels=5, n_cls=20, use_kpconv=False)
     stats = model.counter_model_parameters()
     print(stats)

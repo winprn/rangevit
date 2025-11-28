@@ -16,7 +16,7 @@ data_root: "../dataset/SemanticKitti/data_odometry_velodyne/dataset/sequences"
 
 # Train config
 has_label: true
-val_frequency: 10
+val_frequency: 3
 save_frequent: 10
 n_epochs: 70
 warmup_epochs: 10
