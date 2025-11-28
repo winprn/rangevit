@@ -6,12 +6,12 @@ id: 'exp_kitti'
 mlflow:
     enabled: true
     experiment: 'rangevit'
-    run_name: '[trainval] rangevit256_small_ft_trainval'            # overrides default if set
+    run_name: '[trainval] rangeformer_encoder'            # overrides default if set
 
 # Data config
 dataset: 'SemanticKitti'
 n_classes: 20 # 19 + 1(ignored)
-use_trainval: true # set to true if you want to train on train-val of SemanticKITTI.
+use_trainval: false # set to true if you want to train on train-val of SemanticKITTI.
 data_root: "../dataset/SemanticKitti/data_odometry_velodyne/dataset/sequences"
 
 # Train config
