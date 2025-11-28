@@ -283,10 +283,10 @@ class RangeFormerBackbone(nn.Module):
         range_img: (B, in_channels, H, W)
     Outputs:
         Tuple of four feature maps:
-            F1: (B, C1, H/4,  W/4)
-            F2: (B, C2, H/8,  W/8)
-            F3: (B, C3, H/16, W/16)
-            F4: (B, C4, H/32, W/32)
+            F1: (B, C1, H,    W)
+            F2: (B, C2, H/2,  W/2)
+            F3: (B, C3, H/4,  W/4)
+            F4: (B, C4, H/8,  W/8)
     """
 
     def __init__(
@@ -324,24 +324,24 @@ class RangeFormerBackbone(nn.Module):
 
         # Patch embeds (overlapping)
         self.patch_embed1 = OverlapPatchEmbed(
-            img_size=img_size, patch_size=7, stride=4, in_chans=first_in_chans, embed_dim=embed_dims[0]
+            img_size=img_size, patch_size=3, stride=1, in_chans=first_in_chans, embed_dim=embed_dims[0]
         )
         self.patch_embed2 = OverlapPatchEmbed(
-            img_size=(img_size[0] // 4, img_size[1] // 4),
+            img_size=img_size,
             patch_size=3,
             stride=2,
             in_chans=embed_dims[0],
             embed_dim=embed_dims[1],
         )
         self.patch_embed3 = OverlapPatchEmbed(
-            img_size=(img_size[0] // 8, img_size[1] // 8),
+            img_size=(img_size[0] // 2, img_size[1] // 2),
             patch_size=3,
             stride=2,
             in_chans=embed_dims[1],
             embed_dim=embed_dims[2],
         )
         self.patch_embed4 = OverlapPatchEmbed(
-            img_size=(img_size[0] // 16, img_size[1] // 16),
+            img_size=(img_size[0] // 4, img_size[1] // 4),
             patch_size=3,
             stride=2,
             in_chans=embed_dims[2],
@@ -491,7 +491,7 @@ if __name__ == "__main__":
     model = RangeFormerBackbone().to(device)
     x = torch.randn(2, 5, 64, 2048, device=device)  # example range image (B, C, H, W)
     F1, F2, F3, F4 = model(x)
-    print(F1.shape)  # (B, 128, H/4,  W/4)
-    print(F2.shape)  # (B, 128, H/8,  W/8)
-    print(F3.shape)  # (B, 320, H/16, W/16)
-    print(F4.shape)  # (B, 512, H/32, W/32)
+    print(F1.shape)  # (B, 128, H,   W)
+    print(F2.shape)  # (B, 128, H/2, W/2)
+    print(F3.shape)  # (B, 320, H/4, W/4)
+    print(F4.shape)  # (B, 512, H/8, W/8)
