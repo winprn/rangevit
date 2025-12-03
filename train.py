@@ -205,6 +205,14 @@ class Trainer(object):
         criterion = {}
         criterion['lovasz'] = utils.optim.Lovasz_softmax(ignore=0)
         from utils.optim.boundary_loss import BoundaryLoss
+        from utils.optim.focal_softmax import FocalSoftmaxLoss
+        # Initialize focal loss (assuming number of classes is known from settings)
+        num_classes = self.settings.num_classes if hasattr(self.settings, 'num_classes') else 20
+        criterion['focal_loss'] = FocalSoftmaxLoss(num_classes)
+        criterion['boundary'] = BoundaryLoss(self.settings.num_classes)
+        # Set device
+        for _, v in criterion.items():
+            v.cuda()
 
         # Set device
         for _, v in criterion.items():

@@ -212,17 +212,6 @@ class Block(nn.Module):
             fan_out = m.kernel_size[0] * m.kernel_size[1] * m.out_channels
             fan_out //= m.groups
             m.weight.data.normal_(0, math.sqrt(2.0 / fan_out))
-            if m.bias is not None:
-                m.bias.data.zero_()
-
-    def forward(self, x: torch.Tensor, H: int, W: int) -> torch.Tensor:
-        if self.training:
-            return checkpoint.checkpoint(self._forward_impl, x, H, W)
-        else:
-            return self._forward_impl(x, H, W)
-
-    def _forward_impl(self, x, H, W):
-        x = x + self.drop_path(self.attn(self.norm1(x), H, W))
         x = x + self.drop_path(self.mlp(self.norm2(x), H, W))
         return x
 
