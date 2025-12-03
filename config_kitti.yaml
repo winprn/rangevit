@@ -27,6 +27,13 @@ batch_size_val: 1
 lr: 0.0004
 train_result_frequency: 100 # printing frequency of the train results
 
+# Loss config
+loss:
+  type: "lenet" # 'original', 'rangevit', 'lenet'
+  w_ce: 1.0
+  w_lovasz: 1.5
+  w_boundary: 1.0
+
 # Model config
 vit_backbone: "vit_small_patch16_384"
 in_channels: 5

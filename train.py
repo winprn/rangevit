@@ -31,6 +31,7 @@ from utils.metrics.eval_results import eval_results
 from utils.metrics.tensorboard_logger import tensorboard_logger
 from utils.inference.inference_utils import inference
 from utils.tools import Recorder
+from utils.optim.rangevit_loss import RangeViTLoss, LENetLoss
 
 
 class Trainer(object):
@@ -203,31 +204,99 @@ class Trainer(object):
             return train_loader, val_loader, None, None
 
     def _initCriterion(self):
-        criterion = {}
-        criterion['lovasz'] = utils.optim.Lovasz_softmax(ignore=0)
-
         if self.settings.dataset == 'SemanticKitti':
             alpha = np.log(1+self.cls_weight)
             alpha = alpha / alpha.max()
         elif self.settings.dataset == 'nuScenes':
             alpha = np.ones((self.settings.n_classes))
         alpha[0] = 0
-        if self.recorder is not None:
-            self.recorder.logger.info('focal_loss alpha: {}'.format(alpha))
+    def _initCriterion(self):
+        if self.settings.loss_type == 'original':
+            criterion = {}
+            criterion['lovasz'] = utils.optim.Lovasz_softmax(ignore=0)
 
-        criterion['focal_loss'] = utils.optim.FocalSoftmaxLoss(
-            self.settings.n_classes, gamma=2, alpha=alpha, softmax=False)
+            if self.settings.dataset == 'SemanticKitti':
+                alpha = np.log(1+self.cls_weight)
+                alpha = alpha / alpha.max()
+            elif self.settings.dataset == 'nuScenes':
+                alpha = np.ones((self.settings.n_classes))
+            alpha[0] = 0
+            if self.recorder is not None:
+                self.recorder.logger.info('focal_loss alpha: {}'.format(alpha))
 
-        # Set device
-        for _, v in criterion.items():
-            v.cuda()
-        return criterion
+            criterion['focal_loss'] = utils.optim.FocalSoftmaxLoss(
+                self.settings.n_classes, gamma=2, alpha=alpha, softmax=False)
+
+            # Set device
+            for _, v in criterion.items():
+                v.cuda()
+            return criterion
+
+        elif self.settings.loss_type == 'rangevit':
+            if self.settings.dataset == 'SemanticKitti':
+                alpha = np.log(1+self.cls_weight)
+                alpha = alpha / alpha.max()
+            elif self.settings.dataset == 'nuScenes':
+                alpha = np.ones((self.settings.n_classes))
+            alpha[0] = 0
+            
+            criterion = RangeViTLoss(
+                gamma=2.0, 
+                alpha=alpha, 
+                ignore_index=0
+            ).cuda()
+            return criterion
+
+        elif self.settings.loss_type == 'lenet':
+            # Use the new configurable LENetLoss
+            if hasattr(self.train_loader.dataset, 'dataset') and hasattr(self.train_loader.dataset.dataset, 'cls_freq'):
+                 cls_freq = self.train_loader.dataset.dataset.cls_freq
+            else:
+                 cls_freq = 1.0 / (self.cls_weight + 1e-6)
+
+            criterion = LENetLoss(
+                num_classes=self.settings.n_classes,
+                class_freq=cls_freq,
+                ignore_index=0,
+                w_ce=self.settings.w_ce,
+                w_lovasz=self.settings.w_lovasz,
+                w_boundary=self.settings.w_boundary,
+            ).cuda()
+            return criterion
+        
+        else:
+            raise ValueError(f"Unknown loss type: {self.settings.loss_type}")
 
     def compute_losses(self, output, output_softmax, label, mask):
-        loss_lovasz = self.criterion['lovasz'](output_softmax, label)
-        loss_focal = self.criterion['focal_loss'](output_softmax, label, mask=mask)
-        total_loss = loss_focal + loss_lovasz
-        return total_loss, loss_lovasz, loss_focal
+        loss_dict = {}
+        
+        if self.settings.loss_type == 'original':
+            loss_lovasz = self.criterion['lovasz'](output_softmax, label)
+            loss_focal = self.criterion['focal_loss'](output_softmax, label, mask=mask)
+            total_loss = loss_focal + loss_lovasz
+            
+            loss_dict['loss'] = total_loss
+            loss_dict['loss_lovasz'] = loss_lovasz
+            loss_dict['loss_focal'] = loss_focal
+            
+        elif self.settings.loss_type == 'rangevit':
+            # RangeViTLoss returns (total, focal, lovasz)
+            total_loss, focal_loss, lovasz_loss = self.criterion(output, label)
+            
+            loss_dict['loss'] = total_loss
+            loss_dict['loss_focal'] = focal_loss
+            loss_dict['loss_lovasz'] = lovasz_loss
+            
+        elif self.settings.loss_type == 'lenet':
+            # LENetLoss returns (total, wce, lovasz, boundary)
+            total_loss, wce_loss, lovasz_loss, boundary_loss = self.criterion(output, label)
+            
+            loss_dict['loss'] = total_loss
+            loss_dict['loss_wce'] = wce_loss
+            loss_dict['loss_lovasz'] = lovasz_loss
+            loss_dict['loss_boundary'] = boundary_loss
+            
+        return loss_dict
 
 
     def run(self, epoch, mode='Train', print_results=False, save_results_path=None):
@@ -296,8 +365,10 @@ class Trainer(object):
                     output_softmax = F.softmax(output, dim=1)
 
                     # Loss calculation
-                    total_loss, loss_lovasz, loss_focal = self.compute_losses(
+                    # Loss calculation
+                    loss_dict = self.compute_losses(
                         output, output_softmax, input_label, input_mask)
+                    total_loss = loss_dict['loss']
 
                 # Backward
                 self.optimizer.zero_grad()
@@ -332,8 +403,10 @@ class Trainer(object):
                     output_softmax = F.softmax(output, dim=1)
 
                     # Loss calculation
-                    total_loss, loss_lovasz, loss_focal = self.compute_losses(
+                    # Loss calculation
+                    loss_dict = self.compute_losses(
                         output, output_softmax, input_label, input_mask)
+                    total_loss = loss_dict['loss']
 
             current_lr = self.optimizer.param_groups[0]['lr']
 
@@ -357,12 +430,17 @@ class Trainer(object):
             if should_log and self.mlflow_manager is not None:
                 step_id = self.iter_steps[mode]
                 self.iter_steps[mode] += 1
+
                 mlflow_metrics = {
                     f'{mode.lower()}_loss': loss.item(),
                     f'{mode.lower()}_mean_iou': mean_iou_running,
                     f'{mode.lower()}_mean_acc': mean_acc_running,
                     f'{mode.lower()}_mean_recall': mean_recall_running,
                 }
+                for k, v in loss_dict.items():
+                    if k != 'loss':
+                        val = v.item() if torch.is_tensor(v) else v
+                        mlflow_metrics[f'{mode.lower()}_{k}'] = val
                 if mode == 'Train':
                     mlflow_metrics[f'{mode.lower()}_lr'] = current_lr
                 self.mlflow_manager.log_metrics(mlflow_metrics, step=step_id)
@@ -403,11 +481,7 @@ class Trainer(object):
                 'conf_matrix': self.metrics.conf_matrix.clone().cpu(),
             }
 
-        loss_dict = {
-                'loss_meter_avg': loss_meter.avg,
-                'loss_focal': loss_focal,
-                'loss_lovasz': loss_lovasz,
-            }
+        loss_dict['loss_meter_avg'] = loss_meter.avg
 
         epoch_lr = self.optimizer.param_groups[0]['lr']
 
@@ -523,8 +597,10 @@ class Trainer(object):
                     output3d_softmax = F.softmax(output3d, dim=1)
 
                     # Loss calculation
-                    total_loss, loss_lovasz, loss_focal = self.compute_losses(
+                    # Loss calculation
+                    loss_dict = self.compute_losses(
                         output3d, output3d_softmax, labels3d, mask_3d)
+                    total_loss = loss_dict['loss']
 
                 # Backward
                 self.optimizer.zero_grad()
@@ -564,8 +640,10 @@ class Trainer(object):
                     output3d_softmax = F.softmax(output3d, dim=1)
 
                     # Loss calculation
-                    total_loss, loss_lovasz, loss_focal = self.compute_losses(
+                    # Loss calculation
+                    loss_dict = self.compute_losses(
                         output3d, output3d_softmax, labels3d, mask_3d)
+                    total_loss = loss_dict['loss']
 
             current_lr = self.optimizer.param_groups[0]['lr']
 
@@ -589,12 +667,17 @@ class Trainer(object):
             if should_log and self.mlflow_manager is not None:
                 step_id = self.iter_steps[mode]
                 self.iter_steps[mode] += 1
+
                 mlflow_metrics = {
                     f'{mode.lower()}_loss': loss.item(),
                     f'{mode.lower()}_mean_iou': mean_iou_running,
                     f'{mode.lower()}_mean_acc': mean_acc_running,
                     f'{mode.lower()}_mean_recall': mean_recall_running,
                 }
+                for k, v in loss_dict.items():
+                    if k != 'loss':
+                        val = v.item() if torch.is_tensor(v) else v
+                        mlflow_metrics[f'{mode.lower()}_{k}'] = val
                 if mode == 'Train':
                     mlflow_metrics[f'{mode.lower()}_lr'] = current_lr
                 self.mlflow_manager.log_metrics(mlflow_metrics, step=step_id)
@@ -667,11 +750,7 @@ class Trainer(object):
                 'conf_matrix': self.metrics.conf_matrix.clone().cpu(),
             }
 
-        loss_dict = {
-                'loss_meter_avg': loss_meter.avg,
-                'loss_focal': loss_focal,
-                'loss_lovasz': loss_lovasz,
-            }
+        loss_dict['loss_meter_avg'] = loss_meter.avg
 
         epoch_lr = self.optimizer.param_groups[0]['lr']
 

@@ -55,6 +55,13 @@ class Option(object):
         self.train_result_frequency = self.config.get('train_result_frequency', 100)
         self.use_fp16 = self.config.get('use_fp16', False) # for mixed-precision training
 
+        # Loss config
+        loss_cfg = self.config.get('loss', {})
+        self.loss_type = loss_cfg.get('type', 'original')
+        self.w_ce = loss_cfg.get('w_ce', 1.0)
+        self.w_lovasz = loss_cfg.get('w_lovasz', 1.5)
+        self.w_boundary = loss_cfg.get('w_boundary', 1.0)
+
 
         # Model config
         self.vit_backbone = self.config.get('vit_backbone', 'vit_small_patch16_384')
