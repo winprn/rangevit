@@ -99,8 +99,12 @@ class SegmentationHead(nn.Module):
             )  # (B, out_ch_unify, H, W)
             unified_up.append(f_up)
 
-            # 3) Aux head on Hi (already unified & upsampled)
-            aux_logits = self.aux_heads[i](f_up)  # (B, num_classes, H, W)
+            # 3) Aux head on Hi (apply on smaller feature map f_un, then upsample)
+            # Optimization: Apply conv on smaller map to save VRAM and FLOPs
+            aux_logits_small = self.aux_heads[i](f_un)  # (B, num_classes, Hi, Wi)
+            aux_logits = F.interpolate(
+                aux_logits_small, size=(H, W), mode='bilinear', align_corners=False
+            ) # (B, num_classes, H, W)
             auxs.append(aux_logits)
 
         # Concatenate unified features along channel dimension:

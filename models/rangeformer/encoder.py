@@ -16,7 +16,7 @@ class RangeEmbeddingModule(nn.Module):
 
     def __init__(self, in_channels: int = 5, embed_dim: int = 128):
         super().__init__()
-        assert embed_dim == 128, "Paper uses 128-dim embedding after REM."
+        # assert embed_dim == 128, "Paper uses 128-dim embedding after REM."
 
         self.layers = nn.Sequential(
             nn.Conv2d(in_channels, 64, kernel_size=1, bias=False),
