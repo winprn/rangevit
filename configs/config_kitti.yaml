@@ -29,8 +29,8 @@ train_result_frequency: 100 # printing frequency of the train results
 # Model config
 model_type: 'rangeformer'
 vit_backbone: 'vit_small_p16_384'
-in_channels: 6
-use_valid_mask: true
+in_channels: 5
+use_valid_mask: false
 patch_size: [2, 8]  # patch size = patch stride if a convolutional stem (ConvStem) is used
 patch_stride: [2, 8]
 image_size: [64, 384]  # random crop at train

@@ -140,6 +140,10 @@ class RangeViewLoader(Dataset):
         proj_feature_tensor = (proj_feature_tensor - self.proj_img_mean[:, None, None]) / self.proj_img_stds[:, None, None]
         proj_feature_tensor = proj_feature_tensor * proj_mask_tensor.unsqueeze(0).float()
 
+        # Slice to match in_channels
+        if 'in_channels' in self.config:
+            proj_feature_tensor = proj_feature_tensor[:self.config['in_channels']]
+
         proj_tensor = torch.cat(
             (proj_feature_tensor,
             proj_sem_label_tensor.unsqueeze(0),
@@ -215,6 +219,10 @@ class RangeViewLoader(Dataset):
         proj_feature_tensor = (proj_feature_tensor - self.proj_img_mean[:, None, None]) / self.proj_img_stds[:, None,
                                                                                           None]
         proj_feature_tensor = proj_feature_tensor * proj_mask_tensor.unsqueeze(0).float()
+
+        # Slice to match in_channels
+        if 'in_channels' in self.config:
+            proj_feature_tensor = proj_feature_tensor[:self.config['in_channels']]
 
         if self.return_uproj:
             sem_label = self.dataset.labelMapping(sem_label)

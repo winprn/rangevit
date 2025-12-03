@@ -4,6 +4,7 @@ from typing import Optional
 
 import torch
 import torch.nn as nn
+import torch.utils.checkpoint as checkpoint
 
 from timm.models.layers import DropPath, to_2tuple, trunc_normal_
 
@@ -215,6 +216,12 @@ class Block(nn.Module):
                 m.bias.data.zero_()
 
     def forward(self, x: torch.Tensor, H: int, W: int) -> torch.Tensor:
+        if self.training:
+            return checkpoint.checkpoint(self._forward_impl, x, H, W)
+        else:
+            return self._forward_impl(x, H, W)
+
+    def _forward_impl(self, x, H, W):
         x = x + self.drop_path(self.attn(self.norm1(x), H, W))
         x = x + self.drop_path(self.mlp(self.norm2(x), H, W))
         return x
@@ -489,9 +496,9 @@ if __name__ == "__main__":
     print("Testing RangeFormerBackbone reference implementation...")
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = RangeFormerBackbone().to(device)
-    x = torch.randn(2, 5, 64, 2048, device=device)  # example range image (B, C, H, W)
-    F1, F2, F3, F4 = model(x)
-    print(F1.shape)  # (B, 128, H,   W)
-    print(F2.shape)  # (B, 128, H/2, W/2)
-    print(F3.shape)  # (B, 320, H/4, W/4)
-    print(F4.shape)  # (B, 512, H/8, W/8)
+    # x = torch.randn(2, 5, 64, 2048, device=device)  # example range image (B, C, H, W)
+    # F1, F2, F3, F4 = model(x)
+    # print(F1.shape)  # (B, 128, H,   W)
+    # print(F2.shape)  # (B, 128, H/2, W/2)
+    # print(F3.shape)  # (B, 320, H/4, W/4)
+    # print(F4.shape)  # (B, 512, H/8, W/8)
