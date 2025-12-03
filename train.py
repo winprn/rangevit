@@ -250,10 +250,12 @@ class Trainer(object):
         elif self.settings.loss_type == 'lenet':
             # Use the new configurable LENetLoss
             if hasattr(self.train_loader.dataset, 'dataset') and hasattr(self.train_loader.dataset.dataset, 'cls_freq'):
-                 cls_freq = self.train_loader.dataset.dataset.cls_freq
+                print("Using train_loader.dataset.dataset.cls_freq")
+                cls_freq = self.train_loader.dataset.dataset.cls_freq
             else:
-                 cls_freq = 1.0 / (self.cls_weight + 1e-6)
+                cls_freq = 1.0 / (self.cls_weight + 1e-6)
 
+            print("Using LENetLoss with cls_freq: {}".format(cls_freq))
             criterion = LENetLoss(
                 num_classes=self.settings.n_classes,
                 class_freq=cls_freq,
