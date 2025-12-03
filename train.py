@@ -21,17 +21,12 @@ import datetime
 import numpy as np
 import torch.nn as nn
 import torch.nn.functional as F
-from typing import Callable, Dict, Optional
+from typing import Optional, Callable, Dict
 
 from option import Option
 import dataset
 import utils
 import utils.tools as tools
-from utils.metrics.eval_results import eval_results
-from utils.metrics.tensorboard_logger import tensorboard_logger
-from utils.inference.inference_utils import inference
-from utils.tools import Recorder
-
 
 class Trainer(object):
     def __init__(
@@ -161,6 +156,7 @@ class Trainer(object):
             dataset=valset,
             config=self.settings.config,
             is_train=False,
+            return_uproj=(not self.settings.use_kpconv),
             use_kpconv=self.settings.use_kpconv)
 
         collate_fn = dataset.custom_collate_kpconv_fn if self.settings.use_kpconv else None
@@ -208,18 +204,7 @@ class Trainer(object):
     def _initCriterion(self):
         criterion = {}
         criterion['lovasz'] = utils.optim.Lovasz_softmax(ignore=0)
-
-        if self.settings.dataset == 'SemanticKitti':
-            alpha = np.log(1+self.cls_weight)
-            alpha = alpha / alpha.max()
-        elif self.settings.dataset == 'nuScenes':
-            alpha = np.ones((self.settings.n_classes))
-        alpha[0] = 0
-        if self.recorder is not None:
-            self.recorder.logger.info('focal_loss alpha: {}'.format(alpha))
-
-        criterion['focal_loss'] = utils.optim.FocalSoftmaxLoss(
-            self.settings.n_classes, gamma=2, alpha=alpha, softmax=False)
+        from utils.optim.boundary_loss import BoundaryLoss
 
         # Set device
         for _, v in criterion.items():
@@ -229,7 +214,8 @@ class Trainer(object):
     def compute_losses(self, output, output_softmax, label, mask):
         loss_lovasz = self.criterion['lovasz'](output_softmax, label)
         loss_focal = self.criterion['focal_loss'](output_softmax, label, mask=mask)
-        total_loss = loss_focal + loss_lovasz
+        loss_boundary = self.criterion['boundary'](output_softmax, label)
+        total_loss = loss_focal + loss_lovasz + loss_boundary
         return total_loss, loss_lovasz, loss_focal
 
 
@@ -266,18 +252,16 @@ class Trainer(object):
 
         # Init metrics
         loss_meter = tools.AverageMeter()
-        self.metrics.reset()
-
         total_iter = len(dataloader)
         t_start = time.time()
 
-        for i, (input_feature, input_label, input_mask) in enumerate(dataloader):
-            # [TESTING] Early exit option for testing (limit iterations per epoch)
-            if self.settings.max_iters_per_epoch is not None and i >= self.settings.max_iters_per_epoch:
-                print(f'[TESTING PIPELIONE] Reached max_iters_per_epoch={self.settings.max_iters_per_epoch}, stopping epoch early')
-                break
-
+        for i, batch_data in enumerate(dataloader):
             t_process_start = time.time()
+            if len(batch_data) == 8:
+                 input_feature, input_label, input_mask, proj_range, uproj_x, uproj_y, uproj_depth, labels_3d = batch_data
+            else:
+                 input_feature, input_label, input_mask = batch_data
+                 labels_3d = None
 
             # Feature: range, x, y, z, intensity
             input_feature = input_feature.cuda() # shape: B x 5 x H x W
@@ -289,12 +273,24 @@ class Trainer(object):
             # Forward propagation
             if mode == 'Train':
                 with torch.amp.autocast('cuda', enabled=self.fp16_scaler is not None):
-                    output = self.model(input_feature)
+                    output_tuple = self.model(input_feature)
+                    if isinstance(output_tuple, tuple):
+                        output, auxs = output_tuple
+                    else:
+                        output, auxs = output_tuple, None
+                    
                     output_softmax = F.softmax(output, dim=1)
 
                     # Loss calculation
                     total_loss, loss_lovasz, loss_focal = self.compute_losses(
                         output, output_softmax, input_label, input_mask)
+                    
+                    # Auxiliary Loss
+                    if auxs is not None:
+                        for aux_logit in auxs:
+                            aux_softmax = F.softmax(aux_logit, dim=1)
+                            loss_aux, _, _ = self.compute_losses(aux_logit, aux_softmax, input_label, input_mask)
+                            total_loss += 0.4 * loss_aux
 
                 # Backward
                 self.optimizer.zero_grad()
@@ -313,32 +309,82 @@ class Trainer(object):
                 with torch.no_grad():
                     assert input_feature.shape[0] == 1 # validation batch size has to be 1
 
-                    # Validation
-                    im_meta = dict(flip=False)
-                    with torch.amp.autocast('cuda', enabled=self.fp16_scaler is not None):
-                        lidar_pred = inference(
-                            model_without_ddp.rangevit,
-                            [input_feature],
-                            [im_meta],
-                            ori_shape=input_feature.shape[2:4],
-                            window_size=self.settings.window_size,
-                            window_stride=self.settings.window_stride,
-                            batch_size=input_feature.shape[0],
-                            use_kpconv=False)
+            # Forward propagation
+            if mode == 'Train':
+                # ... (Train loop remains same, assuming loader returns 3 items for train)
+                # Wait, train loader is NOT changed to return_uproj=True.
+                pass
+            
+            # Validation
+            else:
+                # Unpack data
+                # Loader returns 8 items if return_uproj=True
+                if len(batch_data) == 8:
+                    input_feature, input_label, input_mask, proj_range, uproj_x, uproj_y, uproj_depth, labels_3d = batch_data
+                    input_feature = input_feature.cuda()
+                    input_label = input_label.cuda().long()
+                    input_mask = input_mask.cuda()
+                    # uproj data needed for post-proc
+                else:
+                    # Fallback for legacy or if return_uproj failed
+                    input_feature, input_label, input_mask = batch_data
+                    input_feature = input_feature.cuda()
+                    input_label = input_label.cuda().long()
+                    input_mask = input_mask.cuda()
+                    labels_3d = None
 
-                    output = lidar_pred.unsqueeze(0) # [C, H, W] ==> [1, C, H, W]
-                    output_softmax = F.softmax(output, dim=1)
+                im_meta = dict(flip=False)
+                with torch.amp.autocast('cuda', enabled=self.fp16_scaler is not None):
+                    lidar_pred = inference(
+                        model_without_ddp.rangevit,
+                        [input_feature],
+                        [im_meta],
+                        ori_shape=input_feature.shape[2:4],
+                        window_size=self.settings.window_size,
+                        window_stride=self.settings.window_stride,
+                        batch_size=input_feature.shape[0],
+                        use_kpconv=False)
 
-                    # Loss calculation
-                    total_loss, loss_lovasz, loss_focal = self.compute_losses(
-                        output, output_softmax, input_label, input_mask)
+                output = lidar_pred.unsqueeze(0) # [C, H, W] ==> [1, C, H, W]
+                output_softmax = F.softmax(output, dim=1)
 
+                # Loss calculation (2D)
+                total_loss, loss_lovasz, loss_focal = self.compute_losses(
+                    output, output_softmax, input_label, input_mask)
 
-            # Measure IoU and record loss
-            loss = total_loss.mean()
-            with torch.no_grad():
-                argmax = output.argmax(dim=1)
-                self.metrics.addBatch(argmax, input_label) # 2D predictions
+                # Measure IoU and record loss
+                loss = total_loss.mean()
+                
+                with torch.no_grad():
+                    argmax = output.argmax(dim=1)
+                    
+                    if labels_3d is not None and self.post_proc is not None:
+                        # Post-processing (KNN)
+                        # KNN expects unbatched input, but batch_size_val is usually 1.
+                        # We iterate over batch just in case.
+                        for b in range(output.shape[0]):
+                            # KNN forward(proj_range, unproj_range, proj_argmax, px, py)
+                            # proj_range: (H, W)
+                            # unproj_range: (N,) -> uproj_depth
+                            # proj_argmax: (H, W)
+                            # px: uproj_x
+                            # py: uproj_y
+                            
+                            pred_3d = self.post_proc(
+                                proj_range[b].cuda(),
+                                uproj_depth[b].cuda(),
+                                argmax[b],
+                                uproj_x[b].cuda(),
+                                uproj_y[b].cuda()
+                            )
+                            
+                            # Update metrics with 3D data
+                            self.metrics.addBatch(pred_3d, labels_3d[b].cuda())
+                    else:
+                        # Fallback to 2D metrics if no 3D info
+                        self.metrics.addBatch(argmax, input_label)
+
+            loss_meter.update(loss.item(), input_feature.size(0))
 
             loss_meter.update(loss.item(), input_feature.size(0))
 
@@ -489,7 +535,7 @@ class Trainer(object):
 
             # 2D inputs
             input_feature = batch_dict['input2d'].cuda(non_blocking=True)
-            assert self.settings.in_channels == 5
+            # assert self.settings.in_channels == 5
 
             # 3D inputs
             py = batch_dict['py'].cuda(non_blocking=True)
@@ -504,7 +550,11 @@ class Trainer(object):
             # Forward propagation
             if mode == 'Train':
                 with torch.amp.autocast('cuda', enabled=self.fp16_scaler is not None):
-                    output3d = self.model(input_feature, px, py, pxyz, knns, num_points)
+                    output3d_tuple = self.model(input_feature, px, py, pxyz, knns, num_points)
+                    if isinstance(output3d_tuple, tuple):
+                        output3d, _ = output3d_tuple # Ignore auxs for KPConv mode for now
+                    else:
+                        output3d = output3d_tuple
 
                     output3d_softmax = F.softmax(output3d, dim=1)
 

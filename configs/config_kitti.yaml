@@ -4,7 +4,7 @@ id: 'exp_kitti'
 
 # MLflow (optional)
 mlflow:
-    enabled: true
+    enabled: false
     experiment: 'rangevit'
     run_name: '[trainval] rangeformer_encoder'            # overrides default if set
 
@@ -29,7 +29,8 @@ train_result_frequency: 100 # printing frequency of the train results
 # Model config
 model_type: 'rangeformer'
 vit_backbone: 'vit_small_p16_384'
-in_channels: 5
+in_channels: 6
+use_valid_mask: true
 patch_size: [2, 8]  # patch size = patch stride if a convolutional stem (ConvStem) is used
 patch_stride: [2, 8]
 image_size: [64, 384]  # random crop at train
@@ -49,7 +50,7 @@ decoder: 'up_conv'  # 'linear' or 'up_conv'
 skip_filters: 256 # has to be 0 (no skip) or D_h 
 
 # 3D refiner
-use_kpconv: true
+use_kpconv: false
 
 # Checkpoint model
 save_path: "save_rangeformer"
@@ -89,6 +90,21 @@ augmentation:
   rot_yawmin: 5
   rot_yawmax: -5
 
+  # RangeAug
+  range_aug:
+    p_mix: 0.5
+    p_union: 0.5
+    p_paste: 0.5
+    p_shift: 0.5
+    rare_classes: [11, 15, 18, 20, 30, 31, 32]
+
+  # Post-processing (KNN)
+  post_proc:
+    knn: 5
+    search: 5
+    sigma: 1.0
+    cutoff: 1.0
+
 sensor:
   name: 'HDL64'
   type: 'spherical'
@@ -105,9 +121,11 @@ sensor:
     - 0.23
     - -1.04
     - 0.21
+    - 0.0
   img_stds:
     - 12.32
     - 11.47
     - 6.91
     - 0.86
     - 0.16
+    - 1.0

@@ -20,6 +20,7 @@ import torchvision.transforms.functional as TF
 from scipy.spatial.ckdtree import cKDTree as kdtree
 
 from .preprocess import augmentor, projection
+from .range_aug import RangeAug
 
 
 class RangeViewLoader(Dataset):
@@ -59,8 +60,15 @@ class RangeViewLoader(Dataset):
                     scale_max=augment_config['scale_max'])
                 print(f'Adding scaling augmentation with range [{augment_params.scale_min}, {augment_params.scale_max}] and probability {augment_params.p_scale}')
             self.augmentor = augmentor.Augmentor(augment_params)
+            
+            if 'range_aug' in augment_config:
+                self.range_aug = RangeAug(augment_config['range_aug'])
+                print("RangeAug enabled.")
+            else:
+                self.range_aug = None
         else:
             self.augmentor = None
+            self.range_aug = None
 
         self.proj_p_hflip = augment_config.get('p_hflip', 0.0)
         if self.proj_p_hflip > 0.0:
@@ -96,6 +104,8 @@ class RangeViewLoader(Dataset):
                 T.CenterCrop((self.config['original_image_size'][0],
                               self.config['original_image_size'][1]))
             ])
+        
+        self.use_valid_mask = self.config.get('use_valid_mask', False)
 
     def get_item_for_kpconv(self, index):
         '''
@@ -123,8 +133,9 @@ class RangeViewLoader(Dataset):
         proj_xyz_tensor = torch.from_numpy(proj_pointcloud[..., :3])
         proj_intensity_tensor = torch.from_numpy(proj_pointcloud[..., 3])
         proj_intensity_tensor = proj_intensity_tensor.ne(-1).float() * proj_intensity_tensor
+        proj_elongation_tensor = torch.zeros_like(proj_range_tensor)
         proj_feature_tensor = torch.cat(
-            [proj_range_tensor.unsqueeze(0), proj_xyz_tensor.permute(2, 0, 1), proj_intensity_tensor.unsqueeze(0)], 0)
+            [proj_range_tensor.unsqueeze(0), proj_xyz_tensor.permute(2, 0, 1), proj_intensity_tensor.unsqueeze(0), proj_elongation_tensor.unsqueeze(0)], 0)
 
         proj_feature_tensor = (proj_feature_tensor - self.proj_img_mean[:, None, None]) / self.proj_img_stds[:, None, None]
         proj_feature_tensor = proj_feature_tensor * proj_mask_tensor.unsqueeze(0).float()
@@ -149,9 +160,9 @@ class RangeViewLoader(Dataset):
         _, knns = tree.query(points_xyz, k=7)
 
         output = {
-            'input2d': proj_tensor[:5],
-            'label2d': proj_tensor[5],
-            'mask2d': proj_tensor[6],
+            'input2d': proj_tensor[:6],
+            'label2d': proj_tensor[6],
+            'mask2d': proj_tensor[7],
             'px': torch.from_numpy(px).float(),
             'py': torch.from_numpy(py).float(),
             'points_xyz': torch.from_numpy(points_xyz).float(),
@@ -197,8 +208,9 @@ class RangeViewLoader(Dataset):
         proj_xyz_tensor = torch.from_numpy(proj_pointcloud[..., :3])
         proj_intensity_tensor = torch.from_numpy(proj_pointcloud[..., 3])
         proj_intensity_tensor = proj_intensity_tensor.ne(-1).float() * proj_intensity_tensor
+        proj_elongation_tensor = torch.zeros_like(proj_range_tensor)
         proj_feature_tensor = torch.cat(
-            [proj_range_tensor.unsqueeze(0), proj_xyz_tensor.permute(2, 0, 1), proj_intensity_tensor.unsqueeze(0)], 0)
+            [proj_range_tensor.unsqueeze(0), proj_xyz_tensor.permute(2, 0, 1), proj_intensity_tensor.unsqueeze(0), proj_elongation_tensor.unsqueeze(0)], 0)
 
         proj_feature_tensor = (proj_feature_tensor - self.proj_img_mean[:, None, None]) / self.proj_img_stds[:, None,
                                                                                           None]
@@ -207,23 +219,9 @@ class RangeViewLoader(Dataset):
         if self.return_uproj:
             sem_label = self.dataset.labelMapping(sem_label)
             sem_label = torch.from_numpy(sem_label).long()
-
-            uproj_x_tensor = torch.from_numpy(self.projection.cached_data['uproj_x_idx']).long()
-            uproj_y_tensor = torch.from_numpy(self.projection.cached_data['uproj_y_idx']).long()
-            uproj_depth_tensor = torch.from_numpy(self.projection.cached_data['uproj_depth']).float()
-
-            return proj_feature_tensor, proj_sem_label_tensor, proj_mask_tensor, torch.from_numpy(
-                proj_range), uproj_x_tensor, uproj_y_tensor, uproj_depth_tensor, sem_label
-        else:
-            proj_tensor = torch.cat(
-                (proj_feature_tensor,
-                proj_sem_label_tensor.unsqueeze(0),
-                proj_mask_tensor.float().unsqueeze(0)), dim=0)
-
-            # Data augmentation
-            proj_tensor = self.aug_ops(proj_tensor)
-
-            return proj_tensor[0:5], proj_tensor[5], proj_tensor[6]
+            return proj_feature_tensor, proj_sem_label_tensor, proj_mask_tensor, proj_range, self.projection.cached_data['uproj_x_idx'], self.projection.cached_data['uproj_y_idx'], self.projection.cached_data['uproj_depth'], sem_label
+        
+        return proj_feature_tensor, proj_sem_label_tensor, proj_mask_tensor
 
     def __len__(self):
         if self.data_len > 0 and self.data_len < len(self.dataset):

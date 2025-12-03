@@ -24,18 +24,18 @@ class RangeFormerKPConv(nn.Module):
     def no_weight_decay(self):
         return set()
 
-    def _forward_logits(self, im: torch.Tensor) -> torch.Tensor:
+    def _forward_logits(self, im: torch.Tensor):
         f1, f2, f3, f4 = self.backbone(im)
-        logits, _ = self.head([f1, f2, f3, f4])
-        return logits
+        logits, auxs = self.head([f1, f2, f3, f4])
+        return logits, auxs
 
-    def forward_2d_features(self, im: torch.Tensor) -> torch.Tensor:
+    def forward_2d_features(self, im: torch.Tensor):
         return self._forward_logits(im)
 
     def forward(self, im: torch.Tensor, px, py, pxyz, pknn, num_points):
-        logits_2d = self.forward_2d_features(im)
+        logits_2d, auxs = self.forward_2d_features(im)
         masks3d = self.kpclassifier(logits_2d, px, py, pxyz, pknn, num_points)
-        return masks3d
+        return masks3d, auxs
 
 
 class RangeFormerModel(nn.Module):
@@ -80,8 +80,8 @@ class RangeFormerModel(nn.Module):
 
                 def forward_2d_features(self, im):
                     f1, f2, f3, f4 = self.backbone(im)
-                    logits, _ = self.head([f1, f2, f3, f4])
-                    return logits
+                    logits, auxs = self.head([f1, f2, f3, f4])
+                    return logits, auxs
 
                 def forward(self, im, *args, **kwargs):
                     return self.forward_2d_features(im)
