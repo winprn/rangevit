@@ -529,6 +529,10 @@ class Trainer(object):
                 f'{mode.lower()}_epoch_iou': mean_iou.item(),
                 f'{mode.lower()}_epoch_recall': mean_recall.item(),
             }
+            for k, v in loss_dict.items():
+                if k != 'loss_meter_avg':
+                    val = v.item() if torch.is_tensor(v) else v
+                    mlflow_metrics[f'{mode.lower()}_epoch_{k}'] = val
             if (mode == 'Train') and (epoch_lr is not None):
                 mlflow_metrics[f'{mode.lower()}_epoch_lr'] = epoch_lr
             self.mlflow_manager.log_metrics(mlflow_metrics, step=self.iter_steps[mode])
@@ -798,6 +802,10 @@ class Trainer(object):
                 f'{mode.lower()}_epoch_iou': mean_iou.item(),
                 f'{mode.lower()}_epoch_recall': mean_recall.item(),
             }
+            for k, v in loss_dict.items():
+                if k != 'loss_meter_avg':
+                    val = v.item() if torch.is_tensor(v) else v
+                    mlflow_metrics[f'{mode.lower()}_epoch_{k}'] = val
             if (mode == 'Train') and (epoch_lr is not None):
                 mlflow_metrics[f'{mode.lower()}_epoch_lr'] = epoch_lr
             self.mlflow_manager.log_metrics(mlflow_metrics, step=self.iter_steps[mode])

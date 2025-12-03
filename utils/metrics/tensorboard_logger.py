@@ -20,16 +20,21 @@ def tensorboard_logger(epoch,
     mean_iou, class_iou = metrics_dict['mean_iou'], metrics_dict['class_iou']
     
     # Losses
+    # Losses
     loss_meter_avg = loss_dict['loss_meter_avg']
-    loss_focal = loss_dict['loss_focal']
-    loss_lovasz = loss_dict['loss_lovasz']
-
+    
     recorder.tensorboard.add_scalar(
         tag='{}_Loss'.format(mode), scalar_value=loss_meter_avg, global_step=epoch)
-    recorder.tensorboard.add_scalar(
-        tag='{}_LossSoftmax'.format(mode), scalar_value=loss_focal.item(), global_step=epoch)
-    recorder.tensorboard.add_scalar(
-        tag='{}_LossLovasz'.format(mode), scalar_value=loss_lovasz.item(), global_step=epoch)
+
+    for k, v in loss_dict.items():
+        if k != 'loss_meter_avg':
+            val = v.item() if torch.is_tensor(v) else v
+            # Format tag: remove 'loss_' prefix if present for cleaner tag, or just use key
+            tag_name = k.replace('loss_', '') if k.startswith('loss_') else k
+            # Capitalize first letter
+            tag_name = tag_name[0].upper() + tag_name[1:]
+            recorder.tensorboard.add_scalar(
+                tag='{}_Loss{}'.format(mode, tag_name), scalar_value=val, global_step=epoch)
     
     recorder.tensorboard.add_scalar(
         tag='{}_meanAcc'.format(mode), scalar_value=mean_acc.item(), global_step=epoch)
