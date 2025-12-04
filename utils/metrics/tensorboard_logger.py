@@ -23,6 +23,9 @@ def tensorboard_logger(epoch,
     loss_meter_avg = loss_dict['loss_meter_avg']
     loss_focal = loss_dict['loss_focal']
     loss_lovasz = loss_dict['loss_lovasz']
+    loss_aux = loss_dict.get('loss_aux')
+    loss_dice = loss_dict.get('loss_dice')
+    loss_boundary = loss_dict.get('loss_boundary')
 
     recorder.tensorboard.add_scalar(
         tag='{}_Loss'.format(mode), scalar_value=loss_meter_avg, global_step=epoch)
@@ -30,6 +33,15 @@ def tensorboard_logger(epoch,
         tag='{}_LossSoftmax'.format(mode), scalar_value=loss_focal.item(), global_step=epoch)
     recorder.tensorboard.add_scalar(
         tag='{}_LossLovasz'.format(mode), scalar_value=loss_lovasz.item(), global_step=epoch)
+    if loss_aux is not None:
+        recorder.tensorboard.add_scalar(
+            tag='{}_LossAux'.format(mode), scalar_value=loss_aux.item(), global_step=epoch)
+    if loss_dice is not None:
+        recorder.tensorboard.add_scalar(
+            tag='{}_LossDice'.format(mode), scalar_value=loss_dice.item(), global_step=epoch)
+    if loss_boundary is not None:
+        recorder.tensorboard.add_scalar(
+            tag='{}_LossBoundary'.format(mode), scalar_value=loss_boundary.item(), global_step=epoch)
     
     recorder.tensorboard.add_scalar(
         tag='{}_meanAcc'.format(mode), scalar_value=mean_acc.item(), global_step=epoch)

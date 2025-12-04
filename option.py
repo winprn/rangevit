@@ -87,6 +87,17 @@ class Option(object):
         # 3D refiner
         self.use_kpconv = self.config.get('use_kpconv', True)
 
+        # Loss weights (optional fine-tuning of loss balance)
+        self.loss_weights = self.config.get('loss_weights', {})
+
+        # Range-image post-processing (used when KPConv is disabled)
+        default_use_knn = not self.use_kpconv
+        self.use_knn = self.config.get('use_knn', default_use_knn)
+        self.knn_k = self.config.get('knn_k', 5)
+        self.knn_search = self.config.get('knn_search', 13)
+        self.knn_sigma = self.config.get('knn_sigma', 1.0)
+        self.knn_cutoff = self.config.get('knn_cutoff', 1.0)
+
 
         # Checkpoint model
         self.checkpoint = self.config.get('checkpoint', None)

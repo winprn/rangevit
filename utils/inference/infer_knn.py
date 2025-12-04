@@ -127,7 +127,7 @@ class Inference(object):
         
         with torch.no_grad():
             t_start = time.time()
-            for i, (input_feature, input_label, _, proj_depth, uproj_x_idx, uproj_y_idx, uproj_depth, sem_label) in enumerate(self.val_loader):
+            for i, (input_feature, input_label, _, proj_depth, uproj_x_idx, uproj_y_idx, uproj_depth, sem_label, sample_idx) in enumerate(self.val_loader):
                 t_process_start = time.time()             
                 
                 # Feature: range, x, y, z, intensity
@@ -183,9 +183,11 @@ class Inference(object):
 
                 # Save the predictions
                 if self.settings.save_eval_results:
+                    if torch.is_tensor(sample_idx):
+                        sample_idx = sample_idx.item()
                     if self.settings.dataset == 'NuScenes':
                         pred_path = os.path.join(self.prediction_path, 'lidarseg', self.data_split)
-                        lidar_token = self.val_range_loader.dataset.token_list[i]
+                        lidar_token = self.val_range_loader.dataset.token_list[sample_idx]
                         
                         if not os.path.isdir(pred_path):
                             os.makedirs(pred_path)
@@ -194,7 +196,7 @@ class Inference(object):
 
                     elif self.settings.dataset == 'SemanticKitti':
                         pred_np_origin = self.val_range_loader.dataset.class_map_lut_inv[pred_np]
-                        seq_id, frame_id = self.val_range_loader.dataset.parsePathInfoByIndex(i)
+                        seq_id, frame_id = self.val_range_loader.dataset.parsePathInfoByIndex(sample_idx)
                         pred_path = os.path.join(self.prediction_path, 'sequences', seq_id, 'predictions')
                         
                         if not os.path.isdir(pred_path):

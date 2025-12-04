@@ -68,6 +68,50 @@ class Trainer(object):
             n_classes=self.settings.n_classes, device=torch.device('cpu'),
             ignore=self.ignore_class, is_distributed=self.settings.distributed)
         self.metrics.reset()
+        self.point_metrics = None
+        self.knn_post = None
+        self.need_point_eval = (not self.settings.use_kpconv)
+        self.use_extra_2d_losses = (not self.settings.use_kpconv)
+        loss_weights_cfg = getattr(self.settings, 'loss_weights', {}) or {}
+        def get_weight(name, default=1.0):
+            value = loss_weights_cfg.get(name, default)
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                return float(default)
+        self.loss_weight_focal = get_weight('focal', 1.0)
+        self.loss_weight_lovasz = get_weight('lovasz', 1.0)
+        self.loss_weight_dice = get_weight('dice', 1.0)
+        self.loss_weight_boundary = get_weight('boundary', 0.1)
+        self.loss_weight_aux = get_weight('aux', 0.4)
+        if self.use_extra_2d_losses:
+            boundary_kernel = torch.tensor(
+                [[0., 1., 0.],
+                 [1., -4., 1.],
+                 [0., 1., 0.]],
+                dtype=torch.float32).view(1, 1, 3, 3)
+            self.boundary_kernel = boundary_kernel
+        else:
+            self.boundary_kernel = None
+        if self.need_point_eval:
+            self.point_metrics = utils.metrics.IOUEval(
+                n_classes=self.settings.n_classes,
+                device=torch.device('cpu'),
+                ignore=self.ignore_class,
+                is_distributed=self.settings.distributed)
+            self.point_metrics.reset()
+
+        self.use_knn_post = self.need_point_eval and self.settings.use_knn
+        if self.use_knn_post:
+            knn_params = {
+                'knn': self.settings.knn_k,
+                'search': self.settings.knn_search,
+                'sigma': self.settings.knn_sigma,
+                'cutoff': self.settings.knn_cutoff,
+            }
+            self.knn_post = utils.postproc.KNN(
+                params=knn_params,
+                nclasses=self.settings.n_classes)
 
         # Define scheduler
         self.scheduler = utils.optim.WarmupCosineLR(
@@ -157,11 +201,14 @@ class Trainer(object):
             config=self.settings.config,
             use_kpconv=self.settings.use_kpconv)
 
+        val_return_uproj = (not self.settings.use_kpconv)
         self.val_range_loader = dataset.RangeViewLoader(
             dataset=valset,
             config=self.settings.config,
             is_train=False,
+            return_uproj=val_return_uproj,
             use_kpconv=self.settings.use_kpconv)
+        self.val_loader_returns_uproj = val_return_uproj
 
         collate_fn = dataset.custom_collate_kpconv_fn if self.settings.use_kpconv else None
         if tools.is_dist_avail_and_initialized():
@@ -229,8 +276,50 @@ class Trainer(object):
     def compute_losses(self, output, output_softmax, label, mask):
         loss_lovasz = self.criterion['lovasz'](output_softmax, label)
         loss_focal = self.criterion['focal_loss'](output_softmax, label, mask=mask)
-        total_loss = loss_focal + loss_lovasz
-        return total_loss, loss_lovasz, loss_focal
+        total_loss = (
+            self.loss_weight_focal * loss_focal +
+            self.loss_weight_lovasz * loss_lovasz)
+        loss_dice = None
+        loss_boundary = None
+        if self.use_extra_2d_losses:
+            loss_dice = self.dice_loss(output_softmax, label, mask)
+            loss_boundary = self.boundary_loss(output_softmax, label, mask)
+            total_loss = total_loss + self.loss_weight_dice * loss_dice + \
+                self.loss_weight_boundary * loss_boundary
+        return total_loss, loss_lovasz, loss_focal, loss_dice, loss_boundary
+
+    def dice_loss(self, probs, label, mask, eps=1e-6):
+        num_classes = self.settings.n_classes
+        one_hot = F.one_hot(label, num_classes=num_classes).permute(0, 3, 1, 2).float()
+        mask = mask.unsqueeze(1)
+        probs = probs * mask
+        one_hot = one_hot * mask
+        dims = (0, 2, 3)
+        intersection = torch.sum(probs * one_hot, dims)
+        cardinality = torch.sum(probs + one_hot, dims)
+        dice = (2.0 * intersection + eps) / (cardinality + eps)
+        if dice.shape[0] > 1:
+            dice = dice[1:]
+        if dice.numel() == 0:
+            return probs.new_tensor(0.0)
+        dice_loss = 1.0 - dice.mean()
+        return dice_loss
+
+    def boundary_loss(self, probs, label, mask):
+        if self.boundary_kernel is None:
+            return torch.tensor(0.0, device=probs.device, dtype=probs.dtype)
+        num_classes = self.settings.n_classes
+        kernel = self.boundary_kernel.to(probs.device)
+        kernel = kernel.repeat(num_classes, 1, 1, 1)
+        mask = mask.unsqueeze(1)
+        probs = probs * mask
+        one_hot = F.one_hot(label, num_classes=num_classes).permute(0, 3, 1, 2).float()
+        one_hot = one_hot * mask
+        pred_boundary = torch.abs(F.conv2d(
+            probs, kernel, padding=1, groups=num_classes))
+        gt_boundary = torch.abs(F.conv2d(
+            one_hot, kernel, padding=1, groups=num_classes))
+        return F.l1_loss(pred_boundary, gt_boundary)
 
 
     def run(self, epoch, mode='Train', print_results=False, save_results_path=None):
@@ -267,17 +356,36 @@ class Trainer(object):
         # Init metrics
         loss_meter = tools.AverageMeter()
         self.metrics.reset()
+        if mode != 'Train' and self.point_metrics is not None:
+            self.point_metrics.reset()
 
         total_iter = len(dataloader)
         t_start = time.time()
 
-        for i, (input_feature, input_label, input_mask) in enumerate(dataloader):
+        use_uproj_inputs = (mode != 'Train') and getattr(self, 'val_loader_returns_uproj', False)
+        loss_aux = torch.tensor(0.0)
+
+        for i, batch in enumerate(dataloader):
             # [TESTING] Early exit option for testing (limit iterations per epoch)
             if self.settings.max_iters_per_epoch is not None and i >= self.settings.max_iters_per_epoch:
                 print(f'[TESTING PIPELIONE] Reached max_iters_per_epoch={self.settings.max_iters_per_epoch}, stopping epoch early')
                 break
 
             t_process_start = time.time()
+
+            if use_uproj_inputs:
+                (input_feature, input_label, input_mask, proj_depth,
+                 uproj_x_idx, uproj_y_idx, uproj_depth, sem_label, sample_idx) = batch
+                proj_depth = proj_depth.cuda(non_blocking=True)[0]
+                uproj_x_idx = uproj_x_idx.cuda(non_blocking=True)[0]
+                uproj_y_idx = uproj_y_idx.cuda(non_blocking=True)[0]
+                uproj_depth = uproj_depth.cuda(non_blocking=True)[0]
+                sem_label = sem_label[0]
+                if self.settings.test_split:
+                    sem_label = None
+            else:
+                input_feature, input_label, input_mask = batch
+                proj_depth = uproj_x_idx = uproj_y_idx = uproj_depth = sem_label = sample_idx = None
 
             # Feature: range, x, y, z, intensity
             input_feature = input_feature.cuda() # shape: B x 5 x H x W
@@ -286,15 +394,40 @@ class Trainer(object):
             input_label = input_label * input_label.ge(1).long()
             input_mask = input_mask.cuda() * input_label.ge(1).float()
 
+            loss_aux = None
             # Forward propagation
             if mode == 'Train':
                 with torch.amp.autocast('cuda', enabled=self.fp16_scaler is not None):
-                    output = self.model(input_feature)
+                    model_output = self.model(input_feature)
+                    aux_outputs = None
+                    if isinstance(model_output, (tuple, list)):
+                        output = model_output[0]
+                        aux_outputs = model_output[1]
+                    else:
+                        output = model_output
+
                     output_softmax = F.softmax(output, dim=1)
 
                     # Loss calculation
-                    total_loss, loss_lovasz, loss_focal = self.compute_losses(
+                    (total_loss,
+                     loss_lovasz,
+                     loss_focal,
+                     loss_dice,
+                     loss_boundary) = self.compute_losses(
                         output, output_softmax, input_label, input_mask)
+                    loss_aux = None
+                    if aux_outputs is not None and len(aux_outputs) > 0:
+                        aux_losses = []
+                        for aux_logit in aux_outputs:
+                            aux_softmax = F.softmax(aux_logit, dim=1)
+                            aux_total_loss, _, _, _, _ = self.compute_losses(
+                                aux_logit, aux_softmax, input_label, input_mask)
+                            aux_losses.append(aux_total_loss)
+                        if len(aux_losses) > 0:
+                            loss_aux = torch.stack(aux_losses).mean()
+                            total_loss = total_loss + self.loss_weight_aux * loss_aux
+                    if loss_aux is None:
+                        loss_aux = torch.zeros(1, device=total_loss.device, dtype=total_loss.dtype)
 
                 # Backward
                 self.optimizer.zero_grad()
@@ -330,8 +463,51 @@ class Trainer(object):
                     output_softmax = F.softmax(output, dim=1)
 
                     # Loss calculation
-                    total_loss, loss_lovasz, loss_focal = self.compute_losses(
+                    (total_loss,
+                     loss_lovasz,
+                     loss_focal,
+                     loss_dice,
+                     loss_boundary) = self.compute_losses(
                         output, output_softmax, input_label, input_mask)
+                    loss_aux = torch.zeros(1, device=total_loss.device, dtype=total_loss.dtype)
+
+                    if use_uproj_inputs:
+                        pred_argmax = output.argmax(dim=1)[0]
+                        if self.use_knn_post and self.knn_post is not None:
+                            unproj_argmax = self.knn_post(
+                                proj_depth,
+                                uproj_depth,
+                                pred_argmax,
+                                uproj_x_idx,
+                                uproj_y_idx)
+                        else:
+                            unproj_argmax = pred_argmax[uproj_y_idx, uproj_x_idx]
+
+                        if self.point_metrics is not None and (sem_label is not None) and (not self.settings.test_split):
+                            self.point_metrics.addBatch(
+                                unproj_argmax.cpu().numpy(),
+                                sem_label.numpy())
+
+                        if (mode == 'Validation' and save_results_path is not None):
+                            pred_np = unproj_argmax.cpu().numpy().reshape((-1,)).astype(np.int32)
+                            sample_idx_int = sample_idx.item() if torch.is_tensor(sample_idx) else int(sample_idx)
+                            if self.settings.dataset == 'NuScenes':
+                                pred_path = os.path.join(save_results_path, 'lidarseg', self.data_split)
+                                nu_dataset = self.val_loader.dataset.dataset
+                                lidar_token = nu_dataset.token_list[sample_idx_int]
+                                if not os.path.isdir(pred_path):
+                                    os.makedirs(pred_path)
+                                pred_result_path = os.path.join(pred_path, '{}_lidarseg.bin'.format(lidar_token))
+                                pred_np.tofile(pred_result_path)
+                            elif self.settings.dataset == 'SemanticKitti':
+                                sk_dataset = self.val_loader.dataset.dataset
+                                pred_np_origin = sk_dataset.class_map_lut_inv[pred_np]
+                                seq_id, frame_id = sk_dataset.parsePathInfoByIndex(sample_idx_int)
+                                pred_path = os.path.join(save_results_path, 'sequences', seq_id, 'predictions')
+                                if not os.path.isdir(pred_path):
+                                    os.makedirs(pred_path)
+                                pred_result_path = os.path.join(pred_path, '{}.label'.format(frame_id))
+                                pred_np_origin.tofile(pred_result_path)
 
 
             # Measure IoU and record loss
@@ -376,6 +552,11 @@ class Trainer(object):
                         'loss': float(loss.item()),
                         'acc': float(mean_acc.item()),
                         'iou': float(mean_iou.item()),
+                        'loss_focal': float(loss_focal.item()),
+                        'loss_lovasz': float(loss_lovasz.item()),
+                        'loss_aux': float(loss_aux.item()) if loss_aux is not None else 0.0,
+                        'loss_dice': float(loss_dice.item()) if loss_dice is not None else 0.0,
+                        'loss_boundary': float(loss_boundary.item()) if loss_boundary is not None else 0.0,
                     }
                     if mode == 'Train' and lr_value is not None:
                         metrics_payload['lr'] = float(lr_value)
@@ -395,11 +576,29 @@ class Trainer(object):
                 'class_iou': class_iou,
                 'conf_matrix': self.metrics.conf_matrix.clone().cpu(),
             }
+            point_metrics_dict = None
+            if use_uproj_inputs and (self.point_metrics is not None) and (not self.settings.test_split):
+                pt_mean_acc, pt_class_acc = self.point_metrics.getAcc()
+                pt_mean_recall, pt_class_recall = self.point_metrics.getRecall()
+                pt_mean_iou, pt_class_iou = self.point_metrics.getIoU()
+                point_metrics_dict = {
+                    'mean_acc': pt_mean_acc,
+                    'class_acc': pt_class_acc,
+                    'mean_recall': pt_mean_recall,
+                    'class_recall': pt_class_recall,
+                    'mean_iou': pt_mean_iou,
+                    'class_iou': pt_class_iou,
+                    'conf_matrix': self.point_metrics.conf_matrix.clone().cpu(),
+                }
 
+        zero_like = loss_focal.new_tensor(0.0)
         loss_dict = {
                 'loss_meter_avg': loss_meter.avg,
                 'loss_focal': loss_focal,
                 'loss_lovasz': loss_lovasz,
+                'loss_aux': loss_aux,
+                'loss_dice': loss_dice if loss_dice is not None else zero_like,
+                'loss_boundary': loss_boundary if loss_boundary is not None else zero_like,
             }
 
         # Print results
@@ -422,6 +621,13 @@ class Trainer(object):
                              metrics_dict=metrics_dict,
                              dataloader=self.val_range_loader,
                              print_data_distribution=True)
+                if point_metrics_dict is not None:
+                    eval_results(pixel_or_point='Point',
+                                 settings=self.settings,
+                                 recorder=self.recorder,
+                                 metrics_dict=point_metrics_dict,
+                                 dataloader=self.val_range_loader,
+                                 print_data_distribution=True)
 
             # Tensorboard logger (skip for test split - no labels available)
             if not self.settings.test_split:
@@ -430,7 +636,7 @@ class Trainer(object):
                                    recorder=self.recorder,
                                    metrics_dict=metrics_dict,
                                    loss_dict=loss_dict,
-                                   lr=lr,
+                                   lr=lr_value,
                                    mapped_cls_name=self.mapped_cls_name)
 
                 # Results at the end of the epoch
@@ -448,6 +654,12 @@ class Trainer(object):
                 'IOU': mean_iou.item(),
                 'Recall': mean_recall.item()
             }
+            if point_metrics_dict is not None:
+                result_metrics.update({
+                    'PointAcc': point_metrics_dict['mean_acc'].item(),
+                    'PointIOU': point_metrics_dict['mean_iou'].item(),
+                    'PointRecall': point_metrics_dict['mean_recall'].item(),
+                })
             return result_metrics
         else:
             # Test split has no labels, return None or dummy metrics
@@ -509,7 +721,11 @@ class Trainer(object):
                     output3d_softmax = F.softmax(output3d, dim=1)
 
                     # Loss calculation
-                    total_loss, loss_lovasz, loss_focal = self.compute_losses(
+                    (total_loss,
+                     loss_lovasz,
+                     loss_focal,
+                     loss_dice,
+                     loss_boundary) = self.compute_losses(
                         output3d, output3d_softmax, labels3d, mask_3d)
 
                 # Backward
@@ -551,7 +767,11 @@ class Trainer(object):
                     output3d_softmax = F.softmax(output3d, dim=1)
 
                     # Loss calculation
-                    total_loss, loss_lovasz, loss_focal = self.compute_losses(
+                    (total_loss,
+                     loss_lovasz,
+                     loss_focal,
+                     loss_dice,
+                     loss_boundary) = self.compute_losses(
                         output3d, output3d_softmax, labels3d, mask_3d)
 
             # Measure IoU and record loss
@@ -629,6 +849,11 @@ class Trainer(object):
                         'loss': float(loss.item()),
                         'acc': float(mean_acc.item()),
                         'iou': float(mean_iou.item()),
+                        'loss_focal': float(loss_focal.item()),
+                        'loss_lovasz': float(loss_lovasz.item()),
+                        'loss_aux': 0.0,
+                        'loss_dice': float(loss_dice.item()) if loss_dice is not None else 0.0,
+                        'loss_boundary': float(loss_boundary.item()) if loss_boundary is not None else 0.0,
                     }
                     if mode == 'Train' and lr_value is not None:
                         metrics_payload['lr'] = float(lr_value)
@@ -649,10 +874,14 @@ class Trainer(object):
                 'conf_matrix': self.metrics.conf_matrix.clone().cpu(),
             }
 
+        zero_like = loss_focal.new_tensor(0.0)
         loss_dict = {
                 'loss_meter_avg': loss_meter.avg,
                 'loss_focal': loss_focal,
                 'loss_lovasz': loss_lovasz,
+                'loss_aux': zero_like,
+                'loss_dice': loss_dice if loss_dice is not None else zero_like,
+                'loss_boundary': loss_boundary if loss_boundary is not None else zero_like,
             }
 
         # Print results

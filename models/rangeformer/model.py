@@ -24,13 +24,20 @@ class RangeFormerKPConv(nn.Module):
     def no_weight_decay(self):
         return set()
 
-    def _forward_logits(self, im: torch.Tensor) -> torch.Tensor:
+    def _forward_logits_with_aux(self, im: torch.Tensor):
         f1, f2, f3, f4 = self.backbone(im)
-        logits, _ = self.head([f1, f2, f3, f4])
+        logits, auxs = self.head([f1, f2, f3, f4])
+        return logits, auxs
+
+    def _forward_logits(self, im: torch.Tensor) -> torch.Tensor:
+        logits, _ = self._forward_logits_with_aux(im)
         return logits
 
     def forward_2d_features(self, im: torch.Tensor) -> torch.Tensor:
         return self._forward_logits(im)
+
+    def forward_with_aux(self, im: torch.Tensor):
+        return self._forward_logits_with_aux(im)
 
     def forward(self, im: torch.Tensor, px, py, pxyz, pknn, num_points):
         logits_2d = self.forward_2d_features(im)
@@ -78,17 +85,28 @@ class RangeFormerModel(nn.Module):
                     self.head = head
                     self.n_cls = n_cls
 
-                def forward_2d_features(self, im):
+                def _forward_with_aux(self, im):
                     f1, f2, f3, f4 = self.backbone(im)
-                    logits, _ = self.head([f1, f2, f3, f4])
+                    logits, auxs = self.head([f1, f2, f3, f4])
+                    return logits, auxs
+
+                def forward_2d_features(self, im):
+                    logits, _ = self._forward_with_aux(im)
                     return logits
 
                 def forward(self, im, *args, **kwargs):
-                    return self.forward_2d_features(im)
+                    logits, _ = self._forward_with_aux(im)
+                    return logits
+
+                def forward_with_aux(self, im):
+                    return self._forward_with_aux(im)
 
             self.rangevit = _RangeFormerNoKP(backbone, head, n_cls=n_cls)
 
     def forward(self, *args, **kwargs):
+        single_tensor_input = (len(args) == 1) and (len(kwargs) == 0)
+        if single_tensor_input and hasattr(self.rangevit, 'forward_with_aux'):
+            return self.rangevit.forward_with_aux(*args, **kwargs)
         return self.rangevit(*args, **kwargs)
 
     def counter_model_parameters(self):
