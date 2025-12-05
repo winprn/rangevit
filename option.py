@@ -33,6 +33,7 @@ class Option(object):
         self.dist_backend = 'nccl'
         self.dist_url = 'env://'
         self.num_workers = 4 # number of threads used for data loading
+        self.continue_training = False
 
         # Data config
         self.dataset = self.config['dataset']

@@ -96,6 +96,8 @@ def _build_run_context_lines(args: argparse.Namespace, settings: Option) -> List
         lines.append(f"- Checkpoint: {settings.checkpoint}")
     elif settings.pretrained_model:
         lines.append(f"- Pretrained model: {settings.pretrained_model}")
+    if getattr(settings, "continue_training", False):
+        lines.append("- Mode: continue training (reset optimizer/scheduler)")
 
     if settings.val_only:
         lines.append("- Mode: validation-only")
@@ -156,6 +158,14 @@ def _prepare_settings(args: argparse.Namespace) -> Option:
         settings.checkpoint = args.checkpoint
         settings.pretrained_model = None
         settings.finetune_pretrained_model = False
+    settings.continue_training = getattr(args, "continue_training", False)
+    if settings.continue_training:
+        if settings.checkpoint is None:
+            raise ValueError("--continue_training requires --checkpoint pointing to a saved model")
+        if not os.path.isfile(settings.checkpoint):
+            raise FileNotFoundError(f"checkpoint file not found: {settings.checkpoint}")
+        if settings.val_only:
+            raise ValueError("--continue_training cannot be used with --val_only")
 
     if args.val_only and args.window_stride is not None:
         settings.window_stride = [settings.window_stride[0], args.window_stride]
@@ -371,13 +381,20 @@ class Experiment(object):
             #print(f'msg = {msg}')
 
             if not self.settings.finetune_pretrained_model:
-                print(f'==> Loading optimizer')
-                if self.settings.val_only is False:
-                    self.trainer.optimizer.load_state_dict(checkpoint_data['optimizer'])
-                self.epoch_start = checkpoint_data['epoch'] + 1
+                checkpoint_epoch = checkpoint_data.get('epoch', -1)
+                if getattr(self.settings, 'continue_training', False):
+                    # Continue training with fresh optimizer/scheduler but keep weights
+                    self.epoch_start = checkpoint_epoch + 1
+                    print(f'==> Continue training: starting from epoch {self.epoch_start} '
+                          f'up to {self.settings.n_epochs}, optimizer/scheduler reset to config lr={self.settings.lr}')
+                else:
+                    print(f'==> Loading optimizer')
+                    if self.settings.val_only is False:
+                        self.trainer.optimizer.load_state_dict(checkpoint_data['optimizer'])
+                    self.epoch_start = checkpoint_epoch + 1
 
-                if ('fp16_scaler' in checkpoint_data) and (checkpoint_data['fp16_scaler'] is not None):
-                    self.trainer.fp16_scaler.load_state_dict(checkpoint_data['fp16_scaler'])
+                    if ('fp16_scaler' in checkpoint_data) and (checkpoint_data['fp16_scaler'] is not None):
+                        self.trainer.fp16_scaler.load_state_dict(checkpoint_data['fp16_scaler'])
 
 
     def run(self):
@@ -606,6 +623,8 @@ if __name__ == '__main__':
     parser.add_argument('--save_frequent', type=int, default=None,
                         help='frequency (in epochs) to save checkpoints as epoch_*.pth; 0 disables extra saves')
     parser.add_argument('--seed', type=int, default=1, help='random seed')
+    parser.add_argument('--continue_training', action='store_true',
+                        help='continue training from checkpoint weights while resetting optimizer/scheduler to config lr')
 
     args = parser.parse_args()
     settings = _prepare_settings(args)
