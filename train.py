@@ -80,9 +80,9 @@ class Trainer(object):
             except (TypeError, ValueError):
                 return float(default)
         self.loss_weight_focal = get_weight('focal', 1.0)
-        self.loss_weight_lovasz = get_weight('lovasz', 1.0)
-        self.loss_weight_dice = get_weight('dice', 1.0)
-        self.loss_weight_boundary = get_weight('boundary', 0.1)
+        self.loss_weight_lovasz = get_weight('lovasz', 1.5)
+        self.loss_weight_dice = get_weight('dice', 0.0)
+        self.loss_weight_boundary = get_weight('boundary', 1.0)
         self.loss_weight_aux = get_weight('aux', 0.4)
         if self.use_extra_2d_losses:
             boundary_kernel = torch.tensor(
