@@ -31,6 +31,13 @@ from utils.metrics.eval_results import eval_results
 from utils.metrics.tensorboard_logger import tensorboard_logger
 from utils.inference.inference_utils import inference
 from utils.tools import Recorder
+from utils.optim import (
+    BoundaryLoss,
+    DiceLoss,
+    FocalSoftmaxLoss,
+    Lovasz_softmax,
+    WarmupCosineLR,
+)
 
 
 class Trainer(object):
@@ -71,7 +78,6 @@ class Trainer(object):
         self.point_metrics = None
         self.knn_post = None
         self.need_point_eval = (not self.settings.use_kpconv)
-        self.use_extra_2d_losses = (not self.settings.use_kpconv)
         loss_weights_cfg = getattr(self.settings, 'loss_weights', {}) or {}
         def get_weight(name, default=1.0):
             value = loss_weights_cfg.get(name, default)
@@ -81,18 +87,11 @@ class Trainer(object):
                 return float(default)
         self.loss_weight_focal = get_weight('focal', 1.0)
         self.loss_weight_lovasz = get_weight('lovasz', 1.5)
-        self.loss_weight_dice = get_weight('dice', 0.0)
+        self.loss_weight_dice = get_weight('dice', 1.0)
         self.loss_weight_boundary = get_weight('boundary', 1.0)
-        self.loss_weight_aux = get_weight('aux', 0.4)
-        if self.use_extra_2d_losses:
-            boundary_kernel = torch.tensor(
-                [[0., 1., 0.],
-                 [1., -4., 1.],
-                 [0., 1., 0.]],
-                dtype=torch.float32).view(1, 1, 3, 3)
-            self.boundary_kernel = boundary_kernel
-        else:
-            self.boundary_kernel = None
+        self.loss_weight_aux = get_weight('aux', 0.7)
+        self.dice_loss_fn = DiceLoss(n_classes=self.settings.n_classes, ignore_index=0)
+        self.boundary_loss_fn = BoundaryLoss()
         if self.need_point_eval:
             self.point_metrics = utils.metrics.IOUEval(
                 n_classes=self.settings.n_classes,
@@ -114,7 +113,7 @@ class Trainer(object):
                 nclasses=self.settings.n_classes)
 
         # Define scheduler
-        self.scheduler = utils.optim.WarmupCosineLR(
+        self.scheduler = WarmupCosineLR(
             optimizer=self.optimizer,
             lr=self.settings.lr,
             warmup_steps=self.settings.warmup_epochs * len(self.train_loader),
@@ -254,7 +253,7 @@ class Trainer(object):
 
     def _initCriterion(self):
         criterion = {}
-        criterion['lovasz'] = utils.optim.Lovasz_softmax(ignore=0)
+        criterion['lovasz'] = Lovasz_softmax(ignore=0)
 
         if self.settings.dataset == 'SemanticKitti':
             alpha = np.log(1+self.cls_weight)
@@ -265,7 +264,7 @@ class Trainer(object):
         if self.recorder is not None:
             self.recorder.logger.info('focal_loss alpha: {}'.format(alpha))
 
-        criterion['focal_loss'] = utils.optim.FocalSoftmaxLoss(
+        criterion['focal_loss'] = FocalSoftmaxLoss(
             self.settings.n_classes, gamma=2, alpha=alpha, softmax=False)
 
         # Set device
@@ -281,45 +280,13 @@ class Trainer(object):
             self.loss_weight_lovasz * loss_lovasz)
         loss_dice = None
         loss_boundary = None
-        if self.use_extra_2d_losses:
-            loss_dice = self.dice_loss(output_softmax, label, mask)
-            loss_boundary = self.boundary_loss(output_softmax, label, mask)
-            total_loss = total_loss + self.loss_weight_dice * loss_dice + \
-                self.loss_weight_boundary * loss_boundary
+        if self.dice_loss_fn is not None:
+            loss_dice = self.dice_loss_fn(output_softmax, label, mask)
+            total_loss = total_loss + self.loss_weight_dice * loss_dice
+        if self.boundary_loss_fn is not None:
+            loss_boundary = self.boundary_loss_fn(output_softmax, label, mask)
+            total_loss = total_loss + self.loss_weight_boundary * loss_boundary
         return total_loss, loss_lovasz, loss_focal, loss_dice, loss_boundary
-
-    def dice_loss(self, probs, label, mask, eps=1e-6):
-        num_classes = self.settings.n_classes
-        one_hot = F.one_hot(label, num_classes=num_classes).permute(0, 3, 1, 2).float()
-        mask = mask.unsqueeze(1)
-        probs = probs * mask
-        one_hot = one_hot * mask
-        dims = (0, 2, 3)
-        intersection = torch.sum(probs * one_hot, dims)
-        cardinality = torch.sum(probs + one_hot, dims)
-        dice = (2.0 * intersection + eps) / (cardinality + eps)
-        if dice.shape[0] > 1:
-            dice = dice[1:]
-        if dice.numel() == 0:
-            return probs.new_tensor(0.0)
-        dice_loss = 1.0 - dice.mean()
-        return dice_loss
-
-    def boundary_loss(self, probs, label, mask):
-        if self.boundary_kernel is None:
-            return torch.tensor(0.0, device=probs.device, dtype=probs.dtype)
-        num_classes = self.settings.n_classes
-        kernel = self.boundary_kernel.to(probs.device)
-        kernel = kernel.repeat(num_classes, 1, 1, 1)
-        mask = mask.unsqueeze(1)
-        probs = probs * mask
-        one_hot = F.one_hot(label, num_classes=num_classes).permute(0, 3, 1, 2).float()
-        one_hot = one_hot * mask
-        pred_boundary = torch.abs(F.conv2d(
-            probs, kernel, padding=1, groups=num_classes))
-        gt_boundary = torch.abs(F.conv2d(
-            one_hot, kernel, padding=1, groups=num_classes))
-        return F.l1_loss(pred_boundary, gt_boundary)
 
 
     def run(self, epoch, mode='Train', print_results=False, save_results_path=None):
