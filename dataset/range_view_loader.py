@@ -20,6 +20,7 @@ import torchvision.transforms.functional as TF
 from scipy.spatial.ckdtree import cKDTree as kdtree
 
 from .preprocess import augmentor, projection
+from .preprocess.interpolation import RangeInterpolator
 
 
 class RangeViewLoader(Dataset):
@@ -30,6 +31,7 @@ class RangeViewLoader(Dataset):
         self.data_len = data_len
         self.return_uproj = return_uproj
         self.use_kpconv = use_kpconv
+        self.has_label = bool(self.config.get('has_label', True))
 
         augment_params = augmentor.AugmentParams()
         augment_config = self.config['augmentation']
@@ -61,6 +63,21 @@ class RangeViewLoader(Dataset):
             self.augmentor = augmentor.Augmentor(augment_params)
         else:
             self.augmentor = None
+
+        # Range interpolation (config-gated, can be used for train/val/test)
+        interp_cfg = augment_config.get('range_interpolation', {})
+        enable_interp = bool(interp_cfg.get('enabled', False))
+        if enable_interp:
+            window = interp_cfg.get('window', [1, 3])
+            min_neighbors = interp_cfg.get('min_neighbors', 2)
+            ignore_index = interp_cfg.get('ignore_index', self.config.get('n_classes', 0) - 1)
+            self.range_interpolator = RangeInterpolator(
+                window_size=window,
+                min_neighbors=min_neighbors,
+                ignore_index=ignore_index,
+            )
+        else:
+            self.range_interpolator = None
 
         self.proj_p_hflip = augment_config.get('p_hflip', 0.0)
         if self.proj_p_hflip > 0.0:
@@ -112,10 +129,16 @@ class RangeViewLoader(Dataset):
         proj_pointcloud, proj_range, proj_idx, proj_mask = self.projection.doProjection(pointcloud)
         px, py = self.projection.cached_data['px'], self.projection.cached_data['py']
 
-        proj_mask_tensor = torch.from_numpy(proj_mask)
-        mask = proj_idx > 0
+        mask = proj_idx >= 0
         proj_sem_label = np.zeros((proj_mask.shape[0], proj_mask.shape[1]), dtype=np.float32)
         proj_sem_label[mask] = sem_label[proj_idx[mask]]
+
+        if self.range_interpolator is not None:
+            proj_pointcloud, proj_range, proj_sem_label, proj_mask = self.range_interpolator(
+                proj_pointcloud, proj_range, proj_sem_label, proj_mask,
+                propagate_labels=self.has_label)
+
+        proj_mask_tensor = torch.from_numpy(proj_mask)
         proj_sem_label_tensor = torch.from_numpy(proj_sem_label)
         proj_sem_label_tensor = proj_sem_label_tensor * proj_mask_tensor.float()
 
@@ -186,10 +209,21 @@ class RangeViewLoader(Dataset):
             pointcloud = self.augmentor.doAugmentation(pointcloud)  # n, 4
         proj_pointcloud, proj_range, proj_idx, proj_mask = self.projection.doProjection(pointcloud)
 
-        proj_mask_tensor = torch.from_numpy(proj_mask)
-        mask = proj_idx > 0
+        # Keep original unprojection indices to ensure saved predictions map only original points.
+        uproj_x_orig = self.projection.cached_data['uproj_x_idx'].copy()
+        uproj_y_orig = self.projection.cached_data['uproj_y_idx'].copy()
+        uproj_depth_orig = self.projection.cached_data['uproj_depth'].copy()
+
+        mask = proj_idx >= 0
         proj_sem_label = np.zeros((proj_mask.shape[0], proj_mask.shape[1]), dtype=np.float32)
         proj_sem_label[mask] = self.dataset.labelMapping(sem_label[proj_idx[mask]])
+
+        if self.range_interpolator is not None:
+            proj_pointcloud, proj_range, proj_sem_label, proj_mask = self.range_interpolator(
+                proj_pointcloud, proj_range, proj_sem_label, proj_mask,
+                propagate_labels=self.has_label)
+
+        proj_mask_tensor = torch.from_numpy(proj_mask)
         proj_sem_label_tensor = torch.from_numpy(proj_sem_label)
         proj_sem_label_tensor = proj_sem_label_tensor * proj_mask_tensor.float()
 
@@ -208,9 +242,10 @@ class RangeViewLoader(Dataset):
             sem_label = self.dataset.labelMapping(sem_label)
             sem_label = torch.from_numpy(sem_label).long()
 
-            uproj_x_tensor = torch.from_numpy(self.projection.cached_data['uproj_x_idx']).long()
-            uproj_y_tensor = torch.from_numpy(self.projection.cached_data['uproj_y_idx']).long()
-            uproj_depth_tensor = torch.from_numpy(self.projection.cached_data['uproj_depth']).float()
+            # Use original unprojection indices so pseudo-points are never written to prediction files.
+            uproj_x_tensor = torch.from_numpy(uproj_x_orig).long()
+            uproj_y_tensor = torch.from_numpy(uproj_y_orig).long()
+            uproj_depth_tensor = torch.from_numpy(uproj_depth_orig).float()
 
             return (
                 proj_feature_tensor,

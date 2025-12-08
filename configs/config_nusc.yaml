@@ -55,6 +55,11 @@ augmentation:
   # flip
   p_flipx: 0.
   p_flipy: 0.5
+  range_interpolation:
+    enabled: false
+    window: [1, 3]   # H x W window used for interpolation
+    min_neighbors: 2
+    ignore_index: 16
 
   # translation
   p_transx: 0.5

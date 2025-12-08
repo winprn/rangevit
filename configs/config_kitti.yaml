@@ -18,7 +18,7 @@ data_root: "../dataset/SemanticKitti/data_odometry_velodyne/dataset/sequences"
 has_label: true
 val_frequency: 3
 save_frequent: 10
-n_epochs: 70
+n_epochs: 100
 warmup_epochs: 10
 batch_size: 16
 batch_size_val: 1
@@ -73,6 +73,11 @@ augmentation:
   # flip
   p_flipx: 0.
   p_flipy: 0.5
+  range_interpolation:
+    enabled: true
+    window: [1, 3]   # H x W window used for interpolation
+    min_neighbors: 2
+    ignore_index: 19
 
   # translation
   p_transx: 0.5
