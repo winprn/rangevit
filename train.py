@@ -85,11 +85,11 @@ class Trainer(object):
                 return float(value)
             except (TypeError, ValueError):
                 return float(default)
-        self.loss_weight_focal = get_weight('focal', 1.0)
-        self.loss_weight_lovasz = get_weight('lovasz', 1.5)
-        self.loss_weight_dice = get_weight('dice', 1.0)
+        self.loss_weight_focal = get_weight('focal', 5.0)
+        self.loss_weight_lovasz = get_weight('lovasz', 2.0)
+        self.loss_weight_dice = get_weight('dice', 5.0)
         self.loss_weight_boundary = get_weight('boundary', 1.0)
-        self.loss_weight_aux = get_weight('aux', 0.7)
+        self.loss_weight_aux = get_weight('aux', 0.3)
         self.dice_loss_fn = DiceLoss(n_classes=self.settings.n_classes, ignore_index=0)
         self.boundary_loss_fn = BoundaryLoss()
         if self.need_point_eval:
