@@ -115,7 +115,7 @@ class SegmentationHead(nn.Module):
 
 if __name__ == "__main__":
     # Quick sanity test: instantiate head with common RangeFormer sizes
-    stage_channels = [64, 128, 320, 512]
+    stage_channels = [128, 128, 320, 512]
     H, W = 64, 512  # typical range image resolution (H x W)
 
     head = SegmentationHead(

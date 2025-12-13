@@ -11,24 +11,22 @@ from timm.models.layers import DropPath, to_2tuple, trunc_normal_
 class RangeEmbeddingModule(nn.Module):
     """
     Range Embedding Module (REM) used by RangeFormer to lift the raw range image
-    channels into a low-dimensional feature map (64-dim by default) before
-    the transformer stages.
+    channels into a 128-dim feature map before the transformer stages.
     """
 
-    def __init__(self, in_channels: int = 5, embed_dim: int = 64):
+    def __init__(self, in_channels: int = 5, embed_dim: int = 128):
         super().__init__()
-        # NOTE: original paper used 128-dim embeddings; kept configurable for ablations.
 
         self.layers = nn.Sequential(
-            nn.Conv2d(in_channels, 32, kernel_size=1, bias=False),
-            nn.BatchNorm2d(32),
-            nn.ReLU(),
-
-            nn.Conv2d(32, 64, kernel_size=1, bias=False),
+            nn.Conv2d(in_channels, 64, kernel_size=1, bias=False),
             nn.BatchNorm2d(64),
             nn.ReLU(),
 
-            nn.Conv2d(64, embed_dim, kernel_size=1, bias=False),
+            nn.Conv2d(64, 128, kernel_size=1, bias=False),
+            nn.BatchNorm2d(128),
+            nn.ReLU(),
+
+            nn.Conv2d(128, embed_dim, kernel_size=1, bias=False),
             nn.BatchNorm2d(embed_dim),
             nn.ReLU(),
         )
@@ -295,7 +293,7 @@ class RangeFormerBackbone(nn.Module):
         img_size=(64, 2048),
         patch_size=16,
         in_channels: int = 5,
-        embed_dims=(64, 128, 320, 512),
+        embed_dims=(128, 128, 320, 512),
         num_heads=(2, 2, 5, 8),
         mlp_ratios=(8, 8, 4, 4),
         qkv_bias: bool = True,
@@ -492,7 +490,7 @@ if __name__ == "__main__":
     model = RangeFormerBackbone().to(device)
     x = torch.randn(2, 5, 64, 2048, device=device)  # example range image (B, C, H, W)
     F1, F2, F3, F4 = model(x)
-    print(F1.shape)  # (B, 64, H,   W)
+    print(F1.shape)  # (B, 128, H,   W)
     print(F2.shape)  # (B, 128, H/2, W/2)
     print(F3.shape)  # (B, 320, H/4, W/4)
     print(F4.shape)  # (B, 512, H/8, W/8)

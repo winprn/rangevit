@@ -56,7 +56,7 @@ class RangeFormerModel(nn.Module):
         in_channels: int,
         n_cls: int,
         backbone_depths=(3, 3, 6, 3), # layers per stage
-        backbone_embed_dims=(64, 128, 320, 512),
+        backbone_embed_dims=(128, 128, 320, 512),
         backbone_heads=(1, 2, 5, 8),
         backbone_sr_ratios=(8, 4, 2, 1),
         drop_path_rate: float = 0.1,
