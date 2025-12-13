@@ -4,7 +4,7 @@ id: 'exp_kitti'
 
 # MLflow (optional)
 mlflow:
-    enabled: false
+    enabled: true
     experiment: 'rangevit'
     run_name: '[train] rangeformer_nokpconv'            # overrides default if set
 
@@ -59,7 +59,7 @@ knn_sigma: 1.0
 knn_cutoff: 1.0
 
 # Checkpoint model
-save_path: "save_rangeformer"
+save_path: "save_rangeformer_nokpconv"
 # checkpoint: null
 pretrained_model: "../pretrained_model/vit_small_p16_384_ft.pth"
 

@@ -36,7 +36,7 @@ class SegmentationHead(nn.Module):
             nn.Sequential(
                 nn.Conv2d(in_c, out_ch_unify, kernel_size=1, bias=False),
                 nn.BatchNorm2d(out_ch_unify),
-                nn.GELU()
+                # nn.GELU(),  # GELU is optional here; paper does not specify
             ) for in_c in self.stage_channels
         ])
 
@@ -54,7 +54,7 @@ class SegmentationHead(nn.Module):
         self.main_mlp = nn.Sequential(
             nn.Conv2d(out_ch_unify * 4, out_ch_unify, kernel_size=1, bias=False),
             nn.BatchNorm2d(out_ch_unify),
-            nn.GELU(),
+            nn.ReLU(),
             nn.Conv2d(out_ch_unify, num_classes, kernel_size=1, bias=True),
         )
 
@@ -115,7 +115,7 @@ class SegmentationHead(nn.Module):
 
 if __name__ == "__main__":
     # Quick sanity test: instantiate head with common RangeFormer sizes
-    stage_channels = [128, 128, 320, 512]
+    stage_channels = [64, 128, 320, 512]
     H, W = 64, 512  # typical range image resolution (H x W)
 
     head = SegmentationHead(
