@@ -421,7 +421,8 @@ class RangeViT(nn.Module):
             #     del pretrained_state_dict['encoder.pos_embed'] # remove positional embeddings
 
             # Reuse pre-trained patch embeddings
-            if reuse_patch_emb:
+            # Only if not TinyViM (which handles its own stem/embeds differently)
+            if reuse_patch_emb and not backbone.startswith('tinyvim'):
                 assert conv_stem=='none' # no patch embedding if a convolutional stem is used
                 print('Reusing patch embeddings.')
 
