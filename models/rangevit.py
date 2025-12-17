@@ -25,6 +25,7 @@ from .stems import PatchEmbedding, ConvStem
 from .decoders import DecoderLinear, DecoderUpConv
 from .rangevit_kpconv import RangeViT_KPConv, KPClassifier
 from .swin_transformer_v2 import SwinTransformerV2, create_swin_v2
+from .tinyvim_adapter import TinyViMAdapter
 
 
 class VisionTransformer(nn.Module):
@@ -181,6 +182,11 @@ def create_rangevit(model_cfg, use_kpconv=False):
     backbone = model_cfg.get('backbone', 'vit_small_patch16_384')
     if backbone.startswith('swin'):
         encoder = create_swin_v2(model_cfg)
+    elif backbone.startswith('tinyvim'):
+        # For TinyViM, we pass the full config or specific args
+        # Since TinyViMAdapter expects 'backbone_name' and handles capacity internally
+        model_cfg['backbone_name'] = backbone
+        encoder = TinyViMAdapter(**model_cfg)
     else:
         encoder = create_vit(model_cfg)
     
@@ -307,6 +313,27 @@ class RangeViT(nn.Module):
             dropout = 0.0
             drop_path_rate = 0.1
             d_model = 192
+        elif backbone == 'tinyvim_small':
+            n_heads = 1
+            n_layers = 0 
+            patch_size = 4
+            dropout = 0.0
+            drop_path_rate = 0.1
+            d_model = 224
+        elif backbone == 'tinyvim_base':
+            n_heads = 1
+            n_layers = 0
+            patch_size = 4
+            dropout = 0.0
+            drop_path_rate = 0.1
+            d_model = 384
+        elif backbone == 'tinyvim_large':
+            n_heads = 1
+            n_layers = 0
+            patch_size = 4
+            dropout = 0.0
+            drop_path_rate = 0.1
+            d_model = 512
         else:
             raise NameError('Not known ViT backbone.')
 
@@ -372,6 +399,11 @@ class RangeViT(nn.Module):
                     all_keys = list(pretrained_state_dict.keys())
                     for key in all_keys:
                         pretrained_state_dict['encoder.'+key] = pretrained_state_dict.pop(key)
+                elif backbone.startswith('tinyvim'):
+                    all_keys = list(pretrained_state_dict.keys())
+                    for key in all_keys:
+                        # TinyViMAdapter has .model attribute
+                        pretrained_state_dict['encoder.model.'+key] = pretrained_state_dict.pop(key)
 
             # Reuse pre-trained positional embeddings
             if reuse_pos_emb:
