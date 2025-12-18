@@ -103,7 +103,7 @@ class Experiment(object):
         self.model = self._initModel()
 
         # Init trainer
-        # self.trainer = Trainer(self.settings, self.model, self.recorder, self.mlflow_manager)
+        self.trainer = Trainer(self.settings, self.model, self.recorder, self.mlflow_manager)
 
         # Load checkpoint
         self._loadCheckpoint()
@@ -133,6 +133,9 @@ class Experiment(object):
         model = build_rangevit_model(
             self.settings,
             pretrained_path=self.settings.pretrained_model)
+        print(f"Backbone from config: {self.settings.vit_backbone}")
+        total_params = sum(p.numel() for p in model.parameters())
+        print(f"Total parameters: {total_params}")
 
         # Freezing the ViT encoder weights.
         if self.settings.freeze_vit_encoder:
@@ -343,10 +346,10 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Experiment Options')
     parser.add_argument('config_path', type=str, metavar='config_path',
                         help='path of config file, type: string')
-    parser.add_argument('--data_root', type=str, required=True,
-                        help='path to the data, type: string')
-    parser.add_argument('--save_path', type=str, required=True,
-                        help='path to save the file, type: string')
+    parser.add_argument('--data_root', type=str,
+                        help='path to the data (overrides config), type: string')
+    parser.add_argument('--save_path', type=str,
+                        help='path to save the file (overrides config), type: string')
     parser.add_argument('--id', type=str,
                         help='name to identify the run')
     parser.add_argument('--num_workers', type=int, default=2,
@@ -371,6 +374,9 @@ if __name__ == '__main__':
     settings.id = args.id if args.id is not None else settings.id
     settings.pretrained_model = args.pretrained_model if args.pretrained_model is not None else settings.pretrained_model
 
+    if settings.data_root is None:
+        raise ValueError('data_root must be provided via config file or --data_root')
+
     if args.checkpoint is not None:
         settings.checkpoint = args.checkpoint
         settings.pretrained_model = None
@@ -380,7 +386,7 @@ if __name__ == '__main__':
         settings.window_stride = [settings.window_stride[0], args.window_stride]
         print(f'WINDOW STRIDE: {settings.window_stride}')
 
-    settings.data_root = args.data_root
+    settings.data_root = args.data_root if args.data_root is not None else settings.data_root
     settings.use_mini_version = args.mini
     settings.val_only = args.val_only
     settings.test_split = args.test_split

@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 from .tinyvim.tvimblock import Conv2d_BN
-from .tinyvim.tinyvim import TinyViM, TinyViM_depth, TinyViM_width
+from .tinyvim.tinyvim import TinyViM, TinyViM_depth, TinyViM_width, Embedding
 
 class TinyViMAdapter(nn.Module):
     def __init__(self,
@@ -13,6 +13,7 @@ class TinyViMAdapter(nn.Module):
                  in_channels=None, # For compatibility if passed explicitly
                  pretrained_path=None,
                  d_model=None, # RangeViT passes d_model, but we might ignore or verify
+                 use_fpn_decoder=False,
                  **kwargs):
         # Resolve in_channels
         if in_channels is None:
@@ -21,15 +22,17 @@ class TinyViMAdapter(nn.Module):
         super().__init__()
         
         # Parse backbone name to get capacity
-        if 'small' in backbone_name or 's' in backbone_name.split('_')[-1]:
+        backbone_name = backbone_name.lower()
+        suffix = backbone_name.split('_')[-1]
+        if 'small' in backbone_name or suffix == 's':
             capacity = 'S'
             embed_dims = TinyViM_width['S']
             layers = TinyViM_depth['S']
-        elif 'base' in backbone_name or 'b' in backbone_name.split('_')[-1]:
+        elif 'base' in backbone_name or suffix == 'b':
             capacity = 'B'
             embed_dims = TinyViM_width['B']
             layers = TinyViM_depth['B']
-        elif 'large' in backbone_name or 'l' in backbone_name.split('_')[-1]:
+        elif 'large' in backbone_name or suffix == 'l':
             capacity = 'L'
             embed_dims = TinyViM_width['L']
             layers = TinyViM_depth['L']
@@ -39,12 +42,14 @@ class TinyViMAdapter(nn.Module):
         self.patch_size = (4, 4) # TinyViM Stem is 4x downsample (2x conv -> gelu -> 2x conv -> gelu). 
         # Actually in tinyvim.py: stem = Conv2d(.., stride=2) -> GELU -> Conv2d(.., stride=2) -> GELU. Total stride is 4.
         self.patch_stride = (4, 4) 
+        self.embed_dims = embed_dims
+        self.use_fpn_decoder = use_fpn_decoder
         
         # Initialize TinyViM
         self.model = TinyViM(
             layers=layers,
             embed_dims=embed_dims,
-            downsamples=[True, True, True, True],
+            downsamples=[True, True, False, False],
             vit_num=1,
             num_classes=0, # No classification head
             fork_feat=False # We handle feature extraction manually or change this
@@ -107,12 +112,13 @@ class TinyViMAdapter(nn.Module):
         
         # Forward tokens through stages
         tokens = x_stem
-        
+        stage_features = []
         # TinyViM.forward_tokens iterates self.network modules
         # Copied from tinyvim.py
         for idx, block in enumerate(self.model.network):
             tokens = block(tokens)
-            # We don't need 'outs' logic from original forward_tokens unless fork_feat is True
+            if not isinstance(block, Embedding):
+                stage_features.append(tokens)
         
         # tokens is now [B, embed_dims[-1], H/32, W/32] usually (stride 32 total)
         
@@ -144,7 +150,8 @@ class TinyViMAdapter(nn.Module):
             # Concatenate
             out_tokens = torch.cat((dummy_cls, tokens_flat), dim=1)
             
+            if self.use_fpn_decoder:
+                return out_tokens, stage_features
             return out_tokens, skip
             
         return tokens
-

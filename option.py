@@ -37,7 +37,7 @@ class Option(object):
         # Data config
         self.dataset = self.config['dataset']
         self.n_classes = self.config['n_classes']
-        self.data_root = None
+        self.data_root = self.config.get('data_root', None)
         self.has_label = self.config['has_label']
         self.use_mini_version = False
         self.use_trainval = self.config.get('use_trainval', False)
@@ -81,8 +81,28 @@ class Option(object):
         self.decoder = self.config.get('decoder', 'up_conv')
         self.skip_filters = self.config.get('skip_filters', 0)
 
-        # 3D refiner
+        # 3D refiner / post-processing
         self.use_kpconv = self.config.get('use_kpconv', True)
+        self.use_knn = self.config.get('use_knn', False)
+        self.knn_search = self.config.get('knn_search', 13)
+        self.knn_k = self.config.get('knn_k', 5)
+        self.knn_sigma = self.config.get('knn_sigma', 1.0)
+        self.knn_cutoff = self.config.get('knn_cutoff', 1.0)
+
+        point_postproc = self.config.get('point_postproc', None)
+        if point_postproc is not None:
+            point_postproc = str(point_postproc).lower()
+            if point_postproc == 'kpconv':
+                self.use_kpconv = True
+                self.use_knn = False
+            elif point_postproc == 'knn':
+                self.use_kpconv = False
+                self.use_knn = True
+            elif point_postproc in ('none', 'off', 'false', '0'):
+                self.use_kpconv = False
+                self.use_knn = False
+            else:
+                raise ValueError('point_postproc must be one of: kpconv, knn, none')
 
 
         # Checkpoint model
@@ -99,8 +119,10 @@ class Option(object):
         self.id = self.config['id'] # name to identify the run
         self.save_eval_results = False
 
-        self.save_path = args.save_path
-        self.save_path = os.path.join(self.save_path, 'log_{}'.format(self.id))
+        save_root = args.save_path if args.save_path is not None else self.config.get('save_path', None)
+        if save_root is None:
+            raise ValueError('save_path must be provided either via config file or command line.')
+        self.save_path = os.path.join(save_root, 'log_{}'.format(self.id))
 
         # MLflow config
         mlflow_cfg = self.config.get('mlflow', {})
@@ -138,6 +160,8 @@ class Option(object):
         # When using the KPConv layer, the decoder has to be up_conv.
         if self.use_kpconv:
             assert self.decoder == 'up_conv'
+        if self.use_kpconv and self.use_knn:
+            raise AssertionError('use_kpconv and use_knn cannot both be True')
 
         # The following hyperparameters have to be tuples or lists with two elements.
         tuple_list = [self.patch_size, self.patch_stride,

@@ -23,13 +23,15 @@ def test_tinyvim_integration():
         model = RangeViT(
             in_channels=5,
             n_cls=17,
-            backbone='tinyvim_small',
+            backbone='tinyvim_large',
             decoder='up_conv',
             image_size=(64, 768),
             pretrained_path=None,
             stem_base_channels=32 # default
         )
         print("Model instantiated successfully.")
+        total_params = sum(p.numel() for p in model.parameters())
+        print(f"Total parameters: {total_params}")
     except Exception as e:
         print(f"Failed to instantiate model: {e}")
         import traceback
@@ -80,9 +82,9 @@ def test_weight_loading():
         model = RangeViT(
             in_channels=5,
             n_cls=17,
-            backbone='tinyvim_small',
+            backbone='tinyvim_large',
             decoder='up_conv',
-            image_size=(64, 768),
+            image_size=(64, 2048),
             pretrained_path=ckpt_path
         )
         print("Weight loading test: RangeViT instantiated (loading didn't crash).")
@@ -103,4 +105,4 @@ def test_weight_loading():
 
 if __name__ == "__main__":
     test_tinyvim_integration()
-    test_weight_loading()
+    # test_weight_loading()

@@ -26,6 +26,7 @@ from .decoders import DecoderLinear, DecoderUpConv
 from .rangevit_kpconv import RangeViT_KPConv, KPClassifier
 from .swin_transformer_v2 import SwinTransformerV2, create_swin_v2
 from .tinyvim_adapter import TinyViMAdapter
+from .tinyvim.fpn_decoder import TinyViMFPNDecoder
 
 
 class VisionTransformer(nn.Module):
@@ -168,6 +169,16 @@ def create_decoder(encoder, decoder_cfg):
     elif name == 'up_conv':
         decoder_cfg['patch_stride'] = encoder.patch_stride
         decoder = DecoderUpConv(**decoder_cfg)
+    elif name == 'fpn':
+        if not isinstance(encoder, TinyViMAdapter):
+            raise ValueError('FPN decoder is only supported for TinyViM backbones.')
+        decoder = TinyViMFPNDecoder(
+            in_channels=encoder.embed_dims,
+            n_cls=decoder_cfg['n_cls'],
+            out_channels=decoder_cfg.get('fpn_out_channels', 256),
+            head_channels=decoder_cfg.get('fpn_head_channels', 128),
+            dropout_ratio=decoder_cfg.get('fpn_dropout', 0.1),
+        )
     else:
         raise ValueError(f'Unknown decoder: {name}')
     return decoder
@@ -186,6 +197,8 @@ def create_rangevit(model_cfg, use_kpconv=False):
         # For TinyViM, we pass the full config or specific args
         # Since TinyViMAdapter expects 'backbone_name' and handles capacity internally
         model_cfg['backbone_name'] = backbone
+        if decoder_cfg.get('name') == 'fpn':
+            model_cfg['use_fpn_decoder'] = True
         encoder = TinyViMAdapter(**model_cfg)
     else:
         encoder = create_vit(model_cfg)
@@ -265,6 +278,9 @@ class RangeViT(nn.Module):
         decoder='up_conv',
         up_conv_d_decoder=64,
         up_conv_scale_factor=(2, 8),
+        fpn_out_channels=256,
+        fpn_head_channels=128,
+        fpn_dropout=0.1,
         use_kpconv=False,
         ):
         super(RangeViT, self).__init__()
@@ -346,6 +362,13 @@ class RangeViT(nn.Module):
                 'd_decoder': up_conv_d_decoder, # hidden dim of the decoder
                 'scale_factor': up_conv_scale_factor, # scaling factor in the PixelShuffle layer
                 'skip_filters': skip_filters,} # channel dim of the skip connection (between the convolutional stem and the up_conv decoder)
+        elif decoder == 'fpn':
+            decoder_cfg = {
+                'n_cls': n_cls, 'name': 'fpn',
+                'fpn_out_channels': fpn_out_channels,
+                'fpn_head_channels': fpn_head_channels,
+                'fpn_dropout': fpn_dropout,
+            }
 
         # ViT encoder and stem config
         net_kwargs = {
@@ -452,8 +475,15 @@ class RangeViT(nn.Module):
         stats = {}
         stats['total_num_parameters'] = count_parameters(self.rangevit)
         stats['decoder_num_parameters'] = count_parameters(self.rangevit.decoder)
-        stats['stem_num_parameters'] = count_parameters(self.rangevit.encoder.patch_embed)
-        stats['encoder_num_parameters'] = count_parameters(self.rangevit.encoder) - stats['stem_num_parameters']
+        # TinyViMAdapter does not expose patch_embed; fall back to its internal stem if present
+        stem_params = 0
+        encoder = self.rangevit.encoder
+        if hasattr(encoder, 'patch_embed'):
+            stem_params = count_parameters(encoder.patch_embed)
+        elif hasattr(encoder, 'model') and hasattr(encoder.model, 'patch_embed'):
+            stem_params = count_parameters(encoder.model.patch_embed)
+        stats['stem_num_parameters'] = stem_params
+        stats['encoder_num_parameters'] = count_parameters(encoder) - stem_params
         return stats
 
     def forward(self, *args):

@@ -39,6 +39,7 @@ class Trainer(object):
         self.recorder = recorder
         self.mlflow_manager = mlflow_manager
         self.model = model.cuda()
+        self.use_knn = (not self.settings.use_kpconv) and self.settings.use_knn
         self.remain_time = tools.RemainTime(self.settings.n_epochs)
         self.iter_steps = {'Train': 0, 'Validation': 0}
 
@@ -62,6 +63,21 @@ class Trainer(object):
             n_classes=self.settings.n_classes, device=torch.device('cpu'),
             ignore=self.ignore_class, is_distributed=self.settings.distributed)
         self.metrics.reset()
+        self.metrics_3d = None
+        self.knn_post = None
+        if self.use_knn:
+            knn_params = {
+                'knn': self.settings.knn_k,
+                'search': self.settings.knn_search,
+                'sigma': self.settings.knn_sigma,
+                'cutoff': self.settings.knn_cutoff,
+            }
+            self.knn_post = utils.postproc.KNN(
+                params=knn_params, nclasses=self.settings.n_classes)
+            self.metrics_3d = utils.metrics.IOUEval(
+                n_classes=self.settings.n_classes, device=torch.device('cpu'),
+                ignore=self.ignore_class, is_distributed=self.settings.distributed)
+            self.metrics_3d.reset()
 
         # Define scheduler
         self.scheduler = utils.optim.WarmupCosineLR(
@@ -155,6 +171,7 @@ class Trainer(object):
             dataset=valset,
             config=self.settings.config,
             is_train=False,
+            return_uproj=self.use_knn,
             use_kpconv=self.settings.use_kpconv)
 
         collate_fn = dataset.custom_collate_kpconv_fn if self.settings.use_kpconv else None
@@ -261,15 +278,22 @@ class Trainer(object):
         # Init metrics
         loss_meter = tools.AverageMeter()
         self.metrics.reset()
+        if mode == 'Validation' and self.use_knn:
+            self.metrics_3d.reset()
 
         total_iter = len(dataloader)
         t_start = time.time()
 
         log_frequency = max(1, self.settings.log_frequency)
 
-        for i, (input_feature, input_label, input_mask) in enumerate(dataloader):
+        for i, batch in enumerate(dataloader):
             t_process_start = time.time()
             current_lr = None
+            if mode == 'Validation' and self.use_knn:
+                (input_feature, input_label, input_mask, proj_depth,
+                 uproj_x_idx, uproj_y_idx, uproj_depth, sem_label) = batch
+            else:
+                input_feature, input_label, input_mask = batch
 
             # Feature: range, x, y, z, intensity
             input_feature = input_feature.cuda() # shape: B x 5 x H x W
@@ -319,6 +343,15 @@ class Trainer(object):
 
                     output = lidar_pred.unsqueeze(0) # [C, H, W] ==> [1, C, H, W]
                     output_softmax = F.softmax(output, dim=1)
+                    if self.use_knn:
+                        proj_depth = proj_depth[0].cuda()
+                        uproj_x_idx = uproj_x_idx[0].cuda()
+                        uproj_y_idx = uproj_y_idx[0].cuda()
+                        uproj_depth = uproj_depth[0].cuda()
+                        sem_label = sem_label[0].cuda()
+                        pred_argmax = output_softmax[0].argmax(dim=0)
+                        unproj_argmax = self.knn_post(
+                            proj_depth, uproj_depth, pred_argmax, uproj_x_idx, uproj_y_idx)
 
                     # Loss calculation
                     total_loss, loss_lovasz, loss_focal = self.compute_losses(
@@ -331,6 +364,8 @@ class Trainer(object):
             with torch.no_grad():
                 argmax = output.argmax(dim=1)
                 self.metrics.addBatch(argmax, input_label) # 2D predictions
+                if mode == 'Validation' and self.use_knn:
+                    self.metrics_3d.addBatch(unproj_argmax, sem_label) # 3D predictions
 
             loss_meter.update(loss.item(), input_feature.size(0))
 
@@ -391,6 +426,20 @@ class Trainer(object):
                 'class_iou': class_iou,
                 'conf_matrix': self.metrics.conf_matrix.clone().cpu(),
             }
+            metrics_dict_3d = None
+            if mode == 'Validation' and self.use_knn:
+                mean_acc_3d, class_acc_3d = self.metrics_3d.getAcc()
+                mean_recall_3d, class_recall_3d = self.metrics_3d.getRecall()
+                mean_iou_3d, class_iou_3d = self.metrics_3d.getIoU()
+                metrics_dict_3d = {
+                    'mean_acc': mean_acc_3d,
+                    'class_acc': class_acc_3d,
+                    'mean_recall': mean_recall_3d,
+                    'class_recall': class_recall_3d,
+                    'mean_iou': mean_iou_3d,
+                    'class_iou': class_iou_3d,
+                    'conf_matrix': self.metrics_3d.conf_matrix.clone().cpu(),
+                }
 
         loss_dict = {
                 'loss_meter_avg': loss_meter.avg,
@@ -420,6 +469,13 @@ class Trainer(object):
                              metrics_dict=metrics_dict,
                              dataloader=self.val_range_loader,
                              print_data_distribution=True)
+                if self.use_knn and metrics_dict_3d is not None:
+                    eval_results(pixel_or_point='Point',
+                                 settings=self.settings,
+                                 recorder=self.recorder,
+                                 metrics_dict=metrics_dict_3d,
+                                 dataloader=self.val_range_loader,
+                                 print_data_distribution=True)
 
             # Tensorboard logger
             tensorboard_logger(epoch=epoch,
