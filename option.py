@@ -163,7 +163,7 @@ class Option(object):
 
         # When using the KPConv layer, the decoder has to be up_conv.
         if self.use_kpconv:
-            assert self.decoder == 'up_conv'
+            assert self.decoder in ('up_conv', 'fpn'), 'KPConv supported only with up_conv or fpn decoders'
         if self.use_kpconv and self.use_knn:
             raise AssertionError('use_kpconv and use_knn cannot both be True')
 

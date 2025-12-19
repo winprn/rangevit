@@ -97,7 +97,9 @@ class RangeViT_KPConv(nn.Module):
         self.patch_stride = encoder.patch_stride
         self.encoder = encoder
         self.decoder = decoder
-        del self.decoder.head
+        # UpConv decoder has a .head not needed for KPConv; keep other decoders intact.
+        if hasattr(self.decoder, 'head'):
+            del self.decoder.head
         self.kpclassifier = kpclassifier
 
     @torch.jit.ignore

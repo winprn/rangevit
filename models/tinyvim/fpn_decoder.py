@@ -75,10 +75,12 @@ class TinyViMFPNDecoder(nn.Module):
         fused = self.fuse_conv(fused)
         fused = self.dropout(fused)
 
-        logits = self.cls_seg(fused)
-        if im_size is not None:
-            logits = F.interpolate(logits, size=im_size, mode='bilinear', align_corners=False)
-
         if return_features:
+            if im_size is not None and fused.shape[-2:] != im_size:
+                fused = F.interpolate(fused, size=im_size, mode='bilinear', align_corners=False)
             return fused
+
+        logits = self.cls_seg(fused)
+        if im_size is not None and logits.shape[-2:] != im_size:
+            logits = F.interpolate(logits, size=im_size, mode='bilinear', align_corners=False)
         return logits

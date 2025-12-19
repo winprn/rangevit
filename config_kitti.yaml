@@ -34,13 +34,19 @@ vit_backbone: "tinyvim_base"
 in_channels: 5
 patch_size: [4, 4] # TinyViM stem is fixed to 4x downsample
 patch_stride: [4, 4]
-image_size: [64, 768] # random crop at train
-window_size: [64, 768] # sliding window size
-window_stride: [64, 256] # sliding window stride
+image_size: [64, 2048]   # full image train
+window_size: [64, 2048]  # full image inference
+window_stride: [64, 2048] # not used when use_sliding_window=false
 original_image_size: [64, 2048]
 # Full-image switches
-train_full_image: false   # set true to train on the full projection (no random crop)
-use_sliding_window: true  # set false to run full-frame inference/validation
+train_full_image: true    # train on the full projection (no random crop)
+use_sliding_window: false # run full-frame inference/validation
+
+# KPConv / post-processing
+decoder: "fpn"            # keep FPN decoder; KPConv uses fused FPN features
+point_postproc: "kpconv"  # enables KPConv; mutually exclusive with knn
+use_kpconv: true
+use_knn: false
 
 # Stem
 conv_stem: "ConvStem" # 'none' or 'ConvStem'

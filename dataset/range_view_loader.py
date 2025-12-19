@@ -74,7 +74,7 @@ class RangeViewLoader(Dataset):
                 proj_h=projection_config['proj_h'], proj_w=projection_config['proj_w'],
             )
         else:
-        self.projection = projection.RangeProjection(
+            self.projection = projection.RangeProjection(
                 fov_up=projection_config['fov_up'], fov_down=projection_config['fov_down'],
                 fov_left=projection_config['fov_left'], fov_right=projection_config['fov_right'],
                 proj_h=projection_config['proj_h'], proj_w=projection_config['proj_w'],
