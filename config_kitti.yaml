@@ -38,6 +38,9 @@ image_size: [64, 768] # random crop at train
 window_size: [64, 768] # sliding window size
 window_stride: [64, 256] # sliding window stride
 original_image_size: [64, 2048]
+# Full-image switches
+train_full_image: false   # set true to train on the full projection (no random crop)
+use_sliding_window: true  # set false to run full-frame inference/validation
 
 # Stem
 conv_stem: "ConvStem" # 'none' or 'ConvStem'

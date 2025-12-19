@@ -151,7 +151,8 @@ class Inference(object):
                     window_size=self.settings.window_size,
                     window_stride=self.settings.window_stride,
                     batch_size=1,
-                    use_kpconv=False)
+                    use_kpconv=False,
+                    use_sliding_window=self.settings.use_sliding_window)
                 
                 pred_output = pred_output.unsqueeze(0)  # shape: 1 x n_cls x H x W
                 pred_output = F.softmax(pred_output, dim=1)

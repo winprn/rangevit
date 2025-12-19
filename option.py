@@ -65,6 +65,10 @@ class Option(object):
         self.window_size = self.config.get('window_size', [32, 384])
         self.window_stride = self.config.get('window_stride', [32, 256])
         self.original_image_size = self.config.get('original_image_size', [32, 2048])
+        # Full-image mode: set train_full_image=True to disable training crops,
+        # and use_sliding_window=False to run full-frame inference/validation.
+        self.train_full_image = self.config.get('train_full_image', False)
+        self.use_sliding_window = self.config.get('use_sliding_window', True)
 
         # Freeze encoder params
         self.freeze_vit_encoder = self.config.get('freeze_vit_encoder', False)
@@ -170,6 +174,15 @@ class Option(object):
         for i in tuple_list:
             assert isinstance(i, (list, tuple))
             assert len(i) == 2
+
+        if self.train_full_image:
+            # Full-image mode expects the projected range map to be at least as large as original_image_size
+            proj_h = self.config['sensor']['proj_h']
+            proj_w = self.config['sensor']['proj_w']
+            assert self.original_image_size[0] <= proj_h and self.original_image_size[1] <= proj_w, \
+                f"original_image_size {self.original_image_size} must fit inside sensor projection {(proj_h, proj_w)} for full-image mode"
+            if self.image_size != self.original_image_size:
+                print(f"[RangeViT] train_full_image=True overrides random crop; using original_image_size {self.original_image_size}")
 
         # No patch and positional embeddings are loaded when training from scratch.
         if self.pretrained_model == None:

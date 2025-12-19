@@ -8,3 +8,4 @@ pretrained_model/*
 !pretrained_model/README.md
 
 rangevit
+save*/

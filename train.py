@@ -339,7 +339,8 @@ class Trainer(object):
                             window_size=self.settings.window_size,
                             window_stride=self.settings.window_stride,
                             batch_size=input_feature.shape[0],
-                            use_kpconv=False)
+                            use_kpconv=False,
+                            use_sliding_window=self.settings.use_sliding_window)
 
                     output = lidar_pred.unsqueeze(0) # [C, H, W] ==> [1, C, H, W]
                     output_softmax = F.softmax(output, dim=1)
@@ -595,7 +596,8 @@ class Trainer(object):
                             window_size=self.settings.window_size,
                             window_stride=self.settings.window_stride,
                             batch_size=input_feature.shape[0],
-                            use_kpconv=True)
+                            use_kpconv=True,
+                            use_sliding_window=self.settings.use_sliding_window)
 
                         output_features2d = output_features2d.unsqueeze(0) # [C, H, W] ==> [1, C, H, W]
 

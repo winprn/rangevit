@@ -77,28 +77,47 @@ def inference(
     window_size,
     window_stride,
     batch_size,
-    use_kpconv=False):
+    use_kpconv=False,
+    use_sliding_window=True):
 
     # window_size and window_stride have to be tuples or lists with two elements
     assert len(window_size) == len(window_stride) == 2
+    if not use_sliding_window:
+        # Current full-frame path assumes batch size 1 per image_meta (consistent with existing callers)
+        assert batch_size == 1, "Full-frame inference currently supports batch_size=1; use sliding window for larger batches."
 
     wsize_h, wsize_w = window_size
     smaller_size = wsize_h if wsize_h < wsize_w else wsize_w
 
     seg_map = None
     for im, im_metas in zip(ims, ims_metas):
-        im = resize(im, smaller_size)
         flip = im_metas['flip']
-        windows = sliding_window(im, flip, window_size, window_stride)
-        crops = torch.stack(windows.pop('crop'))[:, 0] # shape = [n_windows, in_channels, wsize_h, wsize_w]
-        
-        with torch.no_grad():
-            if use_kpconv:
-                seg_maps = model.forward_2d_features(crops) # shape = [n_windows, d_decoder, wsize_h, wsize_w]
-            else:
-                seg_maps = model.forward(crops) # shape = [n_windows, n_classes, wsize_h, wsize_w]
-        windows['seg_maps'] = seg_maps
-        im_seg_map = merge_windows(windows, window_size, ori_shape) # shape = [n_classes or d_decoder, ori_shape[0], ori_shape[1]]
+
+        if use_sliding_window:
+            im = resize(im, smaller_size)
+            windows = sliding_window(im, flip, window_size, window_stride)
+            crops = torch.stack(windows.pop('crop'))[:, 0] # shape = [n_windows, in_channels, wsize_h, wsize_w]
+            
+            with torch.no_grad():
+                if use_kpconv:
+                    seg_maps = model.forward_2d_features(crops) # shape = [n_windows, d_decoder, wsize_h, wsize_w]
+                else:
+                    seg_maps = model.forward(crops) # shape = [n_windows, n_classes, wsize_h, wsize_w]
+            windows['seg_maps'] = seg_maps
+            im_seg_map = merge_windows(windows, window_size, ori_shape) # shape = [n_classes or d_decoder, ori_shape[0], ori_shape[1]]
+        else:
+            im_in = torch.flip(im, (3,)) if flip else im
+            with torch.no_grad():
+                if use_kpconv:
+                    seg_maps = model.forward_2d_features(im_in) # shape: [B, d_decoder, H, W]
+                else:
+                    seg_maps = model.forward(im_in) # shape: [B, n_classes, H, W]
+            seg_maps = torch.flip(seg_maps, (3,)) if flip else seg_maps
+            im_seg_map = seg_maps.squeeze(0)
+            if im_seg_map.shape[-2:] != ori_shape:
+                im_seg_map = F.interpolate(
+                    im_seg_map.unsqueeze(0), size=ori_shape,
+                    mode='bilinear', align_corners=False)[0]
 
         if seg_map is None:
             seg_map = im_seg_map

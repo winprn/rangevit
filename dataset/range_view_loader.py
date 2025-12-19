@@ -74,22 +74,30 @@ class RangeViewLoader(Dataset):
                 proj_h=projection_config['proj_h'], proj_w=projection_config['proj_w'],
             )
         else:
-            self.projection = projection.RangeProjection(
+        self.projection = projection.RangeProjection(
                 fov_up=projection_config['fov_up'], fov_down=projection_config['fov_down'],
                 fov_left=projection_config['fov_left'], fov_right=projection_config['fov_right'],
                 proj_h=projection_config['proj_h'], proj_w=projection_config['proj_w'],
             )
+        self.train_full_image = self.config.get('train_full_image', False)
         self.proj_img_mean = torch.tensor(self.config['sensor']['img_mean'], dtype=torch.float)
         self.proj_img_stds = torch.tensor(self.config['sensor']['img_stds'], dtype=torch.float)
 
         # Image augmentations
         if self.is_train:
-            self.crop_size = self.config['image_size']
-            self.aug_ops = T.Compose([
-                T.RandomCrop(
-                    size=(self.config['image_size'][0],
-                          self.config['image_size'][1])),
-            ])
+            if self.train_full_image:
+                self.crop_size = self.config['original_image_size']
+                self.aug_ops = T.Compose([
+                    T.CenterCrop((self.config['original_image_size'][0],
+                                  self.config['original_image_size'][1]))
+                ])
+            else:
+                self.crop_size = self.config['image_size']
+                self.aug_ops = T.Compose([
+                    T.RandomCrop(
+                        size=(self.config['image_size'][0],
+                              self.config['image_size'][1])),
+                ])
         else:
             self.crop_size = self.config['original_image_size']
             self.aug_ops = T.Compose([
@@ -137,7 +145,7 @@ class RangeViewLoader(Dataset):
         if self.is_train:
             proj_tensor, px, py, points_xyz, sem_label = crop_inputs(
                 proj_tensor, px, py, points_xyz, sem_label,
-                self.crop_size, center_crop=False, p_hflip=self.proj_p_hflip)
+                self.crop_size, center_crop=self.train_full_image, p_hflip=self.proj_p_hflip)
         else:
             _, h, w = proj_tensor.shape
 
