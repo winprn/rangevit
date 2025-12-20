@@ -23,15 +23,21 @@ TinyViM_depth = {
     'L': [4, 4, 12, 6],
 }
 
-def stem(in_chs, out_chs):
+def stem(in_chs, out_chs, stride=4):
     """
     Stem Layer that is implemented by two layers of conv.
-    Output: sequence of layers with final shape of [B, C, H/4, W/4]
+    Output: sequence of layers with final shape of [B, C, H/(stride), W/(stride)]
     """
+    if stride == 4:
+        stride1, stride2 = 2, 2
+    elif stride == 2:
+        stride1, stride2 = 2, 1
+    else:
+        raise ValueError(f"Unsupported stem stride: {stride}. Only 2 or 4 are supported.")
     return nn.Sequential(
-        Conv2d_BN(in_chs, out_chs // 2, 3, 2, 1), 
+        Conv2d_BN(in_chs, out_chs // 2, 3, stride1, 1), 
         nn.GELU(),
-        Conv2d_BN(out_chs // 2, out_chs, 3, 2, 1),
+        Conv2d_BN(out_chs // 2, out_chs, 3, stride2, 1),
         nn.GELU(),)
 
 
@@ -127,6 +133,7 @@ class TinyViM(nn.Module):
                  pretrained=None,
                  ssm_num=1,
                  distillation=True,
+                 stem_stride=4,
                  **kwargs):
         super().__init__()
 
@@ -134,7 +141,7 @@ class TinyViM(nn.Module):
             self.num_classes = num_classes
         self.fork_feat = fork_feat
 
-        self.patch_embed = stem(3, embed_dims[0])
+        self.patch_embed = stem(3, embed_dims[0], stride=stem_stride)
 
         network = []
         for i in range(len(layers)):

@@ -368,6 +368,8 @@ class RangeViT(nn.Module):
                 'fpn_out_channels': fpn_out_channels,
                 'fpn_head_channels': fpn_head_channels,
                 'fpn_dropout': fpn_dropout,
+                # Needed for KPConv head channel size; FPN returns head_channels when return_features=True.
+                'd_decoder': fpn_head_channels,
             }
 
         # ViT encoder and stem config

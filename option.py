@@ -86,27 +86,25 @@ class Option(object):
         self.skip_filters = self.config.get('skip_filters', 0)
 
         # 3D refiner / post-processing
-        self.use_kpconv = self.config.get('use_kpconv', True)
-        self.use_knn = self.config.get('use_knn', False)
+        self.use_kpconv = False
+        self.use_knn = False
         self.knn_search = self.config.get('knn_search', 13)
         self.knn_k = self.config.get('knn_k', 5)
         self.knn_sigma = self.config.get('knn_sigma', 1.0)
         self.knn_cutoff = self.config.get('knn_cutoff', 1.0)
 
-        point_postproc = self.config.get('point_postproc', None)
-        if point_postproc is not None:
-            point_postproc = str(point_postproc).lower()
-            if point_postproc == 'kpconv':
-                self.use_kpconv = True
-                self.use_knn = False
-            elif point_postproc == 'knn':
-                self.use_kpconv = False
-                self.use_knn = True
-            elif point_postproc in ('none', 'off', 'false', '0'):
-                self.use_kpconv = False
-                self.use_knn = False
-            else:
-                raise ValueError('point_postproc must be one of: kpconv, knn, none')
+        point_postproc = str(self.config.get('point_postproc', 'none')).lower()
+        if point_postproc == 'kpconv':
+            self.use_kpconv = True
+            self.use_knn = False
+        elif point_postproc == 'knn':
+            self.use_kpconv = False
+            self.use_knn = True
+        elif point_postproc in ('none', 'off', 'false', '0'):
+            self.use_kpconv = False
+            self.use_knn = False
+        else:
+            raise ValueError('point_postproc must be one of: kpconv, knn, none')
 
 
         # Checkpoint model

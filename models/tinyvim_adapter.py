@@ -39,20 +39,23 @@ class TinyViMAdapter(nn.Module):
         else:
             raise ValueError(f"Unknown backbone capacity in {backbone_name}")
             
-        self.patch_size = (4, 4) # TinyViM Stem is 4x downsample (2x conv -> gelu -> 2x conv -> gelu). 
-        # Actually in tinyvim.py: stem = Conv2d(.., stride=2) -> GELU -> Conv2d(.., stride=2) -> GELU. Total stride is 4.
-        self.patch_stride = (4, 4) 
+        stem_stride = kwargs.pop('stem_stride', 2)  # default to stride-2 stem (H/2) for finer resolution
+        self.patch_size = (stem_stride, stem_stride)
+        self.patch_stride = (stem_stride, stem_stride)
         self.embed_dims = embed_dims
         self.use_fpn_decoder = use_fpn_decoder
-        
+        # Allow overriding downsample pattern; default stages: /2, /2, /4, /4.
+        downsamples = kwargs.pop('downsamples', [False, True, False, False])
+
         # Initialize TinyViM
         self.model = TinyViM(
             layers=layers,
             embed_dims=embed_dims,
-            downsamples=[True, True, False, False],
+            downsamples=downsamples,
             vit_num=1,
             num_classes=0, # No classification head
-            fork_feat=False # We handle feature extraction manually or change this
+            fork_feat=False, # We handle feature extraction manually or change this
+            stem_stride=stem_stride,
         )
         
         self.d_model = embed_dims[-1]
