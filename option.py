@@ -51,6 +51,7 @@ class Option(object):
         self.batch_size_val = self.config.get('batch_size_val', 1) # validation batch size
         self.lr = self.config['lr']
         self.warmup_epochs = self.config.get('warmup_epochs', 10)
+        self.boundary_loss_weight = self.config.get('boundary_loss_weight', 0.0)
         self.log_frequency = 100
         self.train_result_frequency = self.config.get('train_result_frequency', 100)
         self.use_fp16 = self.config.get('use_fp16', False) # for mixed-precision training

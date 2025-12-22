@@ -40,6 +40,7 @@ class Trainer(object):
         self.mlflow_manager = mlflow_manager
         self.model = model.cuda()
         self.use_knn = (not self.settings.use_kpconv) and self.settings.use_knn
+        self.boundary_loss_weight = 0.0 if self.settings.use_kpconv else max(0.0, float(getattr(self.settings, 'boundary_loss_weight', 0.0)))
         self.remain_time = tools.RemainTime(self.settings.n_epochs)
         self.iter_steps = {'Train': 0, 'Validation': 0}
 
@@ -237,11 +238,66 @@ class Trainer(object):
             v.cuda()
         return criterion
 
+    def _compute_boundary_mask(self, label: torch.Tensor, valid_mask: torch.Tensor) -> torch.Tensor:
+        """
+        Compute binary boundary mask from integer labels (B x H x W).
+        Only considers pixels where valid_mask is True; void (label==0) is ignored.
+        """
+        # Ensure invalid pixels are voided
+        label = label * valid_mask.long()
+        boundary = torch.zeros_like(label, dtype=torch.bool)
+        for dy, dx in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+            shifted_label = torch.roll(label, shifts=(dy, dx), dims=(1, 2))
+            shifted_valid = torch.roll(valid_mask, shifts=(dy, dx), dims=(1, 2))
+            diff = (label != shifted_label) & valid_mask & shifted_valid
+            boundary = boundary | diff
+        return boundary.float() * valid_mask.float()
+
+    def _compute_pred_boundary_prob(self, prob: torch.Tensor, valid_mask: torch.Tensor) -> torch.Tensor:
+        """
+        Approximate boundary probability from class probabilities (B x C x H x W).
+        Uses neighbor similarity; higher dissimilarity -> higher boundary probability.
+        """
+        prob_valid = prob * valid_mask.unsqueeze(1)
+        sims = []
+        for dy, dx in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+            shifted_prob = torch.roll(prob_valid, shifts=(dy, dx), dims=(2, 3))
+            sims.append((prob_valid * shifted_prob).sum(dim=1))
+        sims = torch.stack(sims, dim=0)
+        max_sim, _ = sims.max(dim=0)
+        boundary_prob = 1.0 - max_sim
+        boundary_prob = boundary_prob * valid_mask
+        return boundary_prob.clamp(0.0, 1.0)
+
+    def boundary_loss(self, prob: torch.Tensor, label: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+        """
+        Boundary mIoU-style loss on range image before post-processing.
+        - Ignores void/invalid pixels (label == 0 or mask == 0).
+        - Returns 1 - boundary IoU.
+        """
+        valid_mask = (mask > 0) & (label != 0)
+        if valid_mask.sum() == 0:
+            return torch.zeros([], device=prob.device, dtype=prob.dtype)
+
+        target_boundary = self._compute_boundary_mask(label, valid_mask)
+        pred_boundary = self._compute_pred_boundary_prob(prob, valid_mask)
+
+        intersection = (pred_boundary * target_boundary).sum(dim=(1, 2))
+        union = (pred_boundary + target_boundary - pred_boundary * target_boundary).sum(dim=(1, 2)) + 1e-6
+        iou = intersection / union
+        return 1.0 - iou.mean()
+
     def compute_losses(self, output, output_softmax, label, mask):
         loss_lovasz = self.criterion['lovasz'](output_softmax, label)
         loss_focal = self.criterion['focal_loss'](output_softmax, label, mask=mask)
         total_loss = loss_focal + loss_lovasz
-        return total_loss, loss_lovasz, loss_focal
+
+        loss_boundary = torch.zeros([], device=output.device, dtype=output.dtype)
+        if self.boundary_loss_weight > 0:
+            loss_boundary = self.boundary_loss(output_softmax, label, mask)
+            total_loss = total_loss + self.boundary_loss_weight * loss_boundary
+
+        return total_loss, loss_lovasz, loss_focal, loss_boundary
 
 
     def run(self, epoch, mode='Train', print_results=False, save_results_path=None):
@@ -309,7 +365,7 @@ class Trainer(object):
                     output_softmax = F.softmax(output, dim=1)
 
                     # Loss calculation
-                    total_loss, loss_lovasz, loss_focal = self.compute_losses(
+                    total_loss, loss_lovasz, loss_focal, loss_boundary = self.compute_losses(
                         output, output_softmax, input_label, input_mask)
 
                 # Backward
@@ -355,7 +411,7 @@ class Trainer(object):
                             proj_depth, uproj_depth, pred_argmax, uproj_x_idx, uproj_y_idx)
 
                     # Loss calculation
-                    total_loss, loss_lovasz, loss_focal = self.compute_losses(
+                    total_loss, loss_lovasz, loss_focal, loss_boundary = self.compute_losses(
                         output, output_softmax, input_label, input_mask)
 
             current_lr = self.optimizer.param_groups[0]['lr']
@@ -566,7 +622,7 @@ class Trainer(object):
                     output3d_softmax = F.softmax(output3d, dim=1)
 
                     # Loss calculation
-                    total_loss, loss_lovasz, loss_focal = self.compute_losses(
+                    total_loss, loss_lovasz, loss_focal, loss_boundary = self.compute_losses(
                         output3d, output3d_softmax, labels3d, mask_3d)
 
                 # Backward
@@ -608,7 +664,7 @@ class Trainer(object):
                     output3d_softmax = F.softmax(output3d, dim=1)
 
                     # Loss calculation
-                    total_loss, loss_lovasz, loss_focal = self.compute_losses(
+                    total_loss, loss_lovasz, loss_focal, loss_boundary = self.compute_losses(
                         output3d, output3d_softmax, labels3d, mask_3d)
 
             current_lr = self.optimizer.param_groups[0]['lr']
