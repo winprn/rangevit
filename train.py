@@ -451,7 +451,7 @@ class Trainer(object):
             # Save predictions for SemanticKITTI test/val when KNN unprojection is used (non-KPConv path).
             if (mode == 'Validation' and save_results_path is not None and self.use_knn):
                 pred_np = unproj_argmax.cpu().numpy().reshape(-1).astype(np.int32)
-                sk_dataset = self.val_range_loader.dataset.dataset
+                sk_dataset = self.val_range_loader.dataset
                 pred_np_origin = sk_dataset.class_map_lut_inv[pred_np]
                 seq_id, frame_id = sk_dataset.parsePathInfoByIndex(i)
                 pred_path = os.path.join(save_results_path, 'sequences', seq_id, 'predictions')
