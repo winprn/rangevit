@@ -391,6 +391,8 @@ if __name__ == '__main__':
     settings.val_only = args.val_only
     settings.test_split = args.test_split
     settings.save_eval_results = args.save_eval_results
+    if settings.test_split:
+        settings.has_label = False
     settings.log_frequency = args.log_frequency
     settings.num_workers = args.num_workers
     settings.seed = args.seed

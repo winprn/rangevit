@@ -411,8 +411,12 @@ class Trainer(object):
                             proj_depth, uproj_depth, pred_argmax, uproj_x_idx, uproj_y_idx)
 
                     # Loss calculation
-                    total_loss, loss_lovasz, loss_focal, loss_boundary = self.compute_losses(
-                        output, output_softmax, input_label, input_mask)
+                    if self.settings.has_label:
+                        total_loss, loss_lovasz, loss_focal, loss_boundary = self.compute_losses(
+                            output, output_softmax, input_label, input_mask)
+                    else:
+                        zero = torch.tensor(0.0, device=output.device)
+                        total_loss = loss_lovasz = loss_focal = loss_boundary = zero
 
             current_lr = self.optimizer.param_groups[0]['lr']
 
@@ -420,15 +424,19 @@ class Trainer(object):
             loss = total_loss.mean()
             with torch.no_grad():
                 argmax = output.argmax(dim=1)
-                self.metrics.addBatch(argmax, input_label) # 2D predictions
-                if mode == 'Validation' and self.use_knn:
-                    self.metrics_3d.addBatch(unproj_argmax, sem_label) # 3D predictions
+                if self.settings.has_label:
+                    self.metrics.addBatch(argmax, input_label) # 2D predictions
+                    if mode == 'Validation' and self.use_knn:
+                        self.metrics_3d.addBatch(unproj_argmax, sem_label) # 3D predictions
 
             loss_meter.update(loss.item(), input_feature.size(0))
 
             with torch.no_grad():
-                mean_iou_tensor, _, mean_acc_tensor, _ = self.metrics.getIoUnAcc()
-                mean_recall_tensor, _ = self.metrics.getRecall()
+                if self.settings.has_label:
+                    mean_iou_tensor, _, mean_acc_tensor, _ = self.metrics.getIoUnAcc()
+                    mean_recall_tensor, _ = self.metrics.getRecall()
+                else:
+                    mean_iou_tensor = mean_acc_tensor = mean_recall_tensor = torch.tensor(0.0)
             mean_iou_running = float(mean_iou_tensor)
             mean_acc_running = float(mean_acc_tensor)
             mean_recall_running = float(mean_recall_tensor)
@@ -482,38 +490,53 @@ class Trainer(object):
                     self.recorder.logger.info(log_str)
 
         with torch.no_grad():
-            mean_acc, class_acc = self.metrics.getAcc()
-            mean_recall, class_recall = self.metrics.getRecall()
-            mean_iou, class_iou = self.metrics.getIoU()
+            if self.settings.has_label:
+                mean_acc, class_acc = self.metrics.getAcc()
+                mean_recall, class_recall = self.metrics.getRecall()
+                mean_iou, class_iou = self.metrics.getIoU()
 
-            metrics_dict = {
-                'mean_acc': mean_acc,
-                'class_acc': class_acc,
-                'mean_recall': mean_recall,
-                'class_recall': class_recall,
-                'mean_iou': mean_iou,
-                'class_iou': class_iou,
-                'conf_matrix': self.metrics.conf_matrix.clone().cpu(),
-            }
-            metrics_dict_3d = None
-            if mode == 'Validation' and self.use_knn:
-                mean_acc_3d, class_acc_3d = self.metrics_3d.getAcc()
-                mean_recall_3d, class_recall_3d = self.metrics_3d.getRecall()
-                mean_iou_3d, class_iou_3d = self.metrics_3d.getIoU()
-                metrics_dict_3d = {
-                    'mean_acc': mean_acc_3d,
-                    'class_acc': class_acc_3d,
-                    'mean_recall': mean_recall_3d,
-                    'class_recall': class_recall_3d,
-                    'mean_iou': mean_iou_3d,
-                    'class_iou': class_iou_3d,
-                    'conf_matrix': self.metrics_3d.conf_matrix.clone().cpu(),
+                metrics_dict = {
+                    'mean_acc': mean_acc,
+                    'class_acc': class_acc,
+                    'mean_recall': mean_recall,
+                    'class_recall': class_recall,
+                    'mean_iou': mean_iou,
+                    'class_iou': class_iou,
+                    'conf_matrix': self.metrics.conf_matrix.clone().cpu(),
                 }
+                metrics_dict_3d = None
+                if mode == 'Validation' and self.use_knn:
+                    mean_acc_3d, class_acc_3d = self.metrics_3d.getAcc()
+                    mean_recall_3d, class_recall_3d = self.metrics_3d.getRecall()
+                    mean_iou_3d, class_iou_3d = self.metrics_3d.getIoU()
+                    metrics_dict_3d = {
+                        'mean_acc': mean_acc_3d,
+                        'class_acc': class_acc_3d,
+                        'mean_recall': mean_recall_3d,
+                        'class_recall': class_recall_3d,
+                        'mean_iou': mean_iou_3d,
+                        'class_iou': class_iou_3d,
+                        'conf_matrix': self.metrics_3d.conf_matrix.clone().cpu(),
+                    }
+            else:
+                zero_t = torch.tensor(0.0)
+                mean_acc = mean_recall = mean_iou = zero_t
+                metrics_dict = {
+                    'mean_acc': zero_t,
+                    'class_acc': None,
+                    'mean_recall': zero_t,
+                    'class_recall': None,
+                    'mean_iou': zero_t,
+                    'class_iou': None,
+                    'conf_matrix': None,
+                }
+                metrics_dict_3d = None
 
         loss_dict = {
                 'loss_meter_avg': loss_meter.avg,
                 'loss_focal': loss_focal,
                 'loss_lovasz': loss_lovasz,
+                'loss_boundary': loss_boundary if 'loss_boundary' in locals() else torch.tensor(0.0),
             }
 
         epoch_lr = self.optimizer.param_groups[0]['lr']
@@ -530,8 +553,8 @@ class Trainer(object):
                                  dataloader=self.train_range_loader,
                                  print_data_distribution=True)
 
-            # Print validation pixel-wise evaluation results
-            if mode == 'Validation' and (print_results or epoch == self.settings.n_epochs-1):
+            # Print validation pixel-wise evaluation results (only when labels available)
+            if self.settings.has_label and mode == 'Validation' and (print_results or epoch == self.settings.n_epochs-1):
                 eval_results(pixel_or_point='Pixel',
                              settings=self.settings,
                              recorder=self.recorder,
@@ -546,14 +569,15 @@ class Trainer(object):
                                  dataloader=self.val_range_loader,
                                  print_data_distribution=True)
 
-            # Tensorboard logger
-            tensorboard_logger(epoch=epoch,
-                               mode=mode,
-                               recorder=self.recorder,
-                               metrics_dict=metrics_dict,
-                               loss_dict=loss_dict,
-                               lr=epoch_lr,
-                               mapped_cls_name=self.mapped_cls_name)
+            # Tensorboard logger (guarded when labels exist)
+            if self.settings.has_label:
+                tensorboard_logger(epoch=epoch,
+                                   mode=mode,
+                                   recorder=self.recorder,
+                                   metrics_dict=metrics_dict,
+                                   loss_dict=loss_dict,
+                                   lr=epoch_lr,
+                                   mapped_cls_name=self.mapped_cls_name)
 
             # Results at the end of the epoch
             log_str = '>>> {} Loss {:0.4f} Acc {:0.4f} IOU {:0.4F} Recall {:0.4f}'.format(
@@ -569,7 +593,9 @@ class Trainer(object):
             }
             if (mode == 'Train') and (epoch_lr is not None):
                 mlflow_metrics[f'{mode.lower()}_epoch_lr'] = epoch_lr
-            self.mlflow_manager.log_metrics(mlflow_metrics, step=self.iter_steps[mode])
+            # Skip logging label-dependent metrics when labels are absent.
+            if self.settings.has_label:
+                self.mlflow_manager.log_metrics(mlflow_metrics, step=self.iter_steps[mode])
 
 
         result_metrics = {
