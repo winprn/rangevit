@@ -424,35 +424,47 @@ class Trainer(object):
                 if mode == 'Validation' and self.use_knn:
                     self.metrics_3d.addBatch(unproj_argmax, sem_label) # 3D predictions
 
-            loss_meter.update(loss.item(), input_feature.size(0))
+              loss_meter.update(loss.item(), input_feature.size(0))
 
-            with torch.no_grad():
-                mean_iou_tensor, _, mean_acc_tensor, _ = self.metrics.getIoUnAcc()
-                mean_recall_tensor, _ = self.metrics.getRecall()
-            mean_iou_running = float(mean_iou_tensor)
-            mean_acc_running = float(mean_acc_tensor)
-            mean_recall_running = float(mean_recall_tensor)
+              with torch.no_grad():
+                  mean_iou_tensor, _, mean_acc_tensor, _ = self.metrics.getIoUnAcc()
+                  mean_recall_tensor, _ = self.metrics.getRecall()
+              mean_iou_running = float(mean_iou_tensor)
+              mean_acc_running = float(mean_acc_tensor)
+              mean_recall_running = float(mean_recall_tensor)
 
-            should_log = (i % log_frequency == 0) or (i == total_iter - 1)
+              should_log = (i % log_frequency == 0) or (i == total_iter - 1)
 
-            if should_log and self.mlflow_manager is not None:
-                step_id = self.iter_steps[mode]
-                self.iter_steps[mode] += 1
-                mlflow_metrics = {
-                    f'{mode.lower()}_loss': loss.item(),
-                    f'{mode.lower()}_mean_iou': mean_iou_running,
-                    f'{mode.lower()}_mean_acc': mean_acc_running,
-                    f'{mode.lower()}_mean_recall': mean_recall_running,
-                }
-                if mode == 'Train':
-                    mlflow_metrics[f'{mode.lower()}_lr'] = current_lr
-                self.mlflow_manager.log_metrics(mlflow_metrics, step=step_id)
+              if should_log and self.mlflow_manager is not None:
+                  step_id = self.iter_steps[mode]
+                  self.iter_steps[mode] += 1
+                  mlflow_metrics = {
+                      f'{mode.lower()}_loss': loss.item(),
+                      f'{mode.lower()}_mean_iou': mean_iou_running,
+                      f'{mode.lower()}_mean_acc': mean_acc_running,
+                      f'{mode.lower()}_mean_recall': mean_recall_running,
+                  }
+                  if mode == 'Train':
+                      mlflow_metrics[f'{mode.lower()}_lr'] = current_lr
+                  self.mlflow_manager.log_metrics(mlflow_metrics, step=step_id)
 
-            # Timer logger
-            t_process_end = time.time()
-            data_cost_time = t_process_start - t_start
-            process_cost_time = t_process_end - t_process_start
-            self.remain_time.update(cost_time=(time.time() - t_start), mode=mode)
+              # Save predictions for SemanticKITTI test/val when KNN unprojection is used (non-KPConv path).
+              if (mode == 'Validation' and save_results_path is not None and self.use_knn):
+                  pred_np = unproj_argmax.cpu().numpy().reshape(-1).astype(np.int32)
+                  sk_dataset = self.val_range_loader.dataset.dataset
+                  pred_np_origin = sk_dataset.class_map_lut_inv[pred_np]
+                  seq_id, frame_id = sk_dataset.parsePathInfoByIndex(i)
+                  pred_path = os.path.join(save_results_path, 'sequences', seq_id, 'predictions')
+                  if not os.path.isdir(pred_path):
+                      os.makedirs(pred_path)
+                  pred_result_path = os.path.join(pred_path, f'{frame_id}.label')
+                  pred_np_origin.tofile(pred_result_path)
+
+              # Timer logger
+              t_process_end = time.time()
+              data_cost_time = t_process_start - t_start
+              process_cost_time = t_process_end - t_process_start
+              self.remain_time.update(cost_time=(time.time() - t_start), mode=mode)
             remain_time = datetime.timedelta(
                 seconds=self.remain_time.getRemainTime(
                     epoch=epoch, iters=i, total_iter=total_iter, mode=mode
