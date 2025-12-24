@@ -20,22 +20,33 @@ TinyViM_width = {
 
 TinyViM_depth = {
     'S': [3, 3, 9, 6],
-    # 'B': [4, 3, 10, 5],
-    'B': [4, 4, 12, 6],
+    'B': [4, 3, 10, 5],
+    # 'B': [4, 4, 12, 6],
     'L': [4, 4, 12, 6],
 }
 
 def stem(in_chs, out_chs, stride=4):
     """
-    Stem Layer that is implemented by two layers of conv.
-    Output: sequence of layers with final shape of [B, C, H/(stride), W/(stride)]
+    Stem Layer with two convs. Supports asymmetric stride to keep height while shrinking width.
+    Output: [B, C, H/stride_h, W/stride_w]
     """
-    if stride == 4:
-        stride1, stride2 = 2, 2
-    elif stride == 2:
-        stride1, stride2 = 2, 1
+    if isinstance(stride, (tuple, list)):
+        stride_h, stride_w = stride
+        if stride_h != 1:
+            raise ValueError(f"Unsupported stem stride: {stride}. Height stride must stay 1 to preserve H.")
+        if stride_w == 2:
+            stride1, stride2 = (1, 2), (1, 1)
+        elif stride_w == 4:
+            stride1, stride2 = (1, 2), (1, 2)
+        else:
+            raise ValueError(f"Unsupported stem width stride: {stride_w}. Only 2 or 4 are supported.")
     else:
-        raise ValueError(f"Unsupported stem stride: {stride}. Only 2 or 4 are supported.")
+        if stride == 4:
+            stride1, stride2 = (2, 2), (2, 2)
+        elif stride == 2:
+            stride1, stride2 = (2, 2), (1, 1)
+        else:
+            raise ValueError(f"Unsupported stem stride: {stride}. Only 2 or 4 are supported.")
     return nn.Sequential(
         Conv2d_BN(in_chs, out_chs // 2, 3, stride1, 1), 
         nn.GELU(),
@@ -128,14 +139,14 @@ class TinyViM(nn.Module):
     def __init__(self, layers, embed_dims=None,
                  mlp_ratios=4, downsamples=None,
                  num_classes=1000,
-                 down_patch_size=3, down_stride=2, down_pad=1,
+                 down_patch_size=3, down_stride=(1, 2), down_pad=1,
                  use_layer_scale=True, layer_scale_init_value=1e-5,
                  fork_feat=False,
                  init_cfg=None,
                  pretrained=None,
                  ssm_num=1,
                  distillation=True,
-                 stem_stride=4,
+                 stem_stride=(1, 2),
                  **kwargs):
         super().__init__()
 

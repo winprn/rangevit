@@ -38,14 +38,15 @@ class TinyViMAdapter(nn.Module):
             layers = TinyViM_depth['L']
         else:
             raise ValueError(f"Unknown backbone capacity in {backbone_name}")
-            
-        stem_stride = kwargs.pop('stem_stride', 2)  # default to stride-2 stem (H/2) for finer resolution
-        self.patch_size = (stem_stride, stem_stride)
-        self.patch_stride = (stem_stride, stem_stride)
+
+        stem_stride = kwargs.pop('stem_stride', (1, 2))  # keep height, downsample width
+        down_stride = kwargs.pop('down_stride', (1, 2))
+        self.patch_size = tuple(stem_stride) if isinstance(stem_stride, (list, tuple)) else (stem_stride, stem_stride)
+        self.patch_stride = self.patch_size
         self.embed_dims = embed_dims
         self.use_fpn_decoder = use_fpn_decoder
-        # Allow overriding downsample pattern; default stages: /2, /2, /4, /4.
-        downsamples = kwargs.pop('downsamples', [False, True, False, False])
+        # Downsample every stage along width only: /2, /4, /8, /16 (width).
+        downsamples = kwargs.pop('downsamples', [True, True, True, True])
 
         # Initialize TinyViM
         self.model = TinyViM(
@@ -56,6 +57,7 @@ class TinyViMAdapter(nn.Module):
             num_classes=0, # No classification head
             fork_feat=False, # We handle feature extraction manually or change this
             stem_stride=stem_stride,
+            down_stride=down_stride,
         )
         
         self.d_model = embed_dims[-1]
