@@ -42,6 +42,7 @@ def build_rangevit_model(settings, pretrained_path=None):
         new_patch_stride=settings.patch_stride,
         reuse_pos_emb=settings.reuse_pos_emb,
         reuse_patch_emb=settings.reuse_patch_emb,
+        pretrained_channel_adaptation=settings.pretrained_channel_adaptation,
         conv_stem=settings.conv_stem,
         stem_base_channels=settings.stem_base_channels,
         stem_hidden_dim=settings.D_h,

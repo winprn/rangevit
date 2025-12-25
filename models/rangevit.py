@@ -273,6 +273,7 @@ class RangeViT(nn.Module):
         new_patch_stride=None,
         reuse_pos_emb=False,
         reuse_patch_emb=False,
+        pretrained_channel_adaptation='repeat',
         conv_stem='none',
         stem_base_channels=32,
         stem_hidden_dim=None,
@@ -403,7 +404,6 @@ class RangeViT(nn.Module):
         # Loading pre-trained weights in the ViT encoder
         if pretrained_path is not None:
             print(f'Loading pretrained parameters from {pretrained_path}')
-            pretrained_channel_adaptation = kwargs.get('pretrained_channel_adaptation', 'repeat')
             if pretrained_path == 'timmImageNet21k':
                 vit_imagenet = timm.create_model(backbone, pretrained=True) #.cuda()
                 pretrained_state_dict = vit_imagenet.state_dict() # nb keys: 152
