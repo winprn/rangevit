@@ -411,7 +411,7 @@ class RangeViT(nn.Module):
                 for key in all_keys:
                     pretrained_state_dict['encoder.'+key] = pretrained_state_dict.pop(key)
             else:
-                pretrained_state_dict = torch.load(pretrained_path, map_location='cpu')
+                pretrained_state_dict = torch.load(pretrained_path, map_location='cpu', weights_only=False)
                 if 'state_dict' in pretrained_state_dict:
                     pretrained_state_dict = pretrained_state_dict['state_dict']
                 
