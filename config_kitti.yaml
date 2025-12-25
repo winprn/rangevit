@@ -21,20 +21,20 @@ use_trainval: false # set to true if you want to train on train-val of SemanticK
 
 # Train config
 has_label: true
-val_frequency: 1
+val_frequency: 2
 n_epochs: 60
-warmup_epochs: 6
-batch_size: 4
+warmup_epochs: 8
+batch_size: 16
 batch_size_val: 1
-lr: 0.0004
+lr: 0.0006
 train_result_frequency: 100 # printing frequency of the train results
-boundary_loss_weight: 0.2 # Weight for boundary mIoU loss (only applied when use_kpconv is False)
+boundary_loss_weight: 0.0 # Weight for boundary mIoU loss (only applied when use_kpconv is False)
 
 # Model config
 vit_backbone: "tinyvim_base"
 in_channels: 5
-patch_size: [2, 2] # TinyViM stem now uses stride 2 (overall stage strides: /2, /2, /4, /4)
-patch_stride: [2, 2]
+patch_size: [1, 4] # TinyViM stem now uses width stride 4 (overall stage strides: /4, /8, /16, /32)
+patch_stride: [1, 4]
 image_size: [64, 2048]         # match sensor projection; no train-time resize
 window_size: [64, 2048]        # full-frame inference window; no resize/tiling
 window_stride: [64, 2048]      # single window when sliding is enabled
