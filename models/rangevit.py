@@ -199,6 +199,8 @@ def create_rangevit(model_cfg, use_kpconv=False):
         model_cfg['backbone_name'] = backbone
         if decoder_cfg.get('name') == 'fpn':
             model_cfg['use_fpn_decoder'] = True
+        # Tell adapter whether we're loading pretrained stem weights
+        model_cfg['load_pretrained_stem'] = (model_cfg.get('pretrained_path') is not None)
         encoder = TinyViMAdapter(**model_cfg)
     else:
         encoder = create_vit(model_cfg)
@@ -401,6 +403,7 @@ class RangeViT(nn.Module):
         # Loading pre-trained weights in the ViT encoder
         if pretrained_path is not None:
             print(f'Loading pretrained parameters from {pretrained_path}')
+            pretrained_channel_adaptation = kwargs.get('pretrained_channel_adaptation', 'repeat')
             if pretrained_path == 'timmImageNet21k':
                 vit_imagenet = timm.create_model(backbone, pretrained=True) #.cuda()
                 pretrained_state_dict = vit_imagenet.state_dict() # nb keys: 152
@@ -429,6 +432,34 @@ class RangeViT(nn.Module):
                     for key in all_keys:
                         # TinyViMAdapter has .model attribute
                         pretrained_state_dict['encoder.model.'+key] = pretrained_state_dict.pop(key)
+
+                    # Adapt first conv layer for 5-channel input (TinyViM specific)
+                    if in_channels != 3:
+                        first_conv_key = 'encoder.model.patch_embed.0.c.weight'
+
+                        if first_conv_key in pretrained_state_dict:
+                            original_weight = pretrained_state_dict[first_conv_key]
+
+                            # Check if already adapted (e.g., loading a finetuned checkpoint)
+                            if original_weight.shape[1] == in_channels:
+                                print(f'First conv already has {in_channels} channels, skipping adaptation.')
+                            elif original_weight.shape[1] == 3:
+                                print(f'Adapting TinyViM first conv: 3 → {in_channels} channels '
+                                      f'(method: {pretrained_channel_adaptation})')
+                                print(f'  Original shape: {original_weight.shape}')
+
+                                adapted_weight = adapt_input_conv(
+                                    in_channels,
+                                    original_weight,
+                                    method=pretrained_channel_adaptation
+                                )
+                                pretrained_state_dict[first_conv_key] = adapted_weight
+                                print(f'  Adapted shape: {adapted_weight.shape}')
+                            else:
+                                raise ValueError(f'Unexpected input channels in checkpoint: {original_weight.shape[1]}')
+                        else:
+                            print(f'WARNING: {first_conv_key} not found in checkpoint. '
+                                  f'First conv will be randomly initialized.')
 
             # Reuse pre-trained positional embeddings
             if reuse_pos_emb:

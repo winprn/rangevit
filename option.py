@@ -117,6 +117,9 @@ class Option(object):
         self.reuse_pos_emb = self.config.get('reuse_pos_emb', False)
         self.reuse_patch_emb = self.config.get('reuse_patch_emb', False)
 
+        # Channel adaptation method for pretrained weights (RGB -> LiDAR)
+        self.pretrained_channel_adaptation = self.config.get('pretrained_channel_adaptation', 'repeat')
+
 
         # Save results
         self.id = self.config['id'] # name to identify the run
@@ -186,6 +189,11 @@ class Option(object):
         # No patch and positional embeddings are loaded when training from scratch.
         if self.pretrained_model == None:
             assert self.reuse_patch_emb == self.reuse_pos_emb == False
+
+        # Validate channel adaptation method
+        if self.pretrained_channel_adaptation not in ('repeat', 'grayscale'):
+            raise ValueError(f"pretrained_channel_adaptation must be 'repeat' or 'grayscale', "
+                           f"got '{self.pretrained_channel_adaptation}'")
 
 
     def check_path(self):

@@ -63,10 +63,16 @@ knn_cutoff: 1.0
 
 # Checkpoint model
 checkpoint: null
-pretrained_model: null
+pretrained_model: null  # Set to "/path/to/tinyvim_imagenet1k.pth" when using pretrained weights
 # Loading pre-trained patch and positional embeddings
 reuse_pos_emb: false
 reuse_patch_emb: false # no patch embedding as a convolutional stem (ConvStem) is used
+
+# Channel adaptation method for RGB (3-ch) → LiDAR (5-ch) pretrained weights
+# Options:
+#   - 'repeat': [R,G,B] → [R,G,B,R,G] × (3/5) - Default, preserves RGB info
+#   - 'grayscale': RGB → Luminance → [G,G,G,G,G] - Uses ITU-R BT.601 weights
+pretrained_channel_adaptation: "repeat"
 
 # Data augmentation config
 augmentation:

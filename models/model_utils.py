@@ -70,7 +70,18 @@ def get_grid_size_2d(H, W, patch_size, patch_stride):
     return grid_H, grid_W
 
 
-def adapt_input_conv(in_chans, conv_weight):
+def adapt_input_conv(in_chans, conv_weight, method='repeat'):
+    """
+    Adapt convolutional weights from RGB (3-channel) to arbitrary input channels.
+
+    Args:
+        in_chans: Target number of input channels
+        conv_weight: Pretrained conv weight tensor [O, I, J, K]
+        method: Adaptation method ('repeat' or 'grayscale')
+
+    Returns:
+        Adapted weight tensor [O, in_chans, J, K]
+    """
     conv_type = conv_weight.dtype
     conv_weight = conv_weight.float()  # Some weights are in torch.half, ensure it's float for sum on CPU
     O, I, J, K = conv_weight.shape
@@ -86,11 +97,24 @@ def adapt_input_conv(in_chans, conv_weight):
         if I != 3:
             raise NotImplementedError('Weight format not supported by conversion.')
         else:
-            # NOTE this strategy should be better than random init, but there could be other combinations of
-            # the original RGB input layer weights that'd work better for specific cases.
-            repeat = int(math.ceil(in_chans / 3))
-            conv_weight = conv_weight.repeat(1, repeat, 1, 1)[:, :in_chans, :, :]
-            conv_weight *= (3 / float(in_chans))
+            if method == 'repeat':
+                # NOTE this strategy should be better than random init, but there could be other combinations of
+                # the original RGB input layer weights that'd work better for specific cases.
+                repeat = int(math.ceil(in_chans / 3))
+                conv_weight = conv_weight.repeat(1, repeat, 1, 1)[:, :in_chans, :, :]
+                conv_weight *= (3 / float(in_chans))
+            elif method == 'grayscale':
+                # Convert RGB to grayscale using ITU-R BT.601 luminance weights
+                # Then duplicate grayscale to all input channels
+                gray_weights = torch.tensor([0.299, 0.587, 0.114],
+                                            dtype=conv_weight.dtype,
+                                            device=conv_weight.device)
+                # Weighted sum: [O, 3, J, K] -> [O, 1, J, K]
+                conv_weight_gray = (conv_weight * gray_weights[None, :, None, None]).sum(dim=1, keepdim=True)
+                # Duplicate to in_chans: [O, 1, J, K] -> [O, in_chans, J, K]
+                conv_weight = conv_weight_gray.repeat(1, in_chans, 1, 1)
+            else:
+                raise ValueError(f"Unknown adaptation method: '{method}'. Must be 'repeat' or 'grayscale'.")
     conv_weight = conv_weight.to(conv_type)
     return conv_weight
 

@@ -12,6 +12,7 @@ class TinyViMAdapter(nn.Module):
                  channels=3, # RangeViT uses 'channels' kwarg
                  in_channels=None, # For compatibility if passed explicitly
                  pretrained_path=None,
+                 load_pretrained_stem=False,  # If True, keep 3-channel stem for weight loading
                  d_model=None, # RangeViT passes d_model, but we might ignore or verify
                  use_fpn_decoder=False,
                  **kwargs):
@@ -61,12 +62,13 @@ class TinyViMAdapter(nn.Module):
         )
         
         self.d_model = embed_dims[-1]
-        
+
         # Handle input channels adaptation
-        if in_channels != 3:
-            first_conv_bn = self.model.patch_embed[0] 
+        # Only reconstruct if NOT loading pretrained weights (which adapts weights in rangevit.py)
+        if in_channels != 3 and not load_pretrained_stem:
+            first_conv_bn = self.model.patch_embed[0]
             old_conv = first_conv_bn.c
-            
+
             # Reconstruct the first Conv2d_BN block
             # args: a, b, ks, stride, pad, dilation, groups, bn_weight_init, resolution
             new_conv_bn = Conv2d_BN(
@@ -78,14 +80,14 @@ class TinyViMAdapter(nn.Module):
                 groups=old_conv.groups,
                 # dilation is not stored as attr in standard conv if 1? It is.
                 dilation=old_conv.dilation,
-                # bn_weight_init: logic in Conv2d_BN init uses constant 1 usually. 
+                # bn_weight_init: logic in Conv2d_BN init uses constant 1 usually.
                 # We assume 1.
                 bn_weight_init=1
             )
-            
+
             # Replace in Sequential
             self.model.patch_embed[0] = new_conv_bn
-            
+
         self.in_channels = in_channels
         
     def forward(self, x, return_features=True):
