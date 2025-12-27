@@ -55,6 +55,21 @@ class Option(object):
         self.log_frequency = 100
         self.train_result_frequency = self.config.get('train_result_frequency', 100)
         self.use_fp16 = self.config.get('use_fp16', False) # for mixed-precision training
+        save_epochs_raw = self.config.get('save_epochs_at', [])
+        if save_epochs_raw is None:
+            save_epochs_raw = []
+        if not isinstance(save_epochs_raw, (list, tuple)):
+            raise ValueError('save_epochs_at must be a list of 1-based epoch indices.')
+        save_epochs_cleaned = []
+        for e in save_epochs_raw:
+            if not isinstance(e, int):
+                raise ValueError('All save_epochs_at entries must be integers.')
+            if e <= 0:
+                raise ValueError('save_epochs_at entries must be positive (1-based).')
+            if e >= self.n_epochs:
+                raise ValueError(f'save_epochs_at entry {e} must be < total epochs ({self.n_epochs}).')
+            save_epochs_cleaned.append(e)
+        self.save_epochs_at = sorted(set(save_epochs_cleaned))
 
 
         # Model config
