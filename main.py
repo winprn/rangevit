@@ -259,6 +259,9 @@ class Experiment(object):
             return None
         best_val_result = None
 
+        save_epochs_at = getattr(self.settings, 'save_epochs_at', [])
+        save_every_epoch = len(save_epochs_at) == 0
+
         #self.trainer.scheduler.step(self.epoch_start*len(self.trainer.train_loader))
 
         for epoch in range(self.epoch_start, self.settings.n_epochs):
@@ -308,16 +311,24 @@ class Experiment(object):
 
             # Save checkpoint
             if self.recorder is not None:
-                saved_path = os.path.join(self.recorder.checkpoint_path, 'checkpoint.pth')
+                should_save_checkpoint = save_every_epoch or ((epoch + 1) in save_epochs_at)
+                if should_save_checkpoint:
+                    checkpoint_data = {
+                        'model': self.model.state_dict(),
+                        'optimizer': self.trainer.optimizer.state_dict(),
+                        'epoch': epoch,
+                    }
+                    if self.trainer.fp16_scaler is not None:
+                        checkpoint_data['fp16_scaler'] = self.trainer.fp16_scaler.state_dict()
 
-                checkpoint_data = {
-                    'model': self.model.state_dict(),
-                    'optimizer': self.trainer.optimizer.state_dict(),
-                    'epoch': epoch,
-                }
-                if self.trainer.fp16_scaler is not None:
-                    checkpoint_data['fp16_scaler'] = self.trainer.fp16_scaler.state_dict()
-                torch.save(checkpoint_data, saved_path)
+                    checkpoint_name = 'checkpoint.pth' if save_every_epoch else f'checkpoint_epochs_k{epoch + 1}.pth'
+                    saved_path = os.path.join(self.recorder.checkpoint_path, checkpoint_name)
+                    torch.save(checkpoint_data, saved_path)
+
+                    # Keep a rolling "checkpoint.pth" for convenience even when saving sparse epochs
+                    if not save_every_epoch and checkpoint_name != 'checkpoint.pth':
+                        latest_path = os.path.join(self.recorder.checkpoint_path, 'checkpoint.pth')
+                        torch.save(checkpoint_data, latest_path)
 
                 # Logging best results
                 if best_val_result is not None:

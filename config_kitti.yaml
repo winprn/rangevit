@@ -29,6 +29,7 @@ batch_size_val: 1
 lr: 0.0006
 train_result_frequency: 100 # printing frequency of the train results
 boundary_loss_weight: 0.0 # Weight for boundary mIoU loss (only applied when use_kpconv is False)
+save_epochs_at: [40, 45, 50, 55, 60] # 1-based epochs to save checkpoints; must be < n_epochs. Leave empty to save every epoch.
 
 # Model config
 vit_backbone: "tinyvim_base"
