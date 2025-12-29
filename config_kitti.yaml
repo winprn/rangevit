@@ -36,13 +36,13 @@ vit_backbone: "tinyvim_base"
 in_channels: 5
 patch_size: [2, 2] # TinyViM stem now uses stride 2 (overall stage strides: /2, /2, /4, /4)
 patch_stride: [2, 2]
-image_size: [64, 2048]         # match sensor projection; no train-time resize
-window_size: [64, 2048]        # full-frame inference window; no resize/tiling
-window_stride: [64, 2048]      # single window when sliding is enabled
-original_image_size: [64, 2048]
+image_size: [64, 1024]         # train-time crop size (width halved to reduce memory)
+window_size: [64, 1024]        # inference window size
+window_stride: [64, 1024]      # single window per frame when sliding is enabled
+original_image_size: [64, 1024]
 # Full-image switches
-train_full_image: true         # train on the full projection (no random crop or scaling)
-use_sliding_window: false      # full-frame inference/validation; keeps spatial size
+train_full_image: false        # use random crops during training
+use_sliding_window: true      # full-frame inference/validation; keeps spatial size
 
 # Stem
 conv_stem: "ConvStem" # 'none' or 'ConvStem'
