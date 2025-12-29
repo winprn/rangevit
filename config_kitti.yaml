@@ -24,12 +24,12 @@ has_label: true
 val_frequency: 1
 n_epochs: 60
 warmup_epochs: 6
-batch_size: 4
+batch_size: 16
 batch_size_val: 1
 lr: 0.0004
 train_result_frequency: 100 # printing frequency of the train results
-boundary_loss_weight: 0.2 # Weight for boundary mIoU loss (only applied when use_kpconv is False)
-save_epochs_at: [40, 45, 50, 55, 60] # 1-based epochs to save checkpoints; must be < n_epochs. Leave empty to save every epoch.
+boundary_loss_weight: 0.0 # Weight for boundary mIoU loss (only applied when use_kpconv is False)
+save_epochs_at: [40, 45, 50, 55] # 1-based epochs to save checkpoints; must be < n_epochs. Leave empty to save every epoch.
 
 # Model config
 vit_backbone: "tinyvim_base"
@@ -56,7 +56,7 @@ decoder: "fpn" # 'linear', 'up_conv', or 'fpn'
 skip_filters: 0 # FPN does not use the skip connection
 
 # 3D refiner / post-processing
-point_postproc: "knn" # 'kpconv', 'knn', or 'none'; overrides the boolean flags below
+point_postproc: "kpconv" # 'kpconv', 'knn', or 'none'; overrides the boolean flags below
 knn_search: 13
 knn_k: 5
 knn_sigma: 1.0

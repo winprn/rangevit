@@ -109,7 +109,24 @@ class Option(object):
         self.knn_sigma = self.config.get('knn_sigma', 1.0)
         self.knn_cutoff = self.config.get('knn_cutoff', 1.0)
 
-        point_postproc = str(self.config.get('point_postproc', 'none')).lower()
+        # Support both new point_postproc string and legacy boolean flags.
+        legacy_use_kpconv = self.config.get('use_kpconv', None)
+        legacy_use_knn = self.config.get('use_knn', None)
+        point_postproc_raw = self.config.get('point_postproc', None)
+
+        if point_postproc_raw is None:
+            # Fall back to legacy flags when point_postproc is absent.
+            if legacy_use_kpconv and legacy_use_knn:
+                raise ValueError('use_kpconv and use_knn cannot both be True')
+            if legacy_use_kpconv:
+                point_postproc = 'kpconv'
+            elif legacy_use_knn:
+                point_postproc = 'knn'
+            else:
+                point_postproc = 'none'
+        else:
+            point_postproc = str(point_postproc_raw).lower()
+
         if point_postproc == 'kpconv':
             self.use_kpconv = True
             self.use_knn = False
