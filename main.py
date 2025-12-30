@@ -93,6 +93,7 @@ class Experiment(object):
 
         self.epoch_start = 0
         self._mlflow_finalized = False
+        self._peak_memory_reset()
 
         # Setup signal handlers for graceful shutdown
         self._setup_signal_handlers()
@@ -127,6 +128,33 @@ class Experiment(object):
         """Cleanup handler called on exit."""
         if not self._mlflow_finalized:
             self._finalize_mlflow(status='FAILED')
+
+    def _peak_memory_reset(self):
+        """Reset CUDA peak memory stats so we can report run-time max usage."""
+        if torch.cuda.is_available():
+            torch.cuda.reset_peak_memory_stats()
+
+    def _log_peak_memory(self, step: int = None):
+        """Log peak CUDA memory usage (allocated and reserved)."""
+        if not torch.cuda.is_available():
+            return
+        torch.cuda.synchronize()
+        peak_alloc = torch.cuda.max_memory_allocated()
+        peak_reserved = torch.cuda.max_memory_reserved()
+        msg = (f'Max GPU memory allocated: {peak_alloc/1e9:.2f} GB, '
+               f'reserved: {peak_reserved/1e9:.2f} GB')
+        if self.recorder is not None:
+            self.recorder.logger.info(msg)
+        else:
+            print(msg)
+        if self.mlflow_manager is not None:
+            self.mlflow_manager.log_metrics(
+                {
+                    'peak_mem_alloc_gb': peak_alloc / 1e9,
+                    'peak_mem_reserved_gb': peak_reserved / 1e9,
+                },
+                step=step,
+            )
 
 
     def _initModel(self):
@@ -244,6 +272,8 @@ class Experiment(object):
 
     def run(self):
         t_start = time.time()
+        # Reset peak tracker at the start of each run.
+        self._peak_memory_reset()
         if self.settings.val_only:
             save_results_path = self.prediction_path if self.settings.save_eval_results else None
             self.trainer.run(self.epoch_start,
@@ -256,6 +286,7 @@ class Experiment(object):
                 self.recorder.logger.info('==== Total cost time: {}'.format(
                     datetime.timedelta(seconds=cost_time)))
             self.mlflow_manager.log_metrics({'total_runtime_sec': cost_time}, step=self.epoch_start)
+            self._log_peak_memory(step=self.epoch_start)
             self._finalize_mlflow()
             return None
         best_val_result = None
@@ -345,6 +376,7 @@ class Experiment(object):
             self.recorder.logger.info('=== Total cost time: {}'.format(
                 datetime.timedelta(seconds=cost_time)))
         self.mlflow_manager.log_metrics({'total_runtime_sec': cost_time}, step=self.settings.n_epochs)
+        self._log_peak_memory(step=self.settings.n_epochs)
         self._finalize_mlflow()
 
         # Return checkpoint path for potential inference
