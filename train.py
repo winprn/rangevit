@@ -425,9 +425,9 @@ class Trainer(object):
             with torch.no_grad():
                 argmax = output.argmax(dim=1)
                 if self.settings.has_label:
-                    self.metrics.addBatch(argmax, input_label) # 2D predictions
+                    self.metrics.addBatch(argmax, input_label) # 2D predictions (pixel metrics)
                     if mode == 'Validation' and self.use_knn:
-                        self.metrics_3d.addBatch(unproj_argmax, sem_label) # 3D predictions
+                        self.metrics_3d.addBatch(unproj_argmax, sem_label) # 3D predictions (point metrics)
 
             loss_meter.update(loss.item(), input_feature.size(0))
 
@@ -435,11 +435,19 @@ class Trainer(object):
                 if self.settings.has_label:
                     mean_iou_tensor, _, mean_acc_tensor, _ = self.metrics.getIoUnAcc()
                     mean_recall_tensor, _ = self.metrics.getRecall()
+                    mean_iou_point_tensor = mean_acc_point_tensor = mean_recall_point_tensor = torch.tensor(0.0)
+                    if mode == 'Validation' and self.use_knn:
+                        mean_iou_point_tensor, _, mean_acc_point_tensor, _ = self.metrics_3d.getIoUnAcc()
+                        mean_recall_point_tensor, _ = self.metrics_3d.getRecall()
                 else:
                     mean_iou_tensor = mean_acc_tensor = mean_recall_tensor = torch.tensor(0.0)
+                    mean_iou_point_tensor = mean_acc_point_tensor = mean_recall_point_tensor = torch.tensor(0.0)
             mean_iou_running = float(mean_iou_tensor)
             mean_acc_running = float(mean_acc_tensor)
             mean_recall_running = float(mean_recall_tensor)
+            mean_iou_point_running = float(mean_iou_point_tensor)
+            mean_acc_point_running = float(mean_acc_point_tensor)
+            mean_recall_point_running = float(mean_recall_point_tensor)
 
             should_log = (i % log_frequency == 0) or (i == total_iter - 1)
 
@@ -448,10 +456,18 @@ class Trainer(object):
                 self.iter_steps[mode] += 1
                 mlflow_metrics = {
                     f'{mode.lower()}_loss': loss.item(),
-                    f'{mode.lower()}_mean_iou': mean_iou_running,
-                    f'{mode.lower()}_mean_acc': mean_acc_running,
-                    f'{mode.lower()}_mean_recall': mean_recall_running,
+                    f'{mode.lower()}_mean_iou_pixel': mean_iou_running,
+                    f'{mode.lower()}_mean_acc_pixel': mean_acc_running,
+                    f'{mode.lower()}_mean_recall_pixel': mean_recall_running,
                 }
+                # Keep legacy keys for downstream compatibility
+                mlflow_metrics[f'{mode.lower()}_mean_iou'] = mean_iou_running
+                mlflow_metrics[f'{mode.lower()}_mean_acc'] = mean_acc_running
+                mlflow_metrics[f'{mode.lower()}_mean_recall'] = mean_recall_running
+                if mode == 'Validation' and self.use_knn:
+                    mlflow_metrics[f'{mode.lower()}_mean_iou_point'] = mean_iou_point_running
+                    mlflow_metrics[f'{mode.lower()}_mean_acc_point'] = mean_acc_point_running
+                    mlflow_metrics[f'{mode.lower()}_mean_recall_point'] = mean_recall_point_running
                 if mode == 'Train':
                     mlflow_metrics[f'{mode.lower()}_lr'] = current_lr
                 self.mlflow_manager.log_metrics(mlflow_metrics, step=step_id)
@@ -484,8 +500,11 @@ class Trainer(object):
                 if self.recorder is not None:
                     log_str = '>>> {} E[{:03d}|{:03d}] I[{:04d}|{:04d}] DT[{:.3f}] PT[{:.3f}] '.format(
                         mode, self.settings.n_epochs, epoch+1, total_iter, i+1, data_cost_time, process_cost_time)
-                    log_str += 'LR {} Loss {:0.4f} Acc {:0.4f} IOU {:0.4F} '.format(
+                    log_str += 'LR {} Loss {:0.4f} Acc_pixel {:0.4f} IOU_pixel {:0.4F} '.format(
                         current_lr, loss.item(), mean_acc_running, mean_iou_running)
+                    if mode == 'Validation' and self.use_knn:
+                        log_str += 'Acc_point {:0.4f} IOU_point {:0.4F} '.format(
+                            mean_acc_point_running, mean_iou_point_running)
                     log_str += 'RT {}'.format(remain_time)
                     self.recorder.logger.info(log_str)
 
@@ -518,6 +537,9 @@ class Trainer(object):
                         'class_iou': class_iou_3d,
                         'conf_matrix': self.metrics_3d.conf_matrix.clone().cpu(),
                     }
+                mean_acc_point = metrics_dict_3d['mean_acc'].item() if metrics_dict_3d is not None else 0.0
+                mean_recall_point = metrics_dict_3d['mean_recall'].item() if metrics_dict_3d is not None else 0.0
+                mean_iou_point = metrics_dict_3d['mean_iou'].item() if metrics_dict_3d is not None else 0.0
             else:
                 zero_t = torch.tensor(0.0)
                 mean_acc = mean_recall = mean_iou = zero_t
@@ -580,17 +602,28 @@ class Trainer(object):
                                    mapped_cls_name=self.mapped_cls_name)
 
             # Results at the end of the epoch
-            log_str = '>>> {} Loss {:0.4f} Acc {:0.4f} IOU {:0.4F} Recall {:0.4f}'.format(
+            log_str = '>>> {} Loss {:0.4f} Acc_pixel {:0.4f} IOU_pixel {:0.4F} Recall_pixel {:0.4f}'.format(
                 mode, loss_meter.avg, mean_acc.item(), mean_iou.item(), mean_recall.item())
+            if mode == 'Validation' and self.use_knn and metrics_dict_3d is not None:
+                log_str += ' | Acc_point {:0.4f} IOU_point {:0.4F} Recall_point {:0.4f}'.format(
+                    mean_acc_point, mean_iou_point, mean_recall_point)
             self.recorder.logger.info(log_str)
 
         if self.mlflow_manager is not None:
             mlflow_metrics = {
                 f'{mode.lower()}_epoch_loss': loss_meter.avg,
+                f'{mode.lower()}_epoch_acc_pixel': mean_acc.item(),
+                f'{mode.lower()}_epoch_iou_pixel': mean_iou.item(),
+                f'{mode.lower()}_epoch_recall_pixel': mean_recall.item(),
+                # Legacy keys
                 f'{mode.lower()}_epoch_acc': mean_acc.item(),
                 f'{mode.lower()}_epoch_iou': mean_iou.item(),
                 f'{mode.lower()}_epoch_recall': mean_recall.item(),
             }
+            if mode == 'Validation' and self.use_knn and metrics_dict_3d is not None:
+                mlflow_metrics[f'{mode.lower()}_epoch_acc_point'] = mean_acc_point
+                mlflow_metrics[f'{mode.lower()}_epoch_iou_point'] = mean_iou_point
+                mlflow_metrics[f'{mode.lower()}_epoch_recall_point'] = mean_recall_point
             if (mode == 'Train') and (epoch_lr is not None):
                 mlflow_metrics[f'{mode.lower()}_epoch_lr'] = epoch_lr
             # Skip logging label-dependent metrics when labels are absent.
@@ -729,6 +762,10 @@ class Trainer(object):
                 self.iter_steps[mode] += 1
                 mlflow_metrics = {
                     f'{mode.lower()}_loss': loss.item(),
+                    f'{mode.lower()}_mean_iou_point': mean_iou_running,
+                    f'{mode.lower()}_mean_acc_point': mean_acc_running,
+                    f'{mode.lower()}_mean_recall_point': mean_recall_running,
+                    # Legacy keys for compatibility (point metrics in KPConv mode)
                     f'{mode.lower()}_mean_iou': mean_iou_running,
                     f'{mode.lower()}_mean_acc': mean_acc_running,
                     f'{mode.lower()}_mean_recall': mean_recall_running,
@@ -784,7 +821,7 @@ class Trainer(object):
                 if self.recorder is not None:
                     log_str = '>>> {} E[{:03d}|{:03d}] I[{:04d}|{:04d}] DT[{:.3f}] PT[{:.3f}] '.format(
                         mode, self.settings.n_epochs, epoch+1, total_iter, i+1, data_cost_time, process_cost_time)
-                    log_str += 'LR {} Loss {:0.4f} Acc {:0.4f} IOU {:0.4F} '.format(
+                    log_str += 'LR {} Loss {:0.4f} Acc_point {:0.4f} IOU_point {:0.4F} '.format(
                         current_lr, loss.item(), mean_acc_running, mean_iou_running)
                     log_str += 'RT {} '.format(remain_time)
                     log_str += 'RT PER EPOCH {}'.format(remain_time_1epoch)
@@ -844,13 +881,17 @@ class Trainer(object):
                                mapped_cls_name=self.mapped_cls_name)
 
             # Results at the end of the epoch
-            log_str = '>>> {} Loss {:0.4f} Acc {:0.4f} IOU {:0.4F} Recall {:0.4f}'.format(
+            log_str = '>>> {} Loss {:0.4f} Acc_point {:0.4f} IOU_point {:0.4F} Recall_point {:0.4f}'.format(
                 mode, loss_meter.avg, mean_acc.item(), mean_iou.item(), mean_recall.item())
             self.recorder.logger.info(log_str)
 
         if self.mlflow_manager is not None:
             mlflow_metrics = {
                 f'{mode.lower()}_epoch_loss': loss_meter.avg,
+                f'{mode.lower()}_epoch_acc_point': mean_acc.item(),
+                f'{mode.lower()}_epoch_iou_point': mean_iou.item(),
+                f'{mode.lower()}_epoch_recall_point': mean_recall.item(),
+                # Legacy keys for compatibility (point metrics in KPConv mode)
                 f'{mode.lower()}_epoch_acc': mean_acc.item(),
                 f'{mode.lower()}_epoch_iou': mean_iou.item(),
                 f'{mode.lower()}_epoch_recall': mean_recall.item(),
