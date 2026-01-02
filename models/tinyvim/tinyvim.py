@@ -21,8 +21,8 @@ TinyViM_width = {
 TinyViM_depth = {
     'S': [3, 3, 9, 6],
     'B': [4, 3, 10, 5],
-    # 'B': [4, 4, 12, 6],
-    'L': [4, 4, 12, 6],
+    'L': [4, 3, 10, 5],
+    # 'L': [4, 4, 12, 6],
 }
 
 def stem(in_chs, out_chs, stride=4):
