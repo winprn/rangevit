@@ -9,7 +9,7 @@ mlflow:
   enable: true
   tracking_uri: "http://140.245.117.232:5000" # e.g. 'file:./mlruns' or an HTTP URL
   experiment_name: "rangevit"
-  run_name: null # defaults to the CLI-provided id when null
+  run_name: "[train] rangevim_base" # defaults to the CLI-provided id when null
   nested: false
   log_checkpoints: false
   log_code_snapshot: false
@@ -24,15 +24,15 @@ has_label: true
 val_frequency: 1
 n_epochs: 60
 warmup_epochs: 6
-batch_size: 4
+batch_size: 16
 batch_size_val: 1
 lr: 0.0004
 train_result_frequency: 100 # printing frequency of the train results
-boundary_loss_weight: 0.2 # Weight for boundary mIoU loss (only applied when use_kpconv is False)
+boundary_loss_weight: 0.0 # Weight for boundary mIoU loss (only applied when use_kpconv is False)
 save_epochs_at: [40, 45, 50, 55] # 1-based epochs to save checkpoints; must be < n_epochs. Leave empty to save every epoch.
 
 # Model config
-vit_backbone: "tinyvim_large"
+vit_backbone: "tinyvim_base"
 in_channels: 5
 patch_size: [2, 2] # TinyViM stem now uses stride 2 (overall stage strides: /2, /2, /4, /4)
 patch_stride: [2, 2]
