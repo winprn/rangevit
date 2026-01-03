@@ -327,6 +327,13 @@ class Trainer(object):
         else:
             raise ValueError('invalid mode: {}'.format(mode))
 
+        track_mem = torch.cuda.is_available()
+        if track_mem:
+            torch.cuda.reset_peak_memory_stats()
+            mem_device = torch.device('cuda')
+        else:
+            mem_device = None
+
         model_without_ddp = self.model
         if hasattr(self.model, 'module'):
             model_without_ddp = self.model.module
@@ -562,6 +569,10 @@ class Trainer(object):
             }
 
         epoch_lr = self.optimizer.param_groups[0]['lr']
+        max_alloc_mb = max_res_mb = None
+        if track_mem:
+            max_alloc_mb = torch.cuda.max_memory_allocated(mem_device) / (1024 ** 2)
+            max_res_mb = torch.cuda.max_memory_reserved(mem_device) / (1024 ** 2)
 
         # Print results
         if self.recorder is not None:
@@ -607,6 +618,8 @@ class Trainer(object):
             if mode == 'Validation' and self.use_knn and metrics_dict_3d is not None:
                 log_str += ' | Acc_point {:0.4f} IOU_point {:0.4F} Recall_point {:0.4f}'.format(
                     mean_acc_point, mean_iou_point, mean_recall_point)
+            if max_alloc_mb is not None and max_res_mb is not None:
+                log_str += ' | Mem_alloc {:.1f}MB Mem_res {:.1f}MB'.format(max_alloc_mb, max_res_mb)
             self.recorder.logger.info(log_str)
 
         if self.mlflow_manager is not None:
@@ -620,6 +633,9 @@ class Trainer(object):
                 f'{mode.lower()}_epoch_iou': mean_iou.item(),
                 f'{mode.lower()}_epoch_recall': mean_recall.item(),
             }
+            if max_alloc_mb is not None and max_res_mb is not None:
+                mlflow_metrics[f'{mode.lower()}_epoch_max_mem_alloc_mb'] = max_alloc_mb
+                mlflow_metrics[f'{mode.lower()}_epoch_max_mem_reserved_mb'] = max_res_mb
             if mode == 'Validation' and self.use_knn and metrics_dict_3d is not None:
                 mlflow_metrics[f'{mode.lower()}_epoch_acc_point'] = mean_acc_point
                 mlflow_metrics[f'{mode.lower()}_epoch_iou_point'] = mean_iou_point
@@ -630,12 +646,26 @@ class Trainer(object):
             if self.settings.has_label:
                 self.mlflow_manager.log_metrics(mlflow_metrics, step=self.iter_steps[mode])
 
+        # Prefer point metrics for best-model selection when available (KNN validation),
+        # otherwise fall back to pixel metrics.
+        primary_acc = mean_acc_point if (self.settings.has_label and metrics_dict_3d is not None) else mean_acc
+        primary_iou = mean_iou_point if (self.settings.has_label and metrics_dict_3d is not None) else mean_iou
+        primary_recall = mean_recall_point if (self.settings.has_label and metrics_dict_3d is not None) else mean_recall
 
         result_metrics = {
-            'Acc': mean_acc.item(),
-            'IOU': mean_iou.item(),
-            'Recall': mean_recall.item()
+            'Acc': primary_acc if isinstance(primary_acc, float) else primary_acc.item(),
+            'IOU': primary_iou if isinstance(primary_iou, float) else primary_iou.item(),
+            'Recall': primary_recall if isinstance(primary_recall, float) else primary_recall.item(),
+            'Acc_pixel': mean_acc.item(),
+            'IOU_pixel': mean_iou.item(),
+            'Recall_pixel': mean_recall.item(),
         }
+        if metrics_dict_3d is not None:
+            result_metrics.update({
+                'Acc_point': mean_acc_point,
+                'IOU_point': mean_iou_point,
+                'Recall_point': mean_recall_point,
+            })
 
         return result_metrics
 
@@ -651,6 +681,13 @@ class Trainer(object):
             self.model.eval()
         else:
             raise ValueError('invalid mode: {}'.format(mode))
+
+        track_mem = torch.cuda.is_available()
+        if track_mem:
+            torch.cuda.reset_peak_memory_stats()
+            mem_device = torch.device('cuda')
+        else:
+            mem_device = None
 
         track_remain_time_1epoch = tools.RemainTime(1)
 
@@ -849,6 +886,10 @@ class Trainer(object):
             }
 
         epoch_lr = self.optimizer.param_groups[0]['lr']
+        max_alloc_mb = max_res_mb = None
+        if track_mem:
+            max_alloc_mb = torch.cuda.max_memory_allocated(mem_device) / (1024 ** 2)
+            max_res_mb = torch.cuda.max_memory_reserved(mem_device) / (1024 ** 2)
 
         # Print results
         if self.recorder is not None:
@@ -883,6 +924,8 @@ class Trainer(object):
             # Results at the end of the epoch
             log_str = '>>> {} Loss {:0.4f} Acc_point {:0.4f} IOU_point {:0.4F} Recall_point {:0.4f}'.format(
                 mode, loss_meter.avg, mean_acc.item(), mean_iou.item(), mean_recall.item())
+            if max_alloc_mb is not None and max_res_mb is not None:
+                log_str += ' | Mem_alloc {:.1f}MB Mem_res {:.1f}MB'.format(max_alloc_mb, max_res_mb)
             self.recorder.logger.info(log_str)
 
         if self.mlflow_manager is not None:
@@ -896,15 +939,21 @@ class Trainer(object):
                 f'{mode.lower()}_epoch_iou': mean_iou.item(),
                 f'{mode.lower()}_epoch_recall': mean_recall.item(),
             }
+            if max_alloc_mb is not None and max_res_mb is not None:
+                mlflow_metrics[f'{mode.lower()}_epoch_max_mem_alloc_mb'] = max_alloc_mb
+                mlflow_metrics[f'{mode.lower()}_epoch_max_mem_reserved_mb'] = max_res_mb
             if (mode == 'Train') and (epoch_lr is not None):
                 mlflow_metrics[f'{mode.lower()}_epoch_lr'] = epoch_lr
             self.mlflow_manager.log_metrics(mlflow_metrics, step=self.iter_steps[mode])
 
-
+        # KPConv path already works on point metrics; expose explicit aliases for clarity.
         result_metrics = {
             'Acc': mean_acc.item(),
             'IOU': mean_iou.item(),
-            'Recall': mean_recall.item()
+            'Recall': mean_recall.item(),
+            'Acc_point': mean_acc.item(),
+            'IOU_point': mean_iou.item(),
+            'Recall_point': mean_recall.item(),
         }
 
         return result_metrics
