@@ -27,6 +27,7 @@ from .rangevit_kpconv import RangeViT_KPConv, KPClassifier
 from .swin_transformer_v2 import SwinTransformerV2, create_swin_v2
 from .tinyvim_adapter import TinyViMAdapter
 from .tinyvim.fpn_decoder import TinyViMFPNDecoder
+from .segformer_decoder import SegFormerDecoder
 
 
 class VisionTransformer(nn.Module):
@@ -179,6 +180,16 @@ def create_decoder(encoder, decoder_cfg):
             head_channels=decoder_cfg.get('fpn_head_channels', 128),
             dropout_ratio=decoder_cfg.get('fpn_dropout', 0.1),
         )
+    elif name == 'segformer':
+        if not isinstance(encoder, TinyViMAdapter):
+            raise ValueError('SegFormer decoder is only supported for TinyViM backbones.')
+        decoder = SegFormerDecoder(
+            in_channels=encoder.embed_dims,
+            n_cls=decoder_cfg['n_cls'],
+            embed_dim=decoder_cfg.get('segformer_embed_dim', 128),
+            head_channels=decoder_cfg.get('segformer_head_channels', 128),
+            dropout_ratio=decoder_cfg.get('segformer_dropout', 0.1),
+        )
     else:
         raise ValueError(f'Unknown decoder: {name}')
     return decoder
@@ -197,7 +208,7 @@ def create_rangevit(model_cfg, use_kpconv=False):
         # For TinyViM, we pass the full config or specific args
         # Since TinyViMAdapter expects 'backbone_name' and handles capacity internally
         model_cfg['backbone_name'] = backbone
-        if decoder_cfg.get('name') == 'fpn':
+        if decoder_cfg.get('name') in ('fpn', 'segformer'):
             model_cfg['use_fpn_decoder'] = True
         # Tell adapter whether we're loading pretrained stem weights
         model_cfg['load_pretrained_stem'] = (model_cfg.get('pretrained_path') is not None)
@@ -284,6 +295,9 @@ class RangeViT(nn.Module):
         fpn_out_channels=256,
         fpn_head_channels=128,
         fpn_dropout=0.1,
+        segformer_embed_dim=128,
+        segformer_head_channels=128,
+        segformer_dropout=0.1,
         use_kpconv=False,
         ):
         super(RangeViT, self).__init__()
@@ -373,6 +387,15 @@ class RangeViT(nn.Module):
                 'fpn_dropout': fpn_dropout,
                 # Needed for KPConv head channel size; FPN returns head_channels when return_features=True.
                 'd_decoder': fpn_head_channels,
+            }
+        elif decoder == 'segformer':
+            decoder_cfg = {
+                'n_cls': n_cls, 'name': 'segformer',
+                'segformer_embed_dim': segformer_embed_dim,
+                'segformer_head_channels': segformer_head_channels,
+                'segformer_dropout': segformer_dropout,
+                # KPConv uses the fused head channel size
+                'd_decoder': segformer_head_channels,
             }
 
         # ViT encoder and stem config

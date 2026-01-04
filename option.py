@@ -100,6 +100,13 @@ class Option(object):
         # Decoder
         self.decoder = self.config.get('decoder', 'up_conv')
         self.skip_filters = self.config.get('skip_filters', 0)
+        # Decoder-specific params
+        self.fpn_out_channels = self.config.get('fpn_out_channels', 256)
+        self.fpn_head_channels = self.config.get('fpn_head_channels', 128)
+        self.fpn_dropout = self.config.get('fpn_dropout', 0.1)
+        self.segformer_embed_dim = self.config.get('segformer_embed_dim', 128)
+        self.segformer_head_channels = self.config.get('segformer_head_channels', 128)
+        self.segformer_dropout = self.config.get('segformer_dropout', 0.1)
 
         # 3D refiner / post-processing
         self.use_kpconv = False

@@ -52,8 +52,15 @@ D_h: 48
 # However, in the validation set D_h = 128 gave us better mIoU results.
 
 # Decoder
-decoder: "fpn" # 'linear', 'up_conv', or 'fpn'
+decoder: "segformer" # 'linear', 'up_conv', 'fpn', or 'segformer'
 skip_filters: 0 # FPN does not use the skip connection
+# Decoder params
+fpn_out_channels: 256
+fpn_head_channels: 128
+fpn_dropout: 0.1
+segformer_embed_dim: 128
+segformer_head_channels: 128
+segformer_dropout: 0.1
 
 # 3D refiner / post-processing
 point_postproc: "knn" # 'kpconv', 'knn', or 'none'; overrides the boolean flags below

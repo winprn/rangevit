@@ -50,6 +50,12 @@ def build_rangevit_model(settings, pretrained_path=None):
         decoder=settings.decoder,
         up_conv_d_decoder=settings.D_h,
         up_conv_scale_factor=settings.patch_stride,
+        fpn_out_channels=getattr(settings, 'fpn_out_channels', 256),
+        fpn_head_channels=getattr(settings, 'fpn_head_channels', 128),
+        fpn_dropout=getattr(settings, 'fpn_dropout', 0.1),
+        segformer_embed_dim=getattr(settings, 'segformer_embed_dim', 128),
+        segformer_head_channels=getattr(settings, 'segformer_head_channels', 128),
+        segformer_dropout=getattr(settings, 'segformer_dropout', 0.1),
         use_kpconv=settings.use_kpconv)
     return model
 
