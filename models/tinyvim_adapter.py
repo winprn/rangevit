@@ -40,7 +40,8 @@ class TinyViMAdapter(nn.Module):
         else:
             raise ValueError(f"Unknown backbone capacity in {backbone_name}")
 
-        stem_stride = kwargs.pop('stem_stride', (1, 2))  # keep height, downsample width
+        # Default to no downsampling in the stem (stride 1x1)
+        stem_stride = kwargs.pop('stem_stride', (1, 1))  # keep height/width
         down_stride = kwargs.pop('down_stride', (1, 2))
         self.patch_size = tuple(stem_stride) if isinstance(stem_stride, (list, tuple)) else (stem_stride, stem_stride)
         self.patch_stride = self.patch_size

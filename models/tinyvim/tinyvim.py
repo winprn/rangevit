@@ -34,12 +34,14 @@ def stem(in_chs, out_chs, stride=4):
         stride_h, stride_w = stride
         if stride_h != 1:
             raise ValueError(f"Unsupported stem stride: {stride}. Height stride must stay 1 to preserve H.")
-        if stride_w == 2:
+        if stride_w == 1:
+            stride1, stride2 = (1, 1), (1, 1)  # no downsampling in stem
+        elif stride_w == 2:
             stride1, stride2 = (1, 2), (1, 1)
         elif stride_w == 4:
             stride1, stride2 = (1, 2), (1, 2)
         else:
-            raise ValueError(f"Unsupported stem width stride: {stride_w}. Only 2 or 4 are supported.")
+            raise ValueError(f"Unsupported stem width stride: {stride_w}. Only 1, 2 or 4 are supported.")
     else:
         if stride == 4:
             stride1, stride2 = (2, 2), (2, 2)
@@ -146,7 +148,7 @@ class TinyViM(nn.Module):
                  pretrained=None,
                  ssm_num=1,
                  distillation=True,
-                 stem_stride=(1, 2),
+                 stem_stride=(1, 1),
                  **kwargs):
         super().__init__()
 
