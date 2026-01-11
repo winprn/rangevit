@@ -103,7 +103,7 @@ class Experiment(object):
         self.model = self._initModel()
 
         # Init trainer
-        # self.trainer = Trainer(self.settings, self.model, self.recorder, self.mlflow_manager)
+        self.trainer = Trainer(self.settings, self.model, self.recorder, self.mlflow_manager)
 
         # Load checkpoint
         self._loadCheckpoint()
