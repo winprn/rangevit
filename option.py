@@ -84,6 +84,16 @@ class Option(object):
         # 3D refiner
         self.use_kpconv = self.config.get('use_kpconv', True)
 
+        # Voxel features config
+        voxel_config = self.config.get('voxel_features', {})
+        self.use_voxel_features = voxel_config.get('enable', False)
+        self.voxel_size = voxel_config.get('voxel_size', 0.05)
+        self.voxel_feature_dim = voxel_config.get('feature_dim', 8)
+        self.voxel_encoder_type = voxel_config.get('encoder_type', 'none')
+        self.voxel_encoder_hidden_dim = voxel_config.get('encoder_hidden_dim', 16)
+        self.voxel_aggregation = voxel_config.get('aggregation', 'mean')
+        self.voxel_include_density = voxel_config.get('include_density', True)
+        self.voxel_projection_aggregation = voxel_config.get('projection_aggregation', 'depth_weighted')
 
         # Checkpoint model
         self.checkpoint = self.config.get('checkpoint', None)

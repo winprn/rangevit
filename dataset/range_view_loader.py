@@ -19,7 +19,7 @@ import torchvision.transforms as T
 import torchvision.transforms.functional as TF
 from scipy.spatial.ckdtree import cKDTree as kdtree
 
-from .preprocess import augmentor, projection
+from .preprocess import augmentor, projection, voxelization
 
 
 class RangeViewLoader(Dataset):
@@ -81,6 +81,19 @@ class RangeViewLoader(Dataset):
             )
         self.proj_img_mean = torch.tensor(self.config['sensor']['img_mean'], dtype=torch.float)
         self.proj_img_stds = torch.tensor(self.config['sensor']['img_stds'], dtype=torch.float)
+
+        # Voxel features (Phase 1: non-learnable)
+        voxel_config = self.config.get('voxel_features', {})
+        self.use_voxel_features = voxel_config.get('enable', False)
+        if self.use_voxel_features:
+            self.voxelizer = voxelization.VoxelGrid(
+                voxel_size=voxel_config.get('voxel_size', 0.05),
+                grid_bounds=None  # Auto-compute from point cloud
+            )
+            self.voxel_feature_dim = voxel_config.get('feature_dim', 8)
+            print(f'Voxel features enabled: voxel_size={voxel_config.get("voxel_size", 0.05)}, feature_dim={self.voxel_feature_dim}')
+        else:
+            self.voxelizer = None
 
         # Image augmentations
         if self.is_train:
@@ -184,6 +197,22 @@ class RangeViewLoader(Dataset):
         pointcloud, sem_label, inst_label = self.dataset.loadDataByIndex(index)
         if self.is_train:
             pointcloud = self.augmentor.doAugmentation(pointcloud)  # n, 4
+
+        # Voxelization (Phase 1: non-learnable features)
+        if self.use_voxel_features:
+            voxel_coords, voxel_features = self.voxelizer.voxelize(pointcloud)
+            # Project voxel features to range image
+            proj_voxel_features = self.voxelizer.project_to_range(
+                voxel_coords, voxel_features, self.projection)
+            proj_voxel_tensor = torch.from_numpy(proj_voxel_features).permute(2, 0, 1)  # [D, H, W]
+            # Pad to full feature dimension if needed
+            if proj_voxel_tensor.shape[0] < self.voxel_feature_dim:
+                padding = torch.zeros(
+                    self.voxel_feature_dim - proj_voxel_tensor.shape[0],
+                    proj_voxel_tensor.shape[1],
+                    proj_voxel_tensor.shape[2])
+                proj_voxel_tensor = torch.cat([proj_voxel_tensor, padding], dim=0)
+
         proj_pointcloud, proj_range, proj_idx, proj_mask = self.projection.doProjection(pointcloud)
 
         proj_mask_tensor = torch.from_numpy(proj_mask)
@@ -199,6 +228,10 @@ class RangeViewLoader(Dataset):
         proj_intensity_tensor = proj_intensity_tensor.ne(-1).float() * proj_intensity_tensor
         proj_feature_tensor = torch.cat(
             [proj_range_tensor.unsqueeze(0), proj_xyz_tensor.permute(2, 0, 1), proj_intensity_tensor.unsqueeze(0)], 0)
+
+        # Concatenate voxel features (Phase 1)
+        if self.use_voxel_features:
+            proj_feature_tensor = torch.cat([proj_feature_tensor, proj_voxel_tensor], dim=0)  # [5+D, H, W]
 
         proj_feature_tensor = (proj_feature_tensor - self.proj_img_mean[:, None, None]) / self.proj_img_stds[:, None,
                                                                                           None]
@@ -223,7 +256,9 @@ class RangeViewLoader(Dataset):
             # Data augmentation
             proj_tensor = self.aug_ops(proj_tensor)
 
-            return proj_tensor[0:5], proj_tensor[5], proj_tensor[6]
+            # Return correct number of feature channels (5 without voxel, 13 with voxel)
+            num_feature_channels = proj_feature_tensor.shape[0]
+            return proj_tensor[0:num_feature_channels], proj_tensor[num_feature_channels], proj_tensor[num_feature_channels+1]
 
     def __len__(self):
         if self.data_len > 0 and self.data_len < len(self.dataset):

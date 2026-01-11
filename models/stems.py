@@ -65,7 +65,7 @@ class PatchEmbedding(nn.Module):
 
 class ConvStem(nn.Module):
     def __init__(self,
-                 in_channels=5,
+                 in_channels=13,  # Updated from 5 to support voxel features
                  base_channels=32,
                  img_size=(32, 384),
                  patch_stride=(2, 8),
