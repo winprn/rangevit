@@ -68,8 +68,7 @@ def build_fusion_model(settings):
         stem_hidden_dim=settings.D_h,
         skip_filters=settings.skip_filters,
         decoder=settings.decoder,
-        up_conv_d_decoder=settings.D_h,
-        up_conv_scale_factor=settings.patch_stride,
+        decoder_d_decoder=settings.D_h,
         # Voxel branch config
         voxel_in_channels=settings.voxel_in_channels,
         voxel_num_layer=settings.voxel_num_layer,
@@ -78,7 +77,7 @@ def build_fusion_model(settings):
         voxel_planes=settings.voxel_planes,
         voxel_pres=settings.voxel_pres,
         voxel_vres=settings.voxel_vres,
-        voxel_dropout_p=settings.voxel_dropout_p,
+        dropout_p=settings.voxel_dropout_p,
         # Fusion config
         fusion_hidden_ratio=settings.fusion_hidden_ratio,
         if_dist=settings.distributed,
