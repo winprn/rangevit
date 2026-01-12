@@ -84,7 +84,7 @@ class Option(object):
         # 3D refiner
         self.use_kpconv = self.config.get('use_kpconv', True)
 
-        # Voxel features config
+        # Voxel features config (Phase 1: non-learnable)
         voxel_config = self.config.get('voxel_features', {})
         self.use_voxel_features = voxel_config.get('enable', False)
         self.voxel_size = voxel_config.get('voxel_size', 0.05)
@@ -95,10 +95,32 @@ class Option(object):
         self.voxel_include_density = voxel_config.get('include_density', True)
         self.voxel_projection_aggregation = voxel_config.get('projection_aggregation', 'depth_weighted')
 
+        # Fusion model config (learnable voxel branch)
+        self.use_fusion_voxel = self.config.get('use_fusion_voxel', False)
+
+        # Voxel branch config (for fusion model)
+        voxel_branch_cfg = self.config.get('voxel_branch', {})
+        self.voxel_in_channels = voxel_branch_cfg.get('in_channels', 4)
+        self.voxel_num_layer = voxel_branch_cfg.get('num_layer', [2, 3, 4, 6, 2, 2, 2, 2])
+        self.voxel_block_type = voxel_branch_cfg.get('block_type', 'Bottleneck')
+        self.voxel_cr = voxel_branch_cfg.get('cr', 1.0)
+        self.voxel_planes = voxel_branch_cfg.get('planes', [32, 32, 64, 128, 256, 256, 128, 96, 96])
+        self.voxel_pres = voxel_branch_cfg.get('pres', 0.05)
+        self.voxel_vres = voxel_branch_cfg.get('vres', 0.05)
+        self.voxel_dropout_p = voxel_branch_cfg.get('dropout_p', 0.3)
+
+        # Fusion config
+        fusion_cfg = self.config.get('fusion', {})
+        self.fusion_hidden_ratio = fusion_cfg.get('hidden_ratio', 2.0)
+
         # Checkpoint model
         self.checkpoint = self.config.get('checkpoint', None)
         self.pretrained_model = self.config.get('pretrained_model', None)
         self.finetune_pretrained_model = self.config.get('finetune_pretrained_model', False)
+
+        # Separate pretrained paths for fusion model
+        self.range_pretrained_model = self.config.get('range_pretrained_model', None)
+        self.voxel_pretrained_model = self.config.get('voxel_pretrained_model', None)
 
         # Loading pre-trained patch and positional embeddings
         self.reuse_pos_emb = self.config.get('reuse_pos_emb', False)
@@ -148,6 +170,12 @@ class Option(object):
         # When using the KPConv layer, the decoder has to be up_conv.
         if self.use_kpconv:
             assert self.decoder == 'up_conv'
+
+        # Fusion model requires up_conv decoder
+        if self.use_fusion_voxel:
+            assert self.decoder == 'up_conv', "Fusion model requires up_conv decoder"
+            assert not self.use_kpconv, "Fusion model is incompatible with KPConv (use one or the other)"
+            assert not self.use_voxel_features, "Fusion model has its own voxel branch (disable voxel_features)"
 
         # The following hyperparameters have to be tuples or lists with two elements.
         tuple_list = [self.patch_size, self.patch_stride,

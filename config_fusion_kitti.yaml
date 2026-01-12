@@ -1,0 +1,135 @@
+# General config
+num_workers: 4
+id: "exp_fusion_kitti"
+
+# MLflow config
+mlflow:
+  enable: true
+  tracking_uri: "http://140.245.117.232:5000"
+  experiment_name: "rangevit_fusion"
+  run_name: null
+  nested: false
+  log_checkpoints: false
+  log_code_snapshot: false
+
+# Data config
+dataset: "SemanticKitti"
+n_classes: 20 # 19 + 1(ignored)
+use_trainval: false
+
+# Train config
+has_label: true
+val_frequency: 1
+n_epochs: 60
+warmup_epochs: 10
+batch_size: 4
+batch_size_val: 1
+lr: 0.0004
+train_result_frequency: 100
+
+# Fusion model config (learnable voxel branch)
+use_fusion_voxel: true
+
+# Voxel features disabled (fusion model has its own voxel branch)
+voxel_features:
+  enable: false
+
+# Voxel branch config (for fusion model)
+voxel_branch:
+  in_channels: 4  # x, y, z, intensity
+  num_layer: [2, 3, 4, 6, 2, 2, 2, 2]
+  block_type: "Bottleneck"
+  cr: 1.0
+  planes: [32, 32, 64, 128, 256, 256, 128, 96, 96]
+  pres: 0.05  # Point resolution
+  vres: 0.05  # Voxel resolution
+  dropout_p: 0.3
+
+# Fusion config
+fusion:
+  hidden_ratio: 2.0  # Hidden layer ratio in FusionMLP
+
+# Model config (range branch)
+vit_backbone: "vit_base_patch16_384"
+in_channels: 5  # Range branch only: range, x, y, z, intensity (no voxel features)
+patch_size: [2, 8]
+patch_stride: [2, 8]
+image_size: [64, 768]
+window_size: [64, 768]
+window_stride: [64, 256]
+original_image_size: [64, 2048]
+
+# Stem
+conv_stem: "ConvStem"
+stem_base_channels: 32
+D_h: 128
+
+# Decoder
+decoder: "up_conv"
+skip_filters: 128
+
+# 3D refiner disabled (fusion model replaces this)
+use_kpconv: false
+
+# Checkpoint model
+checkpoint: null
+pretrained_model: null
+
+# Separate pretrained paths for fusion model
+range_pretrained_model: null  # Path to pretrained RangeViT checkpoint
+voxel_pretrained_model: null  # Path to pretrained MinkUNet checkpoint
+
+# Loading pre-trained patch and positional embeddings
+reuse_pos_emb: false
+reuse_patch_emb: false
+
+# Data augmentation config
+augmentation:
+  # flip
+  p_flipx: 0.
+  p_flipy: 0.5
+
+  # translation
+  p_transx: 0.5
+  trans_xmin: -5
+  trans_xmax: 5
+  p_transy: 0.5
+  trans_ymin: -3
+  trans_ymax: 3
+  p_transz: 0.5
+  trans_zmin: -1
+  trans_zmax: 0.
+
+  # rotation
+  p_rot_roll: 0.5
+  rot_rollmin: -5
+  rot_rollmax: 5
+  p_rot_pitch: 0.5
+  rot_pitchmin: -5
+  rot_pitchmax: 5
+  p_rot_yaw: 0.5
+  rot_yawmin: 5
+  rot_yawmax: -5
+
+sensor:
+  name: "HDL64"
+  type: "spherical"
+  scan_proj: true
+  proj_h: 64
+  proj_w: 2048
+  fov_up: 3.
+  fov_down: -25.
+  fov_left: -180
+  fov_right: 180
+  img_mean:
+    - 12.12  # range
+    - 10.88  # x
+    - 0.23   # y
+    - -1.04  # z
+    - 0.21   # intensity
+  img_stds:
+    - 12.32  # range
+    - 11.47  # x
+    - 6.91   # y
+    - 0.86   # z
+    - 0.16   # intensity

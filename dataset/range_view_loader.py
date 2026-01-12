@@ -23,13 +23,14 @@ from .preprocess import augmentor, projection, voxelization
 
 
 class RangeViewLoader(Dataset):
-    def __init__(self, dataset, config, data_len=-1, is_train=True, return_uproj=False, use_kpconv=False):
+    def __init__(self, dataset, config, data_len=-1, is_train=True, return_uproj=False, use_kpconv=False, use_fusion_voxel=False):
         self.dataset = dataset
         self.config = config
         self.is_train = is_train
         self.data_len = data_len
         self.return_uproj = return_uproj
         self.use_kpconv = use_kpconv
+        self.use_fusion_voxel = use_fusion_voxel
 
         augment_params = augmentor.AugmentParams()
         augment_config = self.config['augmentation']
@@ -185,12 +186,125 @@ class RangeViewLoader(Dataset):
         return output
 
 
+    def get_item_for_fusion(self, index):
+        """
+        Get data for fusion model (range + voxel branches).
+
+        Returns dict with:
+            - range_image: [5, H, W] range image (5 channels only)
+            - range_label: [H, W] pixel-wise labels
+            - range_mask: [H, W] valid pixel mask
+            - point_features: [N, 4] raw point features (x, y, z, intensity)
+            - point_coords: [N, 3] point coordinates
+            - point_labels: [N] per-point labels
+            - range_pxpy: [N, 2] projection coords normalized to [-1, 1]
+            - num_points: number of points
+            - index: dataset index
+        """
+        pointcloud, sem_label, inst_label = self.dataset.loadDataByIndex(index)
+        points_xyz = pointcloud[:, :3]
+        sem_label_mapped = self.dataset.labelMapping(sem_label)
+
+        # Point cloud augmentation
+        if self.is_train and (self.scan_proj is False):
+            pointcloud = self.augmentor.doAugmentation(pointcloud)
+            points_xyz = pointcloud[:, :3]
+
+        # Range projection
+        proj_pointcloud, proj_range, proj_idx, proj_mask = self.projection.doProjection(pointcloud)
+        px, py = self.projection.cached_data['px'], self.projection.cached_data['py']
+
+        # Range image features (5 channels: range, x, y, z, intensity)
+        proj_mask_tensor = torch.from_numpy(proj_mask)
+        mask = proj_idx > 0
+        proj_sem_label = np.zeros((proj_mask.shape[0], proj_mask.shape[1]), dtype=np.float32)
+        proj_sem_label[mask] = sem_label_mapped[proj_idx[mask]]
+        proj_sem_label_tensor = torch.from_numpy(proj_sem_label)
+        proj_sem_label_tensor = proj_sem_label_tensor * proj_mask_tensor.float()
+
+        proj_range_tensor = torch.from_numpy(proj_range)
+        proj_xyz_tensor = torch.from_numpy(proj_pointcloud[..., :3])
+        proj_intensity_tensor = torch.from_numpy(proj_pointcloud[..., 3])
+        proj_intensity_tensor = proj_intensity_tensor.ne(-1).float() * proj_intensity_tensor
+
+        # Only 5 channels for range branch in fusion mode
+        proj_feature_tensor = torch.cat([
+            proj_range_tensor.unsqueeze(0),
+            proj_xyz_tensor.permute(2, 0, 1),
+            proj_intensity_tensor.unsqueeze(0)
+        ], dim=0)  # [5, H, W]
+
+        # Normalize range features (first 5 channels only)
+        proj_feature_tensor = (proj_feature_tensor - self.proj_img_mean[:5, None, None]) / self.proj_img_stds[:5, None, None]
+        proj_feature_tensor = proj_feature_tensor * proj_mask_tensor.unsqueeze(0).float()
+
+        # Combine for cropping
+        proj_tensor = torch.cat([
+            proj_feature_tensor,
+            proj_sem_label_tensor.unsqueeze(0),
+            proj_mask_tensor.float().unsqueeze(0)
+        ], dim=0)  # [7, H, W]
+
+        # Apply crop
+        if self.is_train:
+            proj_tensor, px, py, points_xyz, sem_label_mapped = crop_inputs(
+                proj_tensor, px, py, points_xyz, sem_label_mapped,
+                self.crop_size, center_crop=False, p_hflip=self.proj_p_hflip)
+            # Update pointcloud for point features (after cropping)
+            pointcloud_cropped = np.zeros((points_xyz.shape[0], 4), dtype=np.float32)
+            pointcloud_cropped[:, :3] = points_xyz
+            # Intensity is lost after crop, set to zeros (will use original intensity below)
+        else:
+            _, h, w = proj_tensor.shape
+            # Normalize px, py to [-1, 1]
+            px = 2.0 * ((px / w) - 0.5)
+            py = 2.0 * ((py / h) - 0.5)
+
+        # Prepare point data
+        # Point features: x, y, z, intensity
+        if self.is_train:
+            # After cropping, we only have valid points
+            # Get intensity from the projection for cropped points
+            point_features = np.zeros((points_xyz.shape[0], 4), dtype=np.float32)
+            point_features[:, :3] = points_xyz
+            # Note: intensity may not be preserved after cropping, using zeros
+            # A more robust solution would track the original point indices
+            point_features_tensor = torch.from_numpy(point_features).float()
+            point_coords_tensor = torch.from_numpy(points_xyz).float()
+            point_labels_tensor = torch.from_numpy(sem_label_mapped).long()
+        else:
+            point_features_tensor = torch.from_numpy(pointcloud).float()  # [N, 4]
+            point_coords_tensor = torch.from_numpy(points_xyz).float()  # [N, 3]
+            point_labels_tensor = torch.from_numpy(sem_label_mapped).long()  # [N]
+
+        # Projection coordinates (px, py already normalized to [-1, 1])
+        range_pxpy_tensor = torch.stack([
+            torch.from_numpy(px).float(),
+            torch.from_numpy(py).float()
+        ], dim=1)  # [N, 2]
+
+        output = {
+            'range_image': proj_tensor[:5],  # [5, H, W]
+            'range_label': proj_tensor[5],   # [H, W]
+            'range_mask': proj_tensor[6],    # [H, W]
+            'point_features': point_features_tensor,  # [N, 4]
+            'point_coords': point_coords_tensor,      # [N, 3]
+            'point_labels': point_labels_tensor,      # [N]
+            'range_pxpy': range_pxpy_tensor,          # [N, 2]
+            'num_points': point_features_tensor.shape[0],
+            'index': index,
+        }
+
+        return output
+
     def __getitem__(self, index):
         '''
         proj_feature_tensor: CxHxW
         proj_sem_label_tensor: HxW
         proj_mask_tensor: HxW
         '''
+        if self.use_fusion_voxel:
+            return self.get_item_for_fusion(index)
         if self.use_kpconv:
             return self.get_item_for_kpconv(index)
 
@@ -318,4 +432,49 @@ def custom_collate_kpconv_fn(list_data):
             output[key] = torch.cat([v[key] for v in list_data], dim=0)
         elif key in ('num_points', 'index'):
             output[key] = torch.LongTensor([v[key] for v in list_data])
+    return output
+
+
+def custom_collate_fusion_fn(list_data):
+    """
+    Collate function for fusion model with variable-length point clouds.
+
+    Stacks range images (fixed size) and concatenates point data (variable length)
+    while tracking batch indices.
+    """
+    output = {}
+    batch_size = len(list_data)
+
+    # Stack batched tensors (fixed size)
+    output['range_image'] = torch.stack([d['range_image'] for d in list_data], dim=0)  # [B, 5, H, W]
+    output['range_label'] = torch.stack([d['range_label'] for d in list_data], dim=0)  # [B, H, W]
+    output['range_mask'] = torch.stack([d['range_mask'] for d in list_data], dim=0)    # [B, H, W]
+
+    # Concatenate variable-length point data with batch indices
+    point_features_list = []
+    point_coords_list = []
+    point_labels_list = []
+    range_pxpy_list = []
+    batch_indices_list = []
+    num_points_list = []
+
+    for batch_idx, d in enumerate(list_data):
+        n = d['num_points']
+        point_features_list.append(d['point_features'])
+        point_coords_list.append(d['point_coords'])
+        point_labels_list.append(d['point_labels'])
+        range_pxpy_list.append(d['range_pxpy'])
+
+        # Create batch indices for this sample
+        batch_indices_list.append(torch.full((n,), batch_idx, dtype=torch.long))
+        num_points_list.append(n)
+
+    output['point_features'] = torch.cat(point_features_list, dim=0)   # [N_total, 4]
+    output['point_coords'] = torch.cat(point_coords_list, dim=0)       # [N_total, 3]
+    output['point_labels'] = torch.cat(point_labels_list, dim=0)       # [N_total]
+    output['range_pxpy'] = torch.cat(range_pxpy_list, dim=0)           # [N_total, 2]
+    output['batch_indices'] = torch.cat(batch_indices_list, dim=0)     # [N_total]
+    output['num_points'] = torch.LongTensor(num_points_list)           # [B]
+    output['index'] = torch.LongTensor([d['index'] for d in list_data])  # [B]
+
     return output

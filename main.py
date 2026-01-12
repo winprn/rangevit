@@ -53,6 +53,42 @@ def build_rangevit_model(settings, pretrained_path=None):
     return model
 
 
+def build_fusion_model(settings):
+    """Build FusionRangeViT model (range + voxel branches with fusion)."""
+    model = models.FusionRangeViT(
+        # Range branch config
+        range_in_channels=settings.in_channels,
+        n_cls=settings.n_classes,
+        vit_backbone=settings.vit_backbone,
+        image_size=settings.image_size,
+        patch_size=settings.patch_size,
+        patch_stride=settings.patch_stride,
+        conv_stem=settings.conv_stem,
+        stem_base_channels=settings.stem_base_channels,
+        stem_hidden_dim=settings.D_h,
+        skip_filters=settings.skip_filters,
+        decoder=settings.decoder,
+        up_conv_d_decoder=settings.D_h,
+        up_conv_scale_factor=settings.patch_stride,
+        # Voxel branch config
+        voxel_in_channels=settings.voxel_in_channels,
+        voxel_num_layer=settings.voxel_num_layer,
+        voxel_block_type=settings.voxel_block_type,
+        voxel_cr=settings.voxel_cr,
+        voxel_planes=settings.voxel_planes,
+        voxel_pres=settings.voxel_pres,
+        voxel_vres=settings.voxel_vres,
+        voxel_dropout_p=settings.voxel_dropout_p,
+        # Fusion config
+        fusion_hidden_ratio=settings.fusion_hidden_ratio,
+        if_dist=settings.distributed,
+        # Pretrained paths (will be loaded later)
+        range_pretrained_path=settings.range_pretrained_model,
+        voxel_pretrained_path=settings.voxel_pretrained_model,
+    )
+    return model
+
+
 class Experiment(object):
     def __init__(self, settings: Option):
         self.settings = settings
@@ -132,45 +168,55 @@ class Experiment(object):
 
     def _initModel(self):
         # Model
-        model = build_rangevit_model(
-            self.settings,
-            pretrained_path=self.settings.pretrained_model)
+        if self.settings.use_fusion_voxel:
+            # Fusion model (range + voxel branches)
+            model = build_fusion_model(self.settings)
+        else:
+            # Standard RangeViT model
+            model = build_rangevit_model(
+                self.settings,
+                pretrained_path=self.settings.pretrained_model)
 
         # Freezing the ViT encoder weights.
-        if self.settings.freeze_vit_encoder:
+        if self.settings.freeze_vit_encoder and not self.settings.use_fusion_voxel:
+            # Get the encoder based on model type
+            encoder = model.rangevit.encoder
+
             print('==> Freeze the ViT encoder (without the pos_embed and stem)')
-            for param in model.rangevit.encoder.blocks.parameters():
+            for param in encoder.blocks.parameters():
                 param.requires_grad = False
 
-            model.rangevit.encoder.norm.weight.requires_grad = False
-            model.rangevit.encoder.norm.bias.requires_grad = False
+            encoder.norm.weight.requires_grad = False
+            encoder.norm.bias.requires_grad = False
 
             # Unfreeze the LayerNorm layers
             if self.settings.unfreeze_layernorm:
                 print('==> Unfreeze the LN layers')
-                model.rangevit.encoder.norm.weight.requires_grad = True
-                model.rangevit.encoder.norm.bias.requires_grad = True
-                for block_id in range(0, len(model.rangevit.encoder.blocks)):
-                    model.rangevit.encoder.blocks[block_id].norm1.weight.requires_grad = True
-                    model.rangevit.encoder.blocks[block_id].norm1.bias.requires_grad = True
-                    model.rangevit.encoder.blocks[block_id].norm2.weight.requires_grad = True
-                    model.rangevit.encoder.blocks[block_id].norm2.bias.requires_grad = True
+                encoder.norm.weight.requires_grad = True
+                encoder.norm.bias.requires_grad = True
+                for block_id in range(0, len(encoder.blocks)):
+                    encoder.blocks[block_id].norm1.weight.requires_grad = True
+                    encoder.blocks[block_id].norm1.bias.requires_grad = True
+                    encoder.blocks[block_id].norm2.weight.requires_grad = True
+                    encoder.blocks[block_id].norm2.bias.requires_grad = True
 
             if self.settings.unfreeze_attn:
                 print('==> Unfreeze the ATTN layers: qkv and proj')
-                for block_id in range(0, len(model.rangevit.encoder.blocks)):
-                    model.rangevit.encoder.blocks[block_id].attn.qkv.weight.requires_grad = True
-                    model.rangevit.encoder.blocks[block_id].attn.qkv.bias.requires_grad = True
-                    model.rangevit.encoder.blocks[block_id].attn.proj.weight.requires_grad = True
-                    model.rangevit.encoder.blocks[block_id].attn.proj.bias.requires_grad = True
+                for block_id in range(0, len(encoder.blocks)):
+                    encoder.blocks[block_id].attn.qkv.weight.requires_grad = True
+                    encoder.blocks[block_id].attn.qkv.bias.requires_grad = True
+                    encoder.blocks[block_id].attn.proj.weight.requires_grad = True
+                    encoder.blocks[block_id].attn.proj.bias.requires_grad = True
 
             if self.settings.unfreeze_ffn:
                 print('==> Unfreeze the FFN layers: mlp.fc1 and mlp.fc2')
-                for block_id in range(0, len(model.rangevit.encoder.blocks)):
-                    model.rangevit.encoder.blocks[block_id].mlp.fc1.weight.requires_grad = True
-                    model.rangevit.encoder.blocks[block_id].mlp.fc1.bias.requires_grad = True
-                    model.rangevit.encoder.blocks[block_id].mlp.fc2.weight.requires_grad = True
-                    model.rangevit.encoder.blocks[block_id].mlp.fc2.bias.requires_grad = True
+                for block_id in range(0, len(encoder.blocks)):
+                    encoder.blocks[block_id].mlp.fc1.weight.requires_grad = True
+                    encoder.blocks[block_id].mlp.fc1.bias.requires_grad = True
+                    encoder.blocks[block_id].mlp.fc2.weight.requires_grad = True
+                    encoder.blocks[block_id].mlp.fc2.bias.requires_grad = True
+        elif self.settings.freeze_vit_encoder and self.settings.use_fusion_voxel:
+            print('==> NOTE: freeze_vit_encoder is ignored for fusion model (use pretrained weights loading instead)')
 
 
         if self.recorder is not None:
@@ -193,43 +239,94 @@ class Experiment(object):
 
             checkpoint_data = torch.load(self.settings.checkpoint, map_location='cpu')
 
-            if self.settings.finetune_pretrained_model:
-                # When fine-tuning a segmentation model previously pre-trained to another dataset then it
-                # is necessary to adapt the (a) pos_embeds and (b) to remove the classification head.
-                image_size = self.model.rangevit.encoder.image_size
-                patch_stride = self.model.rangevit.encoder.patch_stride
-                if (self.model.rangevit.encoder.pos_embed.shape != checkpoint_data['model']['rangevit.encoder.pos_embed'].shape):
-                    assert self.model.rangevit.encoder.pos_embed.shape[2] == checkpoint_data['model']['rangevit.encoder.pos_embed'].shape[2]
-                    gs_new_h = int(image_size[0] // patch_stride[0])
-                    gs_new_w = int(image_size[1] // patch_stride[1])
-                    num_extra_tokens = 1
-                    assert (gs_new_h * gs_new_w + num_extra_tokens) == self.model.rangevit.encoder.pos_embed.shape[1]
-                    old_len = checkpoint_data['model']['rangevit.encoder.pos_embed'].shape[1] - num_extra_tokens # remove one for the classification token
+            if self.settings.use_fusion_voxel:
+                # Fusion model checkpoint loading
+                if 'fusion_state' in checkpoint_data:
+                    # New fusion checkpoint format with separate component states
+                    print('==> Loading fusion model checkpoint (component format)')
+                    self.model.load_checkpoint_state(checkpoint_data['fusion_state'], strict=False)
+                elif 'model' in checkpoint_data:
+                    # Try to load as standard state_dict (backward compatibility)
+                    print('==> Loading fusion model checkpoint (standard format)')
+                    msg = self.model.load_state_dict(checkpoint_data['model'], strict=False)
+                    print(f'==> Load checkpoint msg: {msg}')
+                else:
+                    raise ValueError('Invalid checkpoint format for fusion model')
 
-                    gs_old_w = gs_new_w
-                    gs_old_h = old_len // gs_old_w
-                    checkpoint_data['model']['rangevit.encoder.pos_embed'] = (
-                        resize_pos_embed(checkpoint_data['model']['rangevit.encoder.pos_embed'],
-                                         grid_old_shape=(gs_old_h, gs_old_w),
-                                         grid_new_shape=(gs_new_h, gs_new_w),
-                                         num_extra_tokens=num_extra_tokens))
-                assert self.model.rangevit.encoder.pos_embed.shape == checkpoint_data['model']['rangevit.encoder.pos_embed'].shape
+                if not self.settings.finetune_pretrained_model:
+                    print(f'==> Loading optimizer')
+                    if self.settings.val_only is False and 'optimizer' in checkpoint_data:
+                        self.trainer.optimizer.load_state_dict(checkpoint_data['optimizer'])
+                    if 'epoch' in checkpoint_data:
+                        self.epoch_start = checkpoint_data['epoch'] + 1
 
-                for key in ('rangevit.kpclassifier.head.weight', 'rangevit.kpclassifier.head.bias'):
-                    del checkpoint_data['model'][key]
+                    if ('fp16_scaler' in checkpoint_data) and (checkpoint_data['fp16_scaler'] is not None):
+                        self.trainer.fp16_scaler.load_state_dict(checkpoint_data['fp16_scaler'])
+            else:
+                # Standard RangeViT checkpoint loading
+                if self.settings.finetune_pretrained_model:
+                    # When fine-tuning a segmentation model previously pre-trained to another dataset then it
+                    # is necessary to adapt the (a) pos_embeds and (b) to remove the classification head.
+                    image_size = self.model.rangevit.encoder.image_size
+                    patch_stride = self.model.rangevit.encoder.patch_stride
+                    if (self.model.rangevit.encoder.pos_embed.shape != checkpoint_data['model']['rangevit.encoder.pos_embed'].shape):
+                        assert self.model.rangevit.encoder.pos_embed.shape[2] == checkpoint_data['model']['rangevit.encoder.pos_embed'].shape[2]
+                        gs_new_h = int(image_size[0] // patch_stride[0])
+                        gs_new_w = int(image_size[1] // patch_stride[1])
+                        num_extra_tokens = 1
+                        assert (gs_new_h * gs_new_w + num_extra_tokens) == self.model.rangevit.encoder.pos_embed.shape[1]
+                        old_len = checkpoint_data['model']['rangevit.encoder.pos_embed'].shape[1] - num_extra_tokens # remove one for the classification token
 
-            checkpoint_data_model = checkpoint_data['model']
-            msg = self.model.load_state_dict(checkpoint_data_model, strict=(not self.settings.finetune_pretrained_model))
-            #print(f'msg = {msg}')
+                        gs_old_w = gs_new_w
+                        gs_old_h = old_len // gs_old_w
+                        checkpoint_data['model']['rangevit.encoder.pos_embed'] = (
+                            resize_pos_embed(checkpoint_data['model']['rangevit.encoder.pos_embed'],
+                                             grid_old_shape=(gs_old_h, gs_old_w),
+                                             grid_new_shape=(gs_new_h, gs_new_w),
+                                             num_extra_tokens=num_extra_tokens))
+                    assert self.model.rangevit.encoder.pos_embed.shape == checkpoint_data['model']['rangevit.encoder.pos_embed'].shape
 
-            if not self.settings.finetune_pretrained_model:
-                print(f'==> Loading optimizer')
-                if self.settings.val_only is False:
-                    self.trainer.optimizer.load_state_dict(checkpoint_data['optimizer'])
-                self.epoch_start = checkpoint_data['epoch'] + 1
+                    for key in ('rangevit.kpclassifier.head.weight', 'rangevit.kpclassifier.head.bias'):
+                        del checkpoint_data['model'][key]
 
-                if ('fp16_scaler' in checkpoint_data) and (checkpoint_data['fp16_scaler'] is not None):
-                    self.trainer.fp16_scaler.load_state_dict(checkpoint_data['fp16_scaler'])
+                checkpoint_data_model = checkpoint_data['model']
+                msg = self.model.load_state_dict(checkpoint_data_model, strict=(not self.settings.finetune_pretrained_model))
+                #print(f'msg = {msg}')
+
+                if not self.settings.finetune_pretrained_model:
+                    print(f'==> Loading optimizer')
+                    if self.settings.val_only is False:
+                        self.trainer.optimizer.load_state_dict(checkpoint_data['optimizer'])
+                    self.epoch_start = checkpoint_data['epoch'] + 1
+
+                    if ('fp16_scaler' in checkpoint_data) and (checkpoint_data['fp16_scaler'] is not None):
+                        self.trainer.fp16_scaler.load_state_dict(checkpoint_data['fp16_scaler'])
+
+    def _get_checkpoint_data(self, epoch, extra_data=None):
+        """Get checkpoint data, handling fusion model format."""
+        if self.settings.use_fusion_voxel:
+            # Use component-based checkpoint format for fusion model
+            checkpoint_data = {
+                'model': self.model.state_dict(),  # Standard format for backward compatibility
+                'fusion_state': self.model.get_checkpoint_state(),  # Component-based format
+                'optimizer': self.trainer.optimizer.state_dict(),
+                'epoch': epoch,
+            }
+        else:
+            # Standard checkpoint format for RangeViT
+            checkpoint_data = {
+                'model': self.model.state_dict(),
+                'optimizer': self.trainer.optimizer.state_dict(),
+                'epoch': epoch,
+            }
+
+        if self.trainer.fp16_scaler is not None:
+            checkpoint_data['fp16_scaler'] = self.trainer.fp16_scaler.state_dict()
+
+        if extra_data is not None:
+            checkpoint_data.update(extra_data)
+
+        return checkpoint_data
 
     def _finalize_mlflow(self, status='FINISHED'):
         if self._mlflow_finalized:
@@ -286,16 +383,7 @@ class Experiment(object):
                                 self.recorder.checkpoint_path, 'best_{}_model_from_start_{}.pth'.format(k, self.epoch_start))
                             best_val_result[k] = v
 
-                            checkpoint_data = {
-                                'model': self.model.state_dict(),
-                                'optimizer': self.trainer.optimizer.state_dict(),
-                                'epoch': epoch,
-                                k: v,
-                            }
-
-                            if self.trainer.fp16_scaler is not None:
-                                checkpoint_data['fp16_scaler'] = self.trainer.fp16_scaler.state_dict()
-
+                            checkpoint_data = self._get_checkpoint_data(epoch, extra_data={k: v})
                             torch.save(checkpoint_data, saved_path)
                             if self.epoch_start > 0:
                                 torch.save(checkpoint_data, saved_path_start)
@@ -308,14 +396,7 @@ class Experiment(object):
             # Save checkpoint
             if self.recorder is not None:
                 saved_path = os.path.join(self.recorder.checkpoint_path, 'checkpoint.pth')
-
-                checkpoint_data = {
-                    'model': self.model.state_dict(),
-                    'optimizer': self.trainer.optimizer.state_dict(),
-                    'epoch': epoch,
-                }
-                if self.trainer.fp16_scaler is not None:
-                    checkpoint_data['fp16_scaler'] = self.trainer.fp16_scaler.state_dict()
+                checkpoint_data = self._get_checkpoint_data(epoch)
                 torch.save(checkpoint_data, saved_path)
 
                 # Logging best results
