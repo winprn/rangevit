@@ -29,6 +29,7 @@ def get_world_size():
 
 
 def is_dist_avail_and_initialized():
+    print("is distributed", dist.is_available())
     if not dist.is_available():
         return False
     if not dist.is_initialized():
