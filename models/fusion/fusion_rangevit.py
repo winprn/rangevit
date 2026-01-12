@@ -531,6 +531,23 @@ class FusionRangeViT(nn.Module):
         if 'classifier' in checkpoint:
             self.classifier.load_state_dict(checkpoint['classifier'], strict=strict)
 
+    def counter_model_parameters(self):
+        """Count trainable parameters in each model component."""
+        stats = {}
+        stats['total_num_parameters'] = count_parameters(self)
+        stats['range_encoder_num_parameters'] = count_parameters(self.range_encoder)
+        stats['range_decoder_num_parameters'] = count_parameters(self.range_decoder)
+        stats['voxel_branch_num_parameters'] = count_parameters(self.voxel_branch)
+        stats['fusion_modules_num_parameters'] = count_parameters(self.fusion_modules)
+        stats['point_transforms_num_parameters'] = count_parameters(self.point_transforms)
+        stats['classifier_num_parameters'] = count_parameters(self.classifier)
+        return stats
+
+
+def count_parameters(model):
+    """Count trainable parameters in a model."""
+    return sum(p.numel() for p in model.parameters() if p.requires_grad)
+
 
 # Import torchsparse at module level for cat operation
 try:
