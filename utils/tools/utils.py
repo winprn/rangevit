@@ -53,6 +53,7 @@ def dist_barrier():
 
 def init_distributed_mode(args):
     if 'RANK' in os.environ and 'WORLD_SIZE' in os.environ:
+        print("found rank")
         args.rank = int(os.environ['RANK'])
         args.world_size = int(os.environ['WORLD_SIZE'])
         args.gpu = int(os.environ['LOCAL_RANK'])
@@ -66,6 +67,7 @@ def init_distributed_mode(args):
         args.distributed = False
         return
 
+    print("setting device to ", args.gpu)
     torch.cuda.set_device(args.gpu)
     args.distributed = True
     args.dist_backend = 'nccl'
