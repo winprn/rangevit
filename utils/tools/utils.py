@@ -32,6 +32,7 @@ def is_dist_avail_and_initialized():
     print("is distributed", dist.is_available())
     if not dist.is_available():
         return False
+    print("is initialized", dist.is_initialized())
     if not dist.is_initialized():
         return False
     return True
