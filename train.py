@@ -31,6 +31,33 @@ from utils.metrics.tensorboard_logger import tensorboard_logger
 from utils.inference.inference_utils import inference
 from utils.tools import Recorder
 
+import torchsparse
+import torchsparse.nn as spnn
+from torchsparse import SparseTensor
+from torchsparse.nn.utils import fapply
+
+
+class TorchSparseSyncBatchNorm(nn.SyncBatchNorm):
+
+    def forward(self, input: SparseTensor) -> SparseTensor:
+        if isinstance(input, SparseTensor):
+            return fapply(input, super().forward)
+        return super().forward(input)
+
+
+def convert_sparse_sync_batchnorm(module):
+    """ Recursively replaces all torchsparse.nn.BatchNorm with SparseSyncBatchNorm. """
+    module_output = module
+
+
+    if isinstance(module, (torchsparse.nn.BatchNorm, nn.BatchNorm1d, nn.BatchNorm2d, nn.BatchNorm3d)):  # Convert standard BN
+        module_output = TorchSparseSyncBatchNorm(module.num_features)
+
+    # Recursively apply conversion to child modules
+    for name, child in module.named_children():
+        module_output.add_module(name, convert_sparse_sync_batchnorm(child))
+
+    return module_output
 
 class Trainer(object):
     def __init__(self, settings: Option, model: nn.Module, recorder=None, mlflow_manager=None):
@@ -52,7 +79,7 @@ class Trainer(object):
         self.optimizer = self._initOptimizer()
 
         if tools.is_dist_avail_and_initialized():
-            self.model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(self.model).cuda()
+            self.model = convert_sparse_sync_batchnorm(self.model).cuda()
             self.model = nn.parallel.DistributedDataParallel(
                 	self.model, device_ids=[self.settings.gpu],
                     find_unused_parameters=True)
