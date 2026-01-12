@@ -59,6 +59,8 @@ class Experiment(object):
 
         # Init gpu
 
+        print("ENV RANK/WORLD_SIZE/LOCAL_RANK:", os.environ.get("RANK"), os.environ.get("WORLD_SIZE"), os.environ.get("LOCAL_RANK"), "SLURM_PROCID:", os.environ.get("SLURM_PROCID"), flush=True)
+
         if tools.is_dist_avail_and_initialized():
             tools.init_distributed_mode(self.settings)
         # torch.distributed.barrier()
