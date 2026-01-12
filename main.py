@@ -31,8 +31,8 @@ from models.model_utils import resize_pos_embed
 from utils.tools.mlflow_utils import MLflowManager
 
 
-def build_rangevit_model(settings, pretrained_path=None):
-    model = models.RangeViT(
+def build_model(settings, pretrained_path=None):
+    model = models.RangeSeg(
         in_channels=settings.in_channels,
         n_cls=settings.n_classes,
         backbone=settings.vit_backbone,
@@ -131,7 +131,7 @@ class Experiment(object):
 
     def _initModel(self):
         # Model
-        model = build_rangevit_model(
+        model = build_model(
             self.settings,
             pretrained_path=self.settings.pretrained_model)
         print(f"Backbone from config: {self.settings.vit_backbone}")

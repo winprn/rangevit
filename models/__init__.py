@@ -1,1 +1,3 @@
-from .rangevit import RangeViT
+from .rangevit import RangeSeg
+
+__all__ = ["RangeSeg"]

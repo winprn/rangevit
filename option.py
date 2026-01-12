@@ -73,7 +73,12 @@ class Option(object):
 
 
         # Model config
-        self.vit_backbone = self.config.get('vit_backbone', 'vit_small_patch16_384')
+        self.encoder_backbone = self.config.get(
+            'encoder_backbone',
+            self.config.get('vit_backbone', 'vit_small_patch16_384')
+        )
+        # Backward compatibility: keep vit_backbone for older code/configs.
+        self.vit_backbone = self.encoder_backbone
         self.in_channels = self.config.get('in_channels', 5)
         self.patch_size = self.config.get('patch_size', [2, 8])
         self.patch_stride = self.config.get('patch_stride', [2, 8])

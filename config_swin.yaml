@@ -20,7 +20,7 @@ lr: 0.0006 # Slightly lower LR for Swin Transformer
 train_result_frequency: 100 # printing frequency of the train results
 
 # Model config
-vit_backbone: 'swin_small_patch4_window7_224'  # Use Swin Transformer V2
+encoder_backbone: 'swin_small_patch4_window7_224'  # Use Swin Transformer V2
 in_channels: 5
 patch_size: [2, 8]  # patch size = patch stride if a convolutional stem (ConvStem) is used
 patch_stride: [2, 8]

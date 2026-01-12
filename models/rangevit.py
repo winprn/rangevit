@@ -17,144 +17,13 @@ import torch.nn as nn
 import torch.nn.functional as F
 import copy
 import timm
-from timm.models.layers import trunc_normal_
 
-from .blocks import Block
-from .model_utils import adapt_input_conv, padding, unpadding, resize_pos_embed, init_weights
-from .stems import PatchEmbedding, ConvStem
+from .model_utils import adapt_input_conv, padding, unpadding, resize_pos_embed
 from .decoders import DecoderLinear, DecoderUpConv
 from .rangevit_kpconv import RangeViT_KPConv, KPClassifier
-from .swin_transformer_v2 import SwinTransformerV2, create_swin_v2
-from .tinyvim_adapter import TinyViMAdapter
+from .encoders.factory import create_encoder
+from .encoders.tinyvim import TinyViMEncoder
 from .tinyvim.fpn_decoder import TinyViMFPNDecoder
-
-
-class VisionTransformer(nn.Module):
-    def __init__(
-        self,
-        image_size,
-        patch_size,
-        n_layers,
-        d_model,
-        d_ff,
-        n_heads,
-        n_cls,
-        dropout=0.1,
-        drop_path_rate=0.0,
-        channels=3,
-        ls_init_values=None,
-        patch_stride=None,
-        conv_stem='none',
-        stem_base_channels=32,
-        stem_hidden_dim=None,
-    ):
-        super().__init__()
-
-        self.conv_stem = conv_stem
-
-        if self.conv_stem == 'none':
-            self.patch_embed = PatchEmbedding(
-                image_size,
-                patch_size,
-                patch_stride,
-                d_model,
-                channels,)
-        else:   # in this case self.conv_stem = 'ConvStem'
-            assert patch_stride == patch_size # patch_size = patch_stride if a convolutional stem is used
-
-            self.patch_embed = ConvStem(
-                in_channels=channels,
-                base_channels=stem_base_channels,
-                img_size=image_size,
-                patch_stride=patch_stride,
-                embed_dim=d_model,
-                flatten=True,
-                hidden_dim=stem_hidden_dim)
-
-        self.patch_size = patch_size
-        self.PS_H, self.PS_W = patch_size
-        self.patch_stride = patch_stride
-        self.n_layers = n_layers
-        self.d_model = d_model
-        self.d_ff = d_ff
-        self.n_heads = n_heads
-        self.dropout = nn.Dropout(dropout)
-        self.n_cls = n_cls
-        self.image_size = image_size
-
-        # cls and pos tokens
-        self.cls_token = nn.Parameter(torch.zeros(1, 1, d_model))
-        self.pos_embed = nn.Parameter(
-            torch.randn(1, self.patch_embed.num_patches + 1, d_model))
-
-        # Transformer blocks
-        dpr = [x.item() for x in torch.linspace(0, drop_path_rate, n_layers)]
-        self.blocks = nn.ModuleList(
-                [Block(d_model, n_heads, d_ff, dropout, dpr[i], init_values=ls_init_values) for i in range(n_layers)]
-            )
-
-        self.norm = nn.LayerNorm(d_model)
-
-        trunc_normal_(self.pos_embed, std=0.02)
-        trunc_normal_(self.cls_token, std=0.02)
-
-        self.apply(init_weights)
-
-    @torch.jit.ignore
-    def no_weight_decay(self):
-        return {'pos_embed', 'cls_token'}
-
-    def get_grid_size(self, H, W):
-        return self.patch_embed.get_grid_size(H, W)
-
-    def forward(self, im, return_features=False):
-        B, _, H, W = im.shape
-        x, skip = self.patch_embed(im) # x.shape = [16, 576, 384]
-
-        cls_tokens = self.cls_token.expand(B, -1, -1)
-        x = torch.cat((cls_tokens, x), dim=1) # x.shape = [16, 577, 384]
-
-        pos_embed = self.pos_embed
-        num_extra_tokens = 1
-
-        if x.shape[1] != pos_embed.shape[1]:
-            grid_H, grid_W = self.get_grid_size(H, W)
-            pos_embed = resize_pos_embed(
-                pos_embed,
-                self.patch_embed.grid_size,
-                (grid_H, grid_W),
-                num_extra_tokens,
-            )
-
-        x = x + pos_embed
-        x = self.dropout(x)
-
-        for blk in self.blocks:
-            x = blk(x)
-
-        x = self.norm(x)
-
-        return x, skip  # x.shape = [16, 577, 384]
-
-
-def create_vit(model_cfg):
-    model_cfg = model_cfg.copy()
-    model_cfg.pop('backbone')
-    mlp_expansion_ratio = 4
-    model_cfg['d_ff'] = mlp_expansion_ratio * model_cfg['d_model']
-
-    new_patch_size = model_cfg.pop('new_patch_size')
-    new_patch_stride = model_cfg.pop('new_patch_stride')
-
-    if (new_patch_size is not None):
-        if new_patch_stride is None:
-            new_patch_stride = new_patch_size
-        model_cfg['patch_size'] = new_patch_size
-        model_cfg['patch_stride'] = new_patch_stride
-
-    model = VisionTransformer(**model_cfg)
-
-    return model
 
 
 def create_decoder(encoder, decoder_cfg):
@@ -170,7 +39,7 @@ def create_decoder(encoder, decoder_cfg):
         decoder_cfg['patch_stride'] = encoder.patch_stride
         decoder = DecoderUpConv(**decoder_cfg)
     elif name == 'fpn':
-        if not isinstance(encoder, TinyViMAdapter):
+        if not isinstance(encoder, TinyViMEncoder):
             raise ValueError('FPN decoder is only supported for TinyViM backbones.')
         decoder = TinyViMFPNDecoder(
             in_channels=encoder.embed_dims,
@@ -184,26 +53,12 @@ def create_decoder(encoder, decoder_cfg):
     return decoder
 
 
-def create_rangevit(model_cfg, use_kpconv=False):
+def create_range_model(model_cfg, use_kpconv=False):
     model_cfg = model_cfg.copy()
     decoder_cfg = model_cfg.pop('decoder')
     decoder_cfg['n_cls'] = model_cfg['n_cls']
 
-    # Choose encoder architecture
-    backbone = model_cfg.get('backbone', 'vit_small_patch16_384')
-    if backbone.startswith('swin'):
-        encoder = create_swin_v2(model_cfg)
-    elif backbone.startswith('tinyvim'):
-        # For TinyViM, we pass the full config or specific args
-        # Since TinyViMAdapter expects 'backbone_name' and handles capacity internally
-        model_cfg['backbone_name'] = backbone
-        if decoder_cfg.get('name') == 'fpn':
-            model_cfg['use_fpn_decoder'] = True
-        # Tell adapter whether we're loading pretrained stem weights
-        model_cfg['load_pretrained_stem'] = (model_cfg.get('pretrained_path') is not None)
-        encoder = TinyViMAdapter(**model_cfg)
-    else:
-        encoder = create_vit(model_cfg)
+    encoder = create_encoder(model_cfg, decoder_name=decoder_cfg.get('name'))
     
     decoder = create_decoder(encoder, decoder_cfg)
 
@@ -214,12 +69,16 @@ def create_rangevit(model_cfg, use_kpconv=False):
             num_classes=model_cfg['n_cls'])
         model = RangeViT_KPConv(encoder, decoder, kpclassifier, n_cls=model_cfg['n_cls'])
     else:
-        model = RangeViT_noKPConv(encoder, decoder, n_cls=model_cfg['n_cls'])
+        model = RangeSegNoKPConv(encoder, decoder, n_cls=model_cfg['n_cls'])
 
     return model
 
 
-class RangeViT_noKPConv(nn.Module):
+def create_rangevit(model_cfg, use_kpconv=False):
+    return create_range_model(model_cfg, use_kpconv=use_kpconv)
+
+
+class RangeSegNoKPConv(nn.Module):
     def __init__(
         self,
         encoder,
@@ -261,7 +120,7 @@ class RangeViT_noKPConv(nn.Module):
         return feats
 
 
-class RangeViT(nn.Module):
+class RangeSeg(nn.Module):
     def __init__(
         self,
         in_channels=5,
@@ -286,7 +145,7 @@ class RangeViT(nn.Module):
         fpn_dropout=0.1,
         use_kpconv=False,
         ):
-        super(RangeViT, self).__init__()
+        super(RangeSeg, self).__init__()
 
         self.n_cls = n_cls
 
@@ -396,8 +255,8 @@ class RangeViT(nn.Module):
         }
 
 
-        # Create RangeViT model
-        self.rangevit = create_rangevit(net_kwargs, use_kpconv)
+        # Create RangeSeg model
+        self.rangevit = create_range_model(net_kwargs, use_kpconv)
 
         old_state_dict = self.rangevit.state_dict()
 
@@ -527,7 +386,7 @@ def count_parameters(model):
 
 
 if __name__ == '__main__':
-    model = RangeViT(in_channels=5,
+    model = RangeSeg(in_channels=5,
                      n_cls=17,
                      backbone='vit_small_patch16_384',
                      decoder='linear',

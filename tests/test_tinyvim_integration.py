@@ -15,12 +15,12 @@ mock_ss_cuda.fwd = mock_fwd
 sys.modules['selective_scan_cuda'] = mock_ss_cuda
 
 import torch
-from models.rangevit import RangeViT
+from models.rangevit import RangeSeg
 
 def test_tinyvim_integration():
     print("Testing TinyViM Integration...")
     try:
-        model = RangeViT(
+        model = RangeSeg(
             in_channels=5,
             n_cls=17,
             backbone='tinyvim_large',
@@ -40,10 +40,10 @@ def test_tinyvim_integration():
 
     input_tensor = torch.randn(1, 5, 64, 768)
     try:
-        # RangeViT forward might expect padded input logic if not handled inside?
-        # RangeViT.forward does padding(im, self.patch_size). 
+        # RangeSeg forward might expect padded input logic if not handled inside?
+        # RangeSeg.forward does padding(im, self.patch_size).
         # But TinyViMAdapter might have different patch size?
-        # RangeViT uses encoder.patch_size. Adapter sets it to (4, 4).
+        # RangeSeg uses encoder.patch_size. Adapter sets it to (4, 4).
         output = model(input_tensor)
         print(f"Forward pass successful. Output shape: {output.shape}")
     except Exception as e:
@@ -65,13 +65,13 @@ def test_weight_loading():
     torch.save(dummy_state_dict, ckpt_path)
     
     try:
-        # Instantiate RangeViT with this checkpoint
+        # Instantiate RangeSeg with this checkpoint
         # It should try to load.
         # Note: In our adapter, we replace the first conv (channels 5 vs 3).
         # So 'patch_embed.0.c.weight' will be mismatched in shape.
-        # RangeViT init logic handles re-init/adaptation for 'patch_embed.proj.weight' (lines 421+).
+        # RangeSeg init logic handles re-init/adaptation for 'patch_embed.proj.weight' (lines 421+).
         # But TinyViM names are different ('patch_embed.0.c.weight' vs 'patch_embed.proj.weight').
-        # So standard RangeViT adaptation logic WON'T work for TinyViM keys.
+        # So standard RangeSeg adaptation logic WON'T work for TinyViM keys.
         # However, we implemented manual adaptation in TinyViMAdapter.__init__.
         # Loading happens AFTER init.
         # So we load 3-channel weight into 5-channel layer? No, that fails size mismatch.
@@ -79,7 +79,7 @@ def test_weight_loading():
         # We need to verify if we can load at least the OTHER weights.
         # And we normally expect strict=False.
         
-        model = RangeViT(
+        model = RangeSeg(
             in_channels=5,
             n_cls=17,
             backbone='tinyvim_large',
@@ -87,11 +87,11 @@ def test_weight_loading():
             image_size=(64, 2048),
             pretrained_path=ckpt_path
         )
-        print("Weight loading test: RangeViT instantiated (loading didn't crash).")
+        print("Weight loading test: RangeSeg instantiated (loading didn't crash).")
         
         # basic check
         # We need to check if keys were loaded.
-        # RangeViT loads into self.rangevit.
+        # RangeSeg loads into self.rangevit.
         # We want to check if 'encoder.model.network.0.0.mk' exists in state_dict (it won't because it's dummy).
         # But we can check if it attempted to load.
         
