@@ -110,9 +110,9 @@ def point_to_voxel(x: SparseTensor, z: PointTensor) -> SparseTensor:
 
     inserted_feat = spF.spvoxelize(z.F, idx_query, counts)
     new_tensor = SparseTensor(inserted_feat, x.C, x.s)
-    new_tensor._caches.cmaps = x._caches.cmaps
-    # Note: Don't copy kmaps - they are stale after feature fusion
-    # torchsparse will rebuild them when convolutions run
+    # Only set the coordinate map for current stride, don't copy entire cache
+    # Copying stale caches causes CUDA errors in downstream convolutions
+    new_tensor._caches.cmaps.setdefault(new_tensor.stride, new_tensor.coords)
 
     return new_tensor
 
