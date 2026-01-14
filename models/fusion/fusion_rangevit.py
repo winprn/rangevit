@@ -431,6 +431,24 @@ class FusionRangeViT(nn.Module):
         print(f"[DEBUG] After stem: coords={x0.C.shape}, feats={x0.F.shape}, stride={x0.s}")
         import sys; sys.stdout.flush()
 
+        # TEST: Run voxel branch standalone (without fusion) to check if torchsparse works
+        print("[DEBUG] Testing voxel branch standalone (no fusion)...")
+        import sys; sys.stdout.flush()
+        try:
+            _x1 = self.voxel_branch.stage1(x0)
+            print(f"[DEBUG] Standalone x1: coords={_x1.C.shape}, stride={_x1.s}")
+            _x2 = self.voxel_branch.stage2(_x1)
+            print(f"[DEBUG] Standalone x2: coords={_x2.C.shape}, stride={_x2.s}")
+            _x3 = self.voxel_branch.stage3(_x2)
+            print(f"[DEBUG] Standalone x3: coords={_x3.C.shape}, stride={_x3.s}")
+            _x4 = self.voxel_branch.stage4(_x3)
+            print(f"[DEBUG] Standalone x4: coords={_x4.C.shape}, stride={_x4.s}")
+            print("[DEBUG] Voxel branch standalone test PASSED!")
+            del _x1, _x2, _x3, _x4
+        except Exception as e:
+            print(f"[DEBUG] Voxel branch standalone test FAILED: {e}")
+        import sys; sys.stdout.flush()
+
         # Fusion at point level
         z0_voxel = voxel_to_point(x0, z)
         z0_range = range_to_point(skip, range_pxpy, batch_indices, B)
@@ -462,7 +480,15 @@ class FusionRangeViT(nn.Module):
         import sys; sys.stdout.flush()
 
         x2 = self.voxel_branch.stage2(x1)
+        print(f"[DEBUG] x2: coords={x2.C.shape}, feats={x2.F.shape}, stride={x2.s}")
+        print(f"[DEBUG] x2 coords range: min={x2.C.min(dim=0).values.tolist()}, max={x2.C.max(dim=0).values.tolist()}")
+        import sys; sys.stdout.flush()
+
         x3 = self.voxel_branch.stage3(x2)
+        print(f"[DEBUG] x3: coords={x3.C.shape}, feats={x3.F.shape}, stride={x3.s}")
+        print(f"[DEBUG] x3 coords range: min={x3.C.min(dim=0).values.tolist()}, max={x3.C.max(dim=0).values.tolist()}")
+        import sys; sys.stdout.flush()
+
         x4 = self.voxel_branch.stage4(x3)  # Bottleneck
 
         # Fusion at point level
