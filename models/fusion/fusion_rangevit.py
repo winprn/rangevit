@@ -416,9 +416,20 @@ class FusionRangeViT(nn.Module):
         range_stem_out, skip = self.range_encoder.patch_embed(range_image_padded)
         # skip: [B, D_h, H, W] (ConvStem hidden dim output before proj)
 
+        # DEBUG: Print input point info
+        print(f"[DEBUG] Input points: {point_coords.shape[0]} points, coords range: min={point_coords.min(dim=0).values.tolist()}, max={point_coords.max(dim=0).values.tolist()}")
+        print(f"[DEBUG] voxel_pres={self.voxel_pres}, voxel_vres={self.voxel_vres}")
+        import sys; sys.stdout.flush()
+
         # Voxel stem
         x0 = initial_voxelize(z, self.voxel_pres, self.voxel_vres)
+        print(f"[DEBUG] After voxelize: coords={x0.C.shape}, feats={x0.F.shape}, stride={x0.s}")
+        print(f"[DEBUG] After voxelize coords range: min={x0.C.min(dim=0).values.tolist()}, max={x0.C.max(dim=0).values.tolist()}")
+        import sys; sys.stdout.flush()
+
         x0 = self.voxel_branch.stem(x0)
+        print(f"[DEBUG] After stem: coords={x0.C.shape}, feats={x0.F.shape}, stride={x0.s}")
+        import sys; sys.stdout.flush()
 
         # Fusion at point level
         z0_voxel = voxel_to_point(x0, z)
@@ -441,6 +452,15 @@ class FusionRangeViT(nn.Module):
 
         # Voxel encoder stages
         x1 = self.voxel_branch.stage1(x0_fused)
+
+        # DEBUG: Print tensor info before stage2
+        print(f"[DEBUG] x0_fused: coords={x0_fused.C.shape}, feats={x0_fused.F.shape}, stride={x0_fused.s}")
+        print(f"[DEBUG] x0_fused coords range: min={x0_fused.C.min(dim=0).values.tolist()}, max={x0_fused.C.max(dim=0).values.tolist()}")
+        print(f"[DEBUG] x1: coords={x1.C.shape}, feats={x1.F.shape}, stride={x1.s}")
+        print(f"[DEBUG] x1 coords range: min={x1.C.min(dim=0).values.tolist()}, max={x1.C.max(dim=0).values.tolist()}")
+        print(f"[DEBUG] x1 num voxels: {x1.C.shape[0]}")
+        import sys; sys.stdout.flush()
+
         x2 = self.voxel_branch.stage2(x1)
         x3 = self.voxel_branch.stage3(x2)
         x4 = self.voxel_branch.stage4(x3)  # Bottleneck
