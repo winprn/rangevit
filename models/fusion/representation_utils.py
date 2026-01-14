@@ -111,7 +111,8 @@ def point_to_voxel(x: SparseTensor, z: PointTensor) -> SparseTensor:
     inserted_feat = spF.spvoxelize(z.F, idx_query, counts)
     new_tensor = SparseTensor(inserted_feat, x.C, x.s)
     new_tensor._caches.cmaps = x._caches.cmaps
-    new_tensor._caches.kmaps = x._caches.kmaps
+    # Note: Don't copy kmaps - they are stale after feature fusion
+    # torchsparse will rebuild them when convolutions run
 
     return new_tensor
 
