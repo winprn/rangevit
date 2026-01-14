@@ -557,4 +557,131 @@ D:\rangevit\
   - 3-stage fusion with point hub
   - MinkUNet voxel encoder
   - Concat + MLP fusion
-  - Separate checkpoint handling
+
+---
+
+## Active Debugging Session (January 2026)
+
+### Problem Description
+
+Training crashes with CUDA error during voxel branch forward pass:
+```
+RuntimeError: CUDA error: invalid configuration argument
+```
+
+**Error Location:** `torchsparse/nn/functional/conv/hash/query.py` line 48 in `convert_transposed_out_in_map` → `torch.full()`
+
+**Error Path:** `fusion_rangevit.py` → `voxel_branch.stageX()` → `BasicConvolutionBlock` → `spnn.Conv3d` → `build_kernel_map`
+
+### Root Cause Analysis
+
+**Discovered Issues:**
+
+1. **Negative Coordinates Issue (FIXED)**
+   - torchsparse has issues with negative voxel coordinates during strided convolutions
+   - Original point cloud has coords like `[-80, -61, -5]` to `[18, 67, 2]`
+   - Fix: Offset spatial coordinates to be non-negative in `initial_voxelize()`
+
+2. **Batch Index Corruption (FIXED)**
+   - torchsparse applies stride to ALL 4 coordinate dimensions, including batch index
+   - With stride (2,2,2), batch index gets divided: batch 3 → 1 → 0
+   - Fix: Scale batch index by 16 (2^4) before voxelization to survive 4 stride-2 operations
+   - After fix: batch 0→0, 1→16→8→4→2→1, 2→32→16→8→4→2, 3→48→24→12→6→3
+
+3. **Persistent CUDA Error (UNDER INVESTIGATION)**
+   - Even after coordinate fixes, error persists but moves to later stages
+   - Initially failed at stage2, then stage3, then stage4
+   - Suggests deeper issue with torchsparse or `point_to_voxel` function
+
+### Changes Made to `representation_utils.py`
+
+```python
+def initial_voxelize(z: PointTensor, init_res: float, after_res: float) -> SparseTensor:
+    # Scale spatial coordinates
+    scaled_coords = (z.C[:, :3] * init_res) / after_res
+
+    # FIX 1: Offset spatial coordinates to be non-negative
+    coord_min = scaled_coords.min(dim=0).values
+    scaled_coords = scaled_coords - coord_min  # Now all >= 0
+
+    # FIX 2: Scale batch index to survive stride operations
+    batch_scale = 16
+    scaled_batch = z.C[:, -1:] * batch_scale
+
+    new_float_coord = torch.cat([scaled_coords, scaled_batch], 1)
+    # ... rest of function
+```
+
+```python
+def point_to_voxel(x: SparseTensor, z: PointTensor) -> SparseTensor:
+    # ...
+    new_tensor = SparseTensor(inserted_feat, x.C, x.s)
+    # FIX 3: Only set cmaps for current stride, don't copy stale caches
+    new_tensor._caches.cmaps.setdefault(new_tensor.stride, new_tensor.coords)
+    # NOTE: Removed kmaps copying - was causing issues
+    return new_tensor
+```
+
+### Debug Logging Added to `fusion_rangevit.py`
+
+Current debug output shows:
+```
+[DEBUG] Input points: 176506 points
+[DEBUG] After voxelize: coords=torch.Size([4581, 4]), stride=(1, 1, 1)
+[DEBUG] After voxelize coords range: min=[0, 0, 0, 0], max=[98, 128, 7, 48]
+[DEBUG] x1: coords=torch.Size([2252, 4]), stride=(2, 2, 2)
+[DEBUG] x1 coords range: min=[0, 7, 0, 0], max=[98, 63, 3, 16]
+```
+
+**Key Observation:** Batch index max=48 after voxelize, max=16 after stage1 (correctly divided by 2)
+
+### Standalone Test Added
+
+A standalone test was added to check if voxel branch works without fusion:
+```python
+# TEST: Run voxel branch standalone (without fusion) to check if torchsparse works
+try:
+    _x1 = self.voxel_branch.stage1(x0)
+    _x2 = self.voxel_branch.stage2(_x1)
+    _x3 = self.voxel_branch.stage3(_x2)
+    _x4 = self.voxel_branch.stage4(_x3)
+    print("[DEBUG] Voxel branch standalone test PASSED!")
+except Exception as e:
+    print(f"[DEBUG] Voxel branch standalone test FAILED: {e}")
+```
+
+### Next Steps for Debugging
+
+1. **Run the standalone test** to determine:
+   - If standalone PASSES but fusion FAILS → issue is in `point_to_voxel` or fusion operations
+   - If standalone also FAILS → issue is with torchsparse version or CUDA compatibility
+
+2. **Check torchsparse version:**
+   ```bash
+   python -c "import torchsparse; print(torchsparse.__version__)"
+   ```
+
+3. **If standalone works but fusion fails**, investigate `point_to_voxel`:
+   - The function creates a new SparseTensor with coordinates from `x` but features from `z`
+   - The internal torchsparse caches may not be properly set up
+   - Consider alternative approaches:
+     - Modify features in-place instead of creating new tensor
+     - Use torchsparse's built-in point-to-voxel operations
+
+4. **If standalone also fails**, consider:
+   - Upgrading/downgrading torchsparse version
+   - Using different kernel sizes (ks=3 instead of ks=2)
+   - Checking CUDA/cuDNN compatibility
+
+### Suspected Root Causes (Prioritized)
+
+1. **torchsparse version bug** - The `convert_transposed_out_in_map` error suggests internal torchsparse issue
+2. **SparseTensor cache corruption** - Creating new SparseTensor in `point_to_voxel` may not properly initialize internal state
+3. **Kernel map building edge case** - The ks=2, stride=2 configuration may hit edge cases in sparse voxel patterns
+
+### Environment Information
+
+- Python: 3.9
+- torchsparse: (check version)
+- Server path: `/raid/nnthao01/AutonomousDriving/rangevit_fusion2/`
+- Conda env: `/raid/nnthao01/AutonomousDriving/conda-env/fuse/`
