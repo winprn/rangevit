@@ -105,6 +105,7 @@ class Option(object):
         # Decoder
         self.decoder = self.config.get('decoder', 'up_conv')
         self.skip_filters = self.config.get('skip_filters', 0)
+        self.segman = self.config.get('segman', {})
 
         # 3D refiner / post-processing
         self.use_kpconv = False

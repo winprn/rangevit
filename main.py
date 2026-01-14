@@ -32,6 +32,18 @@ from utils.tools.mlflow_utils import MLflowManager
 
 
 def build_model(settings, pretrained_path=None):
+    if str(settings.decoder).lower() == 'segman' or str(settings.vit_backbone).lower().startswith('segman'):
+        from models.segman import SegMANRangeSeg
+        segman_cfg = dict(getattr(settings, 'segman', {}) or {})
+        if 'variant' not in segman_cfg:
+            segman_cfg['variant'] = settings.vit_backbone
+        return SegMANRangeSeg(
+            in_channels=settings.in_channels,
+            n_cls=settings.n_classes,
+            image_size=settings.image_size,
+            segman_cfg=segman_cfg,
+        )
+
     model = models.RangeSeg(
         in_channels=settings.in_channels,
         n_cls=settings.n_classes,
@@ -141,38 +153,50 @@ class Experiment(object):
         # Freezing the ViT encoder weights.
         if self.settings.freeze_vit_encoder:
             print('==> Freeze the ViT encoder (without the pos_embed and stem)')
-            for param in model.rangevit.encoder.blocks.parameters():
-                param.requires_grad = False
+            if hasattr(model.rangevit.encoder, 'blocks') and hasattr(model.rangevit.encoder, 'norm'):
+                for param in model.rangevit.encoder.blocks.parameters():
+                    param.requires_grad = False
 
-            model.rangevit.encoder.norm.weight.requires_grad = False
-            model.rangevit.encoder.norm.bias.requires_grad = False
+                model.rangevit.encoder.norm.weight.requires_grad = False
+                model.rangevit.encoder.norm.bias.requires_grad = False
+            else:
+                print('==> Encoder does not expose blocks/norm; skipping freeze_vit_encoder.')
 
             # Unfreeze the LayerNorm layers
             if self.settings.unfreeze_layernorm:
                 print('==> Unfreeze the LN layers')
-                model.rangevit.encoder.norm.weight.requires_grad = True
-                model.rangevit.encoder.norm.bias.requires_grad = True
-                for block_id in range(0, len(model.rangevit.encoder.blocks)):
-                    model.rangevit.encoder.blocks[block_id].norm1.weight.requires_grad = True
-                    model.rangevit.encoder.blocks[block_id].norm1.bias.requires_grad = True
-                    model.rangevit.encoder.blocks[block_id].norm2.weight.requires_grad = True
-                    model.rangevit.encoder.blocks[block_id].norm2.bias.requires_grad = True
+                if hasattr(model.rangevit.encoder, 'blocks') and hasattr(model.rangevit.encoder, 'norm'):
+                    model.rangevit.encoder.norm.weight.requires_grad = True
+                    model.rangevit.encoder.norm.bias.requires_grad = True
+                    for block_id in range(0, len(model.rangevit.encoder.blocks)):
+                        model.rangevit.encoder.blocks[block_id].norm1.weight.requires_grad = True
+                        model.rangevit.encoder.blocks[block_id].norm1.bias.requires_grad = True
+                        model.rangevit.encoder.blocks[block_id].norm2.weight.requires_grad = True
+                        model.rangevit.encoder.blocks[block_id].norm2.bias.requires_grad = True
+                else:
+                    print('==> Encoder does not expose blocks/norm; skipping unfreeze_layernorm.')
 
             if self.settings.unfreeze_attn:
                 print('==> Unfreeze the ATTN layers: qkv and proj')
-                for block_id in range(0, len(model.rangevit.encoder.blocks)):
-                    model.rangevit.encoder.blocks[block_id].attn.qkv.weight.requires_grad = True
-                    model.rangevit.encoder.blocks[block_id].attn.qkv.bias.requires_grad = True
-                    model.rangevit.encoder.blocks[block_id].attn.proj.weight.requires_grad = True
-                    model.rangevit.encoder.blocks[block_id].attn.proj.bias.requires_grad = True
+                if hasattr(model.rangevit.encoder, 'blocks'):
+                    for block_id in range(0, len(model.rangevit.encoder.blocks)):
+                        model.rangevit.encoder.blocks[block_id].attn.qkv.weight.requires_grad = True
+                        model.rangevit.encoder.blocks[block_id].attn.qkv.bias.requires_grad = True
+                        model.rangevit.encoder.blocks[block_id].attn.proj.weight.requires_grad = True
+                        model.rangevit.encoder.blocks[block_id].attn.proj.bias.requires_grad = True
+                else:
+                    print('==> Encoder does not expose blocks; skipping unfreeze_attn.')
 
             if self.settings.unfreeze_ffn:
                 print('==> Unfreeze the FFN layers: mlp.fc1 and mlp.fc2')
-                for block_id in range(0, len(model.rangevit.encoder.blocks)):
-                    model.rangevit.encoder.blocks[block_id].mlp.fc1.weight.requires_grad = True
-                    model.rangevit.encoder.blocks[block_id].mlp.fc1.bias.requires_grad = True
-                    model.rangevit.encoder.blocks[block_id].mlp.fc2.weight.requires_grad = True
-                    model.rangevit.encoder.blocks[block_id].mlp.fc2.bias.requires_grad = True
+                if hasattr(model.rangevit.encoder, 'blocks'):
+                    for block_id in range(0, len(model.rangevit.encoder.blocks)):
+                        model.rangevit.encoder.blocks[block_id].mlp.fc1.weight.requires_grad = True
+                        model.rangevit.encoder.blocks[block_id].mlp.fc1.bias.requires_grad = True
+                        model.rangevit.encoder.blocks[block_id].mlp.fc2.weight.requires_grad = True
+                        model.rangevit.encoder.blocks[block_id].mlp.fc2.bias.requires_grad = True
+                else:
+                    print('==> Encoder does not expose blocks; skipping unfreeze_ffn.')
 
 
         if self.recorder is not None:
@@ -198,27 +222,31 @@ class Experiment(object):
             if self.settings.finetune_pretrained_model:
                 # When fine-tuning a segmentation model previously pre-trained to another dataset then it
                 # is necessary to adapt the (a) pos_embeds and (b) to remove the classification head.
-                image_size = self.model.rangevit.encoder.image_size
-                patch_stride = self.model.rangevit.encoder.patch_stride
-                if (self.model.rangevit.encoder.pos_embed.shape != checkpoint_data['model']['rangevit.encoder.pos_embed'].shape):
-                    assert self.model.rangevit.encoder.pos_embed.shape[2] == checkpoint_data['model']['rangevit.encoder.pos_embed'].shape[2]
-                    gs_new_h = int(image_size[0] // patch_stride[0])
-                    gs_new_w = int(image_size[1] // patch_stride[1])
-                    num_extra_tokens = 1
-                    assert (gs_new_h * gs_new_w + num_extra_tokens) == self.model.rangevit.encoder.pos_embed.shape[1]
-                    old_len = checkpoint_data['model']['rangevit.encoder.pos_embed'].shape[1] - num_extra_tokens # remove one for the classification token
+                if hasattr(self.model.rangevit.encoder, 'pos_embed'):
+                    image_size = self.model.rangevit.encoder.image_size
+                    patch_stride = self.model.rangevit.encoder.patch_stride
+                    if (self.model.rangevit.encoder.pos_embed.shape != checkpoint_data['model']['rangevit.encoder.pos_embed'].shape):
+                        assert self.model.rangevit.encoder.pos_embed.shape[2] == checkpoint_data['model']['rangevit.encoder.pos_embed'].shape[2]
+                        gs_new_h = int(image_size[0] // patch_stride[0])
+                        gs_new_w = int(image_size[1] // patch_stride[1])
+                        num_extra_tokens = 1
+                        assert (gs_new_h * gs_new_w + num_extra_tokens) == self.model.rangevit.encoder.pos_embed.shape[1]
+                        old_len = checkpoint_data['model']['rangevit.encoder.pos_embed'].shape[1] - num_extra_tokens # remove one for the classification token
 
-                    gs_old_w = gs_new_w
-                    gs_old_h = old_len // gs_old_w
-                    checkpoint_data['model']['rangevit.encoder.pos_embed'] = (
-                        resize_pos_embed(checkpoint_data['model']['rangevit.encoder.pos_embed'],
-                                         grid_old_shape=(gs_old_h, gs_old_w),
-                                         grid_new_shape=(gs_new_h, gs_new_w),
-                                         num_extra_tokens=num_extra_tokens))
-                assert self.model.rangevit.encoder.pos_embed.shape == checkpoint_data['model']['rangevit.encoder.pos_embed'].shape
+                        gs_old_w = gs_new_w
+                        gs_old_h = old_len // gs_old_w
+                        checkpoint_data['model']['rangevit.encoder.pos_embed'] = (
+                            resize_pos_embed(checkpoint_data['model']['rangevit.encoder.pos_embed'],
+                                             grid_old_shape=(gs_old_h, gs_old_w),
+                                             grid_new_shape=(gs_new_h, gs_new_w),
+                                             num_extra_tokens=num_extra_tokens))
+                    assert self.model.rangevit.encoder.pos_embed.shape == checkpoint_data['model']['rangevit.encoder.pos_embed'].shape
+                else:
+                    print('==> Encoder has no pos_embed; skipping positional embedding resize.')
 
                 for key in ('rangevit.kpclassifier.head.weight', 'rangevit.kpclassifier.head.bias'):
-                    del checkpoint_data['model'][key]
+                    if key in checkpoint_data['model']:
+                        del checkpoint_data['model'][key]
 
             checkpoint_data_model = checkpoint_data['model']
             msg = self.model.load_state_dict(checkpoint_data_model, strict=(not self.settings.finetune_pretrained_model))

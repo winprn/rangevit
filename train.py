@@ -92,6 +92,8 @@ class Trainer(object):
         self.fp16_scaler = None
         if self.settings.use_fp16:
             self.fp16_scaler = torch.cuda.amp.GradScaler()
+        self._warned_label_range = False
+        self._warned_output_channels = False
 
     def _initOptimizer(self):
         params = self.model.parameters()
@@ -299,6 +301,66 @@ class Trainer(object):
 
         return total_loss, loss_lovasz, loss_focal, loss_boundary
 
+    def _assert_label_range(self, labels: torch.Tensor, context: str) -> None:
+        if labels.numel() == 0:
+            return
+        min_val = int(labels.min().item())
+        max_val = int(labels.max().item())
+        if min_val < 0 or max_val >= self.settings.n_classes:
+            bad = labels[(labels < 0) | (labels >= self.settings.n_classes)]
+            uniq = torch.unique(bad).detach().cpu().tolist()
+            raise ValueError(
+                f'Label out of range in {context}: min={min_val}, max={max_val}, '
+                f'n_classes={self.settings.n_classes}, bad_labels={uniq[:50]}'
+            )
+
+    def _sanitize_labels(self, labels: torch.Tensor, mask: torch.Tensor, context: str):
+        if labels.numel() == 0:
+            return labels, mask
+        max_valid = self.settings.n_classes - 1
+        invalid = (labels < 0) | (labels > max_valid)
+        if invalid.any():
+            if not self._warned_label_range:
+                bad = torch.unique(labels[invalid]).detach().cpu().tolist()
+                print(
+                    f'[RangeViT] Warning: out-of-range labels in {context}; '
+                    f'bad_labels={bad[:50]} (showing up to 50). '
+                    f'Clamping to ignore (0).'
+                )
+                self._warned_label_range = True
+            labels = labels.clone()
+            labels[invalid] = 0
+            if mask is not None:
+                mask = mask * (~invalid).float()
+        return labels, mask
+
+    def _assert_output_channels(self, output: torch.Tensor, context: str) -> None:
+        if output.dim() < 2:
+            return
+        channels = int(output.shape[1])
+        if channels != self.settings.n_classes:
+            if not self._warned_output_channels:
+                raise ValueError(
+                    f'Output channels mismatch in {context}: '
+                    f'got {channels}, expected {self.settings.n_classes}.'
+                )
+
+    def _assert_label_shape(self, output: torch.Tensor, labels: torch.Tensor, mask: torch.Tensor, context: str) -> None:
+        if output.dim() != 4:
+            return
+        expected = (output.shape[0], output.shape[2], output.shape[3])
+        if labels.shape != expected:
+            raise ValueError(
+                f'Label shape mismatch in {context}: '
+                f'labels={tuple(labels.shape)}, expected={expected} '
+                f'from output={tuple(output.shape)}.'
+            )
+        if mask is not None and mask.shape != expected:
+            raise ValueError(
+                f'Mask shape mismatch in {context}: '
+                f'mask={tuple(mask.shape)}, expected={expected} '
+                f'from output={tuple(output.shape)}.'
+            )
 
     def run(self, epoch, mode='Train', print_results=False, save_results_path=None):
         if self.settings.use_kpconv:
@@ -361,6 +423,8 @@ class Trainer(object):
             # Feature: range, x, y, z, intensity
             input_feature = input_feature.cuda() # shape: B x 5 x H x W
 
+            input_label, input_mask = self._sanitize_labels(
+                input_label, input_mask, f'{mode.lower()}/2d')
             input_label = input_label.cuda().long()
             input_label = input_label * input_label.ge(1).long()
             input_mask = input_mask.cuda() * input_label.ge(1).float()
@@ -369,9 +433,12 @@ class Trainer(object):
             if mode == 'Train':
                 with torch.cuda.amp.autocast(self.fp16_scaler is not None):
                     output = self.model(input_feature)
+                    self._assert_output_channels(output, 'train/2d')
                     output_softmax = F.softmax(output, dim=1)
 
                     # Loss calculation
+                    self._assert_label_shape(output, input_label, input_mask, 'train/2d')
+                    self._assert_label_range(input_label, 'train/2d')
                     total_loss, loss_lovasz, loss_focal, loss_boundary = self.compute_losses(
                         output, output_softmax, input_label, input_mask)
 
@@ -406,6 +473,7 @@ class Trainer(object):
                             use_sliding_window=self.settings.use_sliding_window)
 
                     output = lidar_pred.unsqueeze(0) # [C, H, W] ==> [1, C, H, W]
+                    self._assert_output_channels(output, 'val/2d')
                     output_softmax = F.softmax(output, dim=1)
                     if self.use_knn:
                         proj_depth = proj_depth[0].cuda()
@@ -419,6 +487,8 @@ class Trainer(object):
 
                     # Loss calculation
                     if self.settings.has_label:
+                        self._assert_label_shape(output, input_label, input_mask, 'val/2d')
+                        self._assert_label_range(input_label, 'val/2d')
                         total_loss, loss_lovasz, loss_focal, loss_boundary = self.compute_losses(
                             output, output_softmax, input_label, input_mask)
                     else:
@@ -730,6 +800,7 @@ class Trainer(object):
                     output3d_softmax = F.softmax(output3d, dim=1)
 
                     # Loss calculation
+                    self._assert_label_shape(output3d, labels3d, mask_3d, 'train/3d')
                     total_loss, loss_lovasz, loss_focal, loss_boundary = self.compute_losses(
                         output3d, output3d_softmax, labels3d, mask_3d)
 
@@ -772,6 +843,7 @@ class Trainer(object):
                     output3d_softmax = F.softmax(output3d, dim=1)
 
                     # Loss calculation
+                    self._assert_label_shape(output3d, labels3d, mask_3d, 'val/3d')
                     total_loss, loss_lovasz, loss_focal, loss_boundary = self.compute_losses(
                         output3d, output3d_softmax, labels3d, mask_3d)
 
