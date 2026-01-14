@@ -60,8 +60,15 @@ def initial_voxelize(z: PointTensor, init_res: float, after_res: float) -> Spars
     coord_min = scaled_coords.min(dim=0).values
     scaled_coords = scaled_coords - coord_min  # Now all >= 0
 
+    # Scale batch index to survive stride operations
+    # torchsparse applies stride to all coordinates including batch dimension
+    # With 4 stride-2 stages, we need scale factor of 2^4 = 16
+    # This ensures batch indices remain distinguishable after all downsampling
+    batch_scale = 16
+    scaled_batch = z.C[:, -1:] * batch_scale
+
     new_float_coord = torch.cat(
-        [scaled_coords, z.C[:, -1].view(-1, 1)], 1,
+        [scaled_coords, scaled_batch], 1,
     )
 
     pc_hash = spF.sphash(torch.floor(new_float_coord).int())
