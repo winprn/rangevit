@@ -51,8 +51,17 @@ def initial_voxelize(z: PointTensor, init_res: float, after_res: float) -> Spars
     Returns:
         SparseTensor with voxelized features
     """
+    # Scale spatial coordinates
+    scaled_coords = (z.C[:, :3] * init_res) / after_res
+
+    # Offset spatial coordinates to be non-negative
+    # This prevents issues with torchsparse's handling of negative coordinates
+    # during strided convolutions
+    coord_min = scaled_coords.min(dim=0).values
+    scaled_coords = scaled_coords - coord_min  # Now all >= 0
+
     new_float_coord = torch.cat(
-        [(z.C[:, :3] * init_res) / after_res, z.C[:, -1].view(-1, 1)], 1,
+        [scaled_coords, z.C[:, -1].view(-1, 1)], 1,
     )
 
     pc_hash = spF.sphash(torch.floor(new_float_coord).int())
