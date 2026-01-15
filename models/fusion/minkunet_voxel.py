@@ -207,24 +207,24 @@ class Bottleneck(nn.Module):
 
 class MinkUNetVoxelEncoder(nn.Module):
     """
-    Sparse 3D U-Net voxel encoder for multi-view fusion.
+    Sparse 3D U-Net voxel encoder for multi-view fusion (3-stage variant).
 
     Exposes features at 3 fusion points matching RangeViT's architecture:
       - After stem: cs[0] channels
-      - After stage4/bottleneck: cs[4] * expansion channels
-      - After up4/final: cs[8] * expansion channels
+      - After stage3/bottleneck: cs[3] * expansion channels
+      - After up3/final: cs[6] * expansion channels
 
-    Architecture:
-        stem → stage1 → stage2 → stage3 → stage4 (bottleneck)
-               ↓skip    ↓skip    ↓skip    ↓skip
-               up4   ←  up3   ←  up2   ←  up1
+    Architecture (3-stage to avoid Z-dimension collapse):
+        stem → stage1 → stage2 → stage3 (bottleneck)
+               ↓skip    ↓skip    ↓skip
+               up3   ←  up2   ←  up1
 
     Args:
         in_feature_dim: Input feature dimension (default: 4 for x, y, z, intensity)
-        num_layer: Number of blocks per stage [stage1, stage2, stage3, stage4, up1, up2, up3, up4]
+        num_layer: Number of blocks per stage [stage1, stage2, stage3, up1, up2, up3]
         block_type: 'ResBlock' or 'Bottleneck'
         cr: Channel ratio multiplier
-        planes: Base channel dimensions for each stage
+        planes: Base channel dimensions for each stage [stem, s1, s2, s3, up1, up2, up3]
         pres: Point resolution for voxelization
         vres: Voxel resolution
         if_dist: Whether to use SyncBatchNorm for distributed training
@@ -246,9 +246,9 @@ class MinkUNetVoxelEncoder(nn.Module):
         super().__init__()
 
         if num_layer is None:
-            num_layer = [2, 3, 4, 6, 2, 2, 2, 2]
+            num_layer = [2, 3, 4, 2, 2, 2]  # 3 encoder + 3 decoder stages
         if planes is None:
-            planes = [32, 32, 64, 128, 256, 256, 128, 96, 96]
+            planes = [32, 32, 64, 128, 128, 96, 96]  # 7 stages total
 
         self.in_feature_dim = in_feature_dim
         self.num_layer = num_layer
@@ -273,7 +273,7 @@ class MinkUNetVoxelEncoder(nn.Module):
             spnn.ReLU(True),
         )
 
-        # Encoder stages
+        # Encoder stages (3 stages to avoid Z-dimension collapse)
         self.in_channels = cs[0]
 
         self.stage1 = nn.Sequential(
@@ -290,42 +290,33 @@ class MinkUNetVoxelEncoder(nn.Module):
             BasicConvolutionBlock(self.in_channels, self.in_channels, ks=2, stride=2, if_dist=if_dist),
             *self._make_layer(self.block, cs[3], num_layer[2], if_dist=if_dist),
         )
+        # stage3 is now the bottleneck (removed stage4)
 
-        self.stage4 = nn.Sequential(
-            BasicConvolutionBlock(self.in_channels, self.in_channels, ks=2, stride=2, if_dist=if_dist),
-            *self._make_layer(self.block, cs[4], num_layer[3], if_dist=if_dist),
-        )
+        # Decoder up blocks with skip connections (3 up blocks)
+        # up1: deconv + skip from stage2 + residual blocks
+        self.up1_deconv = BasicDeconvolutionBlock(self.in_channels, cs[4], ks=2, stride=2, if_dist=if_dist)
+        self.in_channels = cs[4] + cs[2] * self.expansion
+        self.up1_blocks = nn.Sequential(*self._make_layer(self.block, cs[4], num_layer[3], if_dist=if_dist))
 
-        # Decoder up blocks with skip connections
-        # up1: deconv + skip from stage3 + residual blocks
-        self.up1_deconv = BasicDeconvolutionBlock(self.in_channels, cs[5], ks=2, stride=2, if_dist=if_dist)
-        self.in_channels = cs[5] + cs[3] * self.expansion
-        self.up1_blocks = nn.Sequential(*self._make_layer(self.block, cs[5], num_layer[4], if_dist=if_dist))
+        # up2: deconv + skip from stage1 + residual blocks
+        self.up2_deconv = BasicDeconvolutionBlock(self.in_channels, cs[5], ks=2, stride=2, if_dist=if_dist)
+        self.in_channels = cs[5] + cs[1] * self.expansion
+        self.up2_blocks = nn.Sequential(*self._make_layer(self.block, cs[5], num_layer[4], if_dist=if_dist))
 
-        # up2: deconv + skip from stage2 + residual blocks
-        self.up2_deconv = BasicDeconvolutionBlock(self.in_channels, cs[6], ks=2, stride=2, if_dist=if_dist)
-        self.in_channels = cs[6] + cs[2] * self.expansion
-        self.up2_blocks = nn.Sequential(*self._make_layer(self.block, cs[6], num_layer[5], if_dist=if_dist))
-
-        # up3: deconv + skip from stage1 + residual blocks
-        self.up3_deconv = BasicDeconvolutionBlock(self.in_channels, cs[7], ks=2, stride=2, if_dist=if_dist)
-        self.in_channels = cs[7] + cs[1] * self.expansion
-        self.up3_blocks = nn.Sequential(*self._make_layer(self.block, cs[7], num_layer[6], if_dist=if_dist))
-
-        # up4: deconv + skip from stem + residual blocks
-        self.up4_deconv = BasicDeconvolutionBlock(self.in_channels, cs[8], ks=2, stride=2, if_dist=if_dist)
-        self.in_channels = cs[8] + cs[0]
-        self.up4_blocks = nn.Sequential(*self._make_layer(self.block, cs[8], num_layer[7], if_dist=if_dist))
+        # up3: deconv + skip from stem + residual blocks
+        self.up3_deconv = BasicDeconvolutionBlock(self.in_channels, cs[6], ks=2, stride=2, if_dist=if_dist)
+        self.in_channels = cs[6] + cs[0]
+        self.up3_blocks = nn.Sequential(*self._make_layer(self.block, cs[6], num_layer[5], if_dist=if_dist))
 
         self.dropout = nn.Dropout(dropout_p, True)
 
         # Initialize weights
         self._weight_initialization()
 
-        # Store output dimensions for fusion
+        # Store output dimensions for fusion (3-stage architecture)
         self.stem_out_channels = cs[0]
-        self.bottleneck_out_channels = cs[4] * self.expansion
-        self.final_out_channels = cs[8] * self.expansion
+        self.bottleneck_out_channels = cs[3] * self.expansion  # stage3 is bottleneck
+        self.final_out_channels = cs[6] * self.expansion  # up3 is final
 
     def _make_layer(self, block, out_channels, num_block, stride=1, if_dist=False):
         """Create a sequence of residual blocks."""
@@ -348,7 +339,7 @@ class MinkUNetVoxelEncoder(nn.Module):
 
     def forward(self, x0: SparseTensor) -> dict:
         """
-        Forward pass through the voxel encoder.
+        Forward pass through the voxel encoder (3-stage architecture).
 
         Args:
             x0: SparseTensor with voxelized point features
@@ -356,47 +347,41 @@ class MinkUNetVoxelEncoder(nn.Module):
         Returns:
             dict with:
                 'stem': SparseTensor after stem (for fusion point 1)
-                'bottleneck': SparseTensor after stage4 (for fusion point 2)
-                'final': SparseTensor after up4 (for fusion point 3)
+                'bottleneck': SparseTensor after stage3 (for fusion point 2)
+                'final': SparseTensor after up3 (for fusion point 3)
                 'x0': stem output for skip connection
                 'x1': stage1 output for skip connection
                 'x2': stage2 output for skip connection
-                'x3': stage3 output for skip connection
         """
         # Stem
         x0 = self.stem(x0)
         stem_out = x0
 
-        # Encoder
+        # Encoder (3 stages)
         x1 = self.stage1(x0)
         x2 = self.stage2(x1)
         x3 = self.stage3(x2)
-        x4 = self.stage4(x3)
-        bottleneck_out = x4
+        bottleneck_out = x3  # stage3 is now bottleneck
 
-        # Decoder with skip connections
-        x4 = SparseTensor(self.dropout(x4.F), x4.C, x4.s)
-        x4._caches = bottleneck_out._caches
+        # Decoder with skip connections (3 up blocks)
+        x3 = SparseTensor(self.dropout(x3.F), x3.C, x3.s)
+        x3._caches = bottleneck_out._caches
 
-        y1 = self.up1_deconv(x4)
-        y1 = torchsparse.cat([y1, x3])
+        y1 = self.up1_deconv(x3)
+        y1 = torchsparse.cat([y1, x2])  # skip from stage2
         y1 = self.up1_blocks(y1)
 
         y2 = self.up2_deconv(y1)
-        y2 = torchsparse.cat([y2, x2])
+        y2 = torchsparse.cat([y2, x1])  # skip from stage1
         y2 = self.up2_blocks(y2)
 
         y2 = SparseTensor(self.dropout(y2.F), y2.C, y2.s)
         y2._caches = y2._caches
 
         y3 = self.up3_deconv(y2)
-        y3 = torchsparse.cat([y3, x1])
+        y3 = torchsparse.cat([y3, x0])  # skip from stem
         y3 = self.up3_blocks(y3)
-
-        y4 = self.up4_deconv(y3)
-        y4 = torchsparse.cat([y4, x0])
-        y4 = self.up4_blocks(y4)
-        final_out = y4
+        final_out = y3
 
         return {
             'stem': stem_out,
@@ -405,7 +390,6 @@ class MinkUNetVoxelEncoder(nn.Module):
             'x0': x0,
             'x1': x1,
             'x2': x2,
-            'x3': x3,
         }
 
     def forward_with_intermediates(self, x0: SparseTensor):
@@ -425,57 +409,51 @@ class MinkUNetVoxelEncoder(nn.Module):
 
     def forward_encoder_only(self, x0: SparseTensor) -> SparseTensor:
         """
-        Forward pass through encoder only (stem + stages 1-4).
+        Forward pass through encoder only (stem + stages 1-3).
 
         Args:
             x0: SparseTensor with voxelized point features
 
         Returns:
-            SparseTensor at bottleneck (after stage4)
+            SparseTensor at bottleneck (after stage3)
         """
         x0 = self.stem(x0)
         x1 = self.stage1(x0)
         x2 = self.stage2(x1)
         x3 = self.stage3(x2)
-        x4 = self.stage4(x3)
-        return x4
+        return x3
 
     def forward_decoder_only(
         self,
-        x4: SparseTensor,
+        x3: SparseTensor,
         x0: SparseTensor,
         x1: SparseTensor,
         x2: SparseTensor,
-        x3: SparseTensor
     ) -> SparseTensor:
         """
-        Forward pass through decoder only (up blocks 1-4).
+        Forward pass through decoder only (up blocks 1-3).
 
         Args:
-            x4: SparseTensor at bottleneck
-            x0, x1, x2, x3: Skip connection features from encoder
+            x3: SparseTensor at bottleneck (stage3 output)
+            x0, x1, x2: Skip connection features from encoder
 
         Returns:
             SparseTensor at final resolution
         """
-        x4 = SparseTensor(self.dropout(x4.F), x4.C, x4.s)
+        x3 = SparseTensor(self.dropout(x3.F), x3.C, x3.s)
 
-        y1 = self.up1_deconv(x4)
-        y1 = torchsparse.cat([y1, x3])
+        y1 = self.up1_deconv(x3)
+        y1 = torchsparse.cat([y1, x2])  # skip from stage2
         y1 = self.up1_blocks(y1)
 
         y2 = self.up2_deconv(y1)
-        y2 = torchsparse.cat([y2, x2])
+        y2 = torchsparse.cat([y2, x1])  # skip from stage1
         y2 = self.up2_blocks(y2)
 
         y2 = SparseTensor(self.dropout(y2.F), y2.C, y2.s)
 
         y3 = self.up3_deconv(y2)
-        y3 = torchsparse.cat([y3, x1])
+        y3 = torchsparse.cat([y3, x0])  # skip from stem
         y3 = self.up3_blocks(y3)
 
-        y4 = self.up4_deconv(y3)
-        y4 = torchsparse.cat([y4, x0])
-        y4 = self.up4_blocks(y4)
-
-        return y4
+        return y3

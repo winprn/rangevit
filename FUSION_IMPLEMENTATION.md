@@ -783,3 +783,78 @@ python main.py 'config_fusion_kitti.yaml' --data_root '<path>' --save_path './te
 - After voxelize: batch max = 30000 (not 48)
 - x3: batch max > 0 (all batches survive)
 - Standalone test: PASSED
+
+**Third Iteration - Final Solution (January 15, 2026):**
+
+After increasing batch_scale to 1,000,000, standalone test still failed at stage4. Key finding: **batch dimension collapsed to 0 at x3** (only batch 0 survived).
+
+**Root Cause Analysis:**
+1. **Z-Dimension Collapse**: With vres=0.10m, SemanticKITTI's limited vertical range (7.3m) produces only 74 voxels. After 3 stride-2 operations: 74 → 37 → 18 → 9 voxels. A 4th stride would reduce to 4 voxels, causing dimension collapse.
+
+2. **4-Stage Architecture Too Deep**: For KITTI-sized data with thin vertical extent, 4 downsampling stages is excessive.
+
+**SOLUTION IMPLEMENTED: 3-Stage Architecture**
+
+Reduced encoder from 4 stages to 3 stages, making stage3 the bottleneck. This is a common pattern for sparse 3D networks on KITTI-sized data.
+
+**Files Modified:**
+
+1. **`models/fusion/minkunet_voxel.py`** (lines 208-482):
+   - Removed stage4 from encoder
+   - Made stage3 the bottleneck
+   - Adjusted decoder from 4 up blocks to 3
+   - Updated skip connections: stage3→up1, stage2→up2, stage1→up3, stem removed
+   - Updated channel dimensions:
+     - `bottleneck_out_channels = cs[3] * expansion` (was cs[4])
+     - `final_out_channels = cs[6] * expansion` (was cs[8])
+   - Updated default parameters:
+     - `num_layer = [2, 3, 4, 2, 2, 2]` (was [2, 3, 4, 6, 2, 2, 2, 2])
+     - `planes = [32, 32, 64, 128, 128, 96, 96]` (was [32, 32, 64, 128, 256, 256, 128, 96, 96])
+
+2. **`models/fusion/fusion_rangevit.py`** (lines 434-537):
+   - Removed stage4 call in standalone test
+   - Updated encoder forward pass to use x3 as bottleneck
+   - Changed `x4_fused = point_to_voxel(x4, z_fused)` to `x3_fused = point_to_voxel(x3, z_fused)`
+   - Updated decoder to use 3 up blocks with correct skip connections
+   - Changed final output from y4 to y3
+
+3. **`config_fusion_kitti.yaml`** (lines 37-47):
+   - Updated `num_layer: [2, 3, 4, 2, 2, 2]`
+   - Updated `planes: [32, 32, 64, 128, 128, 96, 96]`
+   - Added comment: "3-stage architecture to avoid Z-dimension collapse"
+
+4. **`models/fusion/representation_utils.py`** (line 72):
+   - Increased `batch_scale = 1000000` (from 10000) for better batch separation
+
+**Expected Results:**
+
+With 3-stage architecture:
+- **Voxelization**: 74 voxels in Z dimension
+- **After stage1**: 37 voxels in Z (stride 2)
+- **After stage2**: 18 voxels in Z (stride 4)
+- **After stage3**: 9 voxels in Z (stride 8) ✅ **HEALTHY**
+- **Batch indices after 3 strides**: 0, 125K, 250K, 375K (well separated)
+- **All 4 batches survive** through all stages
+- **Standalone test**: PASSED
+- **Training**: Proceeds without CUDA errors
+
+**Verification Command:**
+```bash
+python main.py 'config_fusion_kitti.yaml' --data_root '<path>' --save_path './test' --batch_size 4
+```
+
+**Expected Debug Output:**
+```
+[DEBUG] After voxelize: coords=[~78k, 4], ..., max=[..., ..., 74, 3000000]
+[DEBUG] Standalone x1: coords=[~37k, 4], stride=(2, 2, 2)
+[DEBUG] Standalone x2: coords=[~13k, 4], stride=(4, 4, 4)
+[DEBUG] Standalone x3: coords=[~5k, 4], stride=(8, 8, 8)
+[DEBUG] Voxel branch standalone test PASSED!
+[DEBUG] x3 coords range: ..., max=[..., ..., >8, >0]  ← All batches survive!
+```
+
+**Key Takeaways:**
+1. For KITTI-sized data with limited vertical range, 3-stage architecture is more appropriate than 4-stage
+2. Always ensure sufficient voxel count after downsampling (aim for >8 voxels in smallest dimension)
+3. Use very large batch_scale (1M+) to prevent batch mixing in torchsparse
+4. 3-stage architecture still provides sufficient receptive field (8x downsampling) for semantic segmentation

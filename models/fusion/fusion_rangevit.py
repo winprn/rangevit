@@ -441,10 +441,9 @@ class FusionRangeViT(nn.Module):
             print(f"[DEBUG] Standalone x2: coords={_x2.C.shape}, stride={_x2.s}")
             _x3 = self.voxel_branch.stage3(_x2)
             print(f"[DEBUG] Standalone x3: coords={_x3.C.shape}, stride={_x3.s}")
-            _x4 = self.voxel_branch.stage4(_x3)
-            print(f"[DEBUG] Standalone x4: coords={_x4.C.shape}, stride={_x4.s}")
+            # 3-stage architecture: stage3 is now bottleneck (no stage4)
             print("[DEBUG] Voxel branch standalone test PASSED!")
-            del _x1, _x2, _x3, _x4
+            del _x1, _x2, _x3
         except Exception as e:
             print(f"[DEBUG] Voxel branch standalone test FAILED: {e}")
         import sys; sys.stdout.flush()
@@ -484,15 +483,13 @@ class FusionRangeViT(nn.Module):
         print(f"[DEBUG] x2 coords range: min={x2.C.min(dim=0).values.tolist()}, max={x2.C.max(dim=0).values.tolist()}")
         import sys; sys.stdout.flush()
 
-        x3 = self.voxel_branch.stage3(x2)
+        x3 = self.voxel_branch.stage3(x2)  # Bottleneck (3-stage architecture)
         print(f"[DEBUG] x3: coords={x3.C.shape}, feats={x3.F.shape}, stride={x3.s}")
         print(f"[DEBUG] x3 coords range: min={x3.C.min(dim=0).values.tolist()}, max={x3.C.max(dim=0).values.tolist()}")
         import sys; sys.stdout.flush()
 
-        x4 = self.voxel_branch.stage4(x3)  # Bottleneck
-
-        # Fusion at point level
-        z1_voxel = voxel_to_point(x4, z_fused)
+        # Fusion at point level (using x3 as bottleneck)
+        z1_voxel = voxel_to_point(x3, z_fused)
         z1_range = range_to_point_from_tokens(
             range_enc, range_pxpy, batch_indices, B, H, W, self.patch_stride
         )
@@ -503,8 +500,8 @@ class FusionRangeViT(nn.Module):
         z_fused = PointTensor(z1, z_fused.C, idx_query=z_fused.idx_query, weights=z_fused.weights)
         z_fused.additional_features = z.additional_features
 
-        # Update voxel branch
-        x4_fused = point_to_voxel(x4, z_fused)
+        # Update voxel branch (x3 is bottleneck in 3-stage architecture)
+        x3_fused = point_to_voxel(x3, z_fused)
 
         # ========== FUSION 3: After Decoder ==========
         # Range decoder
@@ -516,31 +513,28 @@ class FusionRangeViT(nn.Module):
         range_dec = F.interpolate(range_dec, size=(H, W), mode='bilinear', align_corners=False)
         range_dec = unpadding(range_dec, (H_ori, W_ori))
 
-        # Voxel decoder
-        x4_drop = SparseTensor(self.dropout(x4_fused.F), x4_fused.C, x4_fused.s)
-        x4_drop._caches = x4_fused._caches
+        # Voxel decoder (3-stage: 3 up blocks)
+        x3_drop = SparseTensor(self.dropout(x3_fused.F), x3_fused.C, x3_fused.s)
+        x3_drop._caches = x3_fused._caches
 
-        y1 = self.voxel_branch.up1_deconv(x4_drop)
-        y1 = torchsparse.cat([y1, x3])
+        y1 = self.voxel_branch.up1_deconv(x3_drop)
+        y1 = torchsparse.cat([y1, x2])  # skip from stage2
         y1 = self.voxel_branch.up1_blocks(y1)
 
         y2 = self.voxel_branch.up2_deconv(y1)
-        y2 = torchsparse.cat([y2, x2])
+        y2 = torchsparse.cat([y2, x1])  # skip from stage1
         y2 = self.voxel_branch.up2_blocks(y2)
 
         y2_drop = SparseTensor(self.dropout(y2.F), y2.C, y2.s)
         y2_drop._caches = y2._caches
 
         y3 = self.voxel_branch.up3_deconv(y2_drop)
-        y3 = torchsparse.cat([y3, x1])
+        y3 = torchsparse.cat([y3, x0_fused])  # skip from stem
         y3 = self.voxel_branch.up3_blocks(y3)
-
-        y4 = self.voxel_branch.up4_deconv(y3)
-        y4 = torchsparse.cat([y4, x0_fused])
-        y4 = self.voxel_branch.up4_blocks(y4)
+        # y3 is final output (no up4 in 3-stage architecture)
 
         # Fusion at point level
-        z2_voxel = voxel_to_point(y4, z_fused)
+        z2_voxel = voxel_to_point(y3, z_fused)
         z2_range = range_to_point(range_dec, range_pxpy, batch_indices, B)
         z2_point = self.point_transforms[2](z1)
         z2 = self.fusion_modules[2](z2_range, z2_voxel.F, z2_point)

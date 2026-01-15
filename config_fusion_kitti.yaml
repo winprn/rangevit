@@ -35,14 +35,15 @@ voxel_features:
   enable: false
 
 # Voxel branch config (for fusion model)
+# 3-stage architecture to avoid Z-dimension collapse
 voxel_branch:
   in_channels: 4  # x, y, z, intensity
-  num_layer: [2, 3, 4, 6, 2, 2, 2, 2]
-  block_type: "ResBlock"  # Changed from Bottleneck to ResBlock
+  num_layer: [2, 3, 4, 2, 2, 2]  # 3 encoder + 3 decoder stages
+  block_type: "ResBlock"  # ResBlock for simpler architecture
   cr: 1.0
-  planes: [32, 32, 64, 128, 256, 256, 128, 96, 96]
+  planes: [32, 32, 64, 128, 128, 96, 96]  # [stem, s1, s2, s3, up1, up2, up3]
   pres: 0.05  # Point resolution (not used after fix)
-  vres: 0.10  # Voxel resolution (increased from 0.05 to reduce voxel count)
+  vres: 0.10  # Voxel resolution (10cm to avoid excessive voxel count)
   dropout_p: 0.3
 
 # Fusion config
