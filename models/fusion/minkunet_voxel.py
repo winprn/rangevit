@@ -375,10 +375,8 @@ class MinkUNetVoxelEncoder(nn.Module):
         y2 = torchsparse.cat([y2, x1])  # skip from stage1
         y2 = self.up2_blocks(y2)
 
-        # Apply dropout while preserving caches for transposed convolution
-        y2_caches = y2._caches  # Save caches BEFORE creating new tensor
-        y2 = SparseTensor(self.dropout(y2.F), y2.C, y2.s)
-        y2._caches = y2_caches  # Restore saved caches
+        # Note: Removed mid-decoder dropout to avoid inplace operation conflicts
+        # Dropout is already applied at bottleneck (x3) which is standard practice
 
         y3 = self.up3_deconv(y2)
         y3 = torchsparse.cat([y3, x0])  # skip from stem
@@ -452,10 +450,7 @@ class MinkUNetVoxelEncoder(nn.Module):
         y2 = torchsparse.cat([y2, x1])  # skip from stage1
         y2 = self.up2_blocks(y2)
 
-        # Apply dropout while preserving caches for transposed convolution
-        y2_caches = y2._caches
-        y2 = SparseTensor(self.dropout(y2.F), y2.C, y2.s)
-        y2._caches = y2_caches
+        # Note: Removed mid-decoder dropout to avoid inplace operation conflicts
 
         y3 = self.up3_deconv(y2)
         y3 = torchsparse.cat([y3, x0])  # skip from stem
