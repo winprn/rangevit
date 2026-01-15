@@ -51,8 +51,10 @@ def initial_voxelize(z: PointTensor, init_res: float, after_res: float) -> Spars
     Returns:
         SparseTensor with voxelized features
     """
-    # Scale spatial coordinates
-    scaled_coords = (z.C[:, :3] * init_res) / after_res
+    # Scale spatial coordinates from meters to voxel units
+    # Input coordinates are in meters, voxel resolution is after_res (e.g., 0.05m)
+    # Formula: coord_meters / voxel_size_meters = coord_voxels
+    scaled_coords = z.C[:, :3] / after_res
 
     # Offset spatial coordinates to be non-negative
     # This prevents issues with torchsparse's handling of negative coordinates

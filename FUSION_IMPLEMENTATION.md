@@ -682,6 +682,40 @@ except Exception as e:
 ### Environment Information
 
 - Python: 3.9
-- torchsparse: (check version)
+- torchsparse: 2.1.0
 - Server path: `/raid/nnthao01/AutonomousDriving/rangevit_fusion2/`
 - Conda env: `/raid/nnthao01/AutonomousDriving/conda-env/fuse/`
+
+### Resolution (January 2026)
+
+**ROOT CAUSE IDENTIFIED:** Incorrect coordinate scaling in `initial_voxelize()` function.
+
+**Problem:**
+- SemanticKITTI coordinates are in **meters** (continuous values)
+- Original formula: `scaled_coords = (z.C[:, :3] * init_res) / after_res`
+- With `init_res = after_res = 0.05`, this simplified to `scaled_coords = z.C[:, :3]` (no scaling)
+- Result: Z dimension -4.57m to 2.91m → 7 voxels (treating meters as voxel indices)
+- Expected: 7.48m / 0.05m = **149 voxels**
+
+**Why It Failed:**
+- 8 voxels in Z → after 3 stride-2 ops → 1 voxel → stage4 tries to stride → dimension collapses to 0
+- torchsparse cannot handle zero-span dimensions, causing CUDA error in `torch.full()`
+
+**Fix Applied:**
+Changed line 54-57 in `models/fusion/representation_utils.py`:
+```python
+# Before (incorrect):
+scaled_coords = (z.C[:, :3] * init_res) / after_res
+
+# After (correct):
+scaled_coords = z.C[:, :3] / after_res
+```
+
+**Expected Result After Fix:**
+- Z dimension: 0-149 voxels (instead of 0-7)
+- After 4 strides: 150 → 75 → 37 → 18 → 9 voxels (healthy)
+- Standalone voxel test should PASS
+- Training should proceed without CUDA errors
+
+**Key Insight:**
+The `init_res` parameter is meant for cases where input coordinates are pre-quantized. For SemanticKITTI where coordinates are in continuous meters, the formula should simply be `coords / voxel_size`.
