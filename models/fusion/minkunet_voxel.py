@@ -66,7 +66,7 @@ class BasicConvolutionBlock(nn.Module):
                 stride=stride,
             ),
             SyncBatchNorm(outc) if if_dist else BatchNorm(outc),
-            spnn.ReLU(False),
+            spnn.ReLU(True),
         )
 
     def forward(self, x):
@@ -93,7 +93,7 @@ class BasicDeconvolutionBlock(nn.Module):
                 transposed=True,
             ),
             SyncBatchNorm(outc) if if_dist else BatchNorm(outc),
-            spnn.ReLU(False),
+            spnn.ReLU(True),
         )
 
     def forward(self, x):
@@ -122,7 +122,7 @@ class ResidualBlock(nn.Module):
                 stride=stride,
             ),
             SyncBatchNorm(outc) if if_dist else BatchNorm(outc),
-            spnn.ReLU(False),
+            spnn.ReLU(True),
             spnn.Conv3d(
                 outc, outc,
                 kernel_size=ks,
@@ -143,7 +143,7 @@ class ResidualBlock(nn.Module):
                 ),
                 SyncBatchNorm(outc * self.expansion) if if_dist else BatchNorm(outc * self.expansion),
             )
-        self.relu = spnn.ReLU(False)
+        self.relu = spnn.ReLU(True)
 
     def forward(self, x):
         out = self.relu(self.net(x) + self.downsample(x))
@@ -198,7 +198,7 @@ class Bottleneck(nn.Module):
                 ),
                 SyncBatchNorm(outc * self.expansion) if if_dist else BatchNorm(outc * self.expansion),
             )
-        self.relu = spnn.ReLU(False)
+        self.relu = spnn.ReLU(True)
 
     def forward(self, x):
         out = self.relu(self.net(x) + self.downsample(x))
@@ -267,10 +267,10 @@ class MinkUNetVoxelEncoder(nn.Module):
         self.stem = nn.Sequential(
             spnn.Conv3d(in_feature_dim, cs[0], kernel_size=3, stride=1),
             SyncBatchNorm(cs[0]) if if_dist else BatchNorm(cs[0]),
-            spnn.ReLU(False),
+            spnn.ReLU(True),
             spnn.Conv3d(cs[0], cs[0], kernel_size=3, stride=1),
             SyncBatchNorm(cs[0]) if if_dist else BatchNorm(cs[0]),
-            spnn.ReLU(False),
+            spnn.ReLU(True),
         )
 
         # Encoder stages (3 stages to avoid Z-dimension collapse)
