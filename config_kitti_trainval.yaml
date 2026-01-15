@@ -6,6 +6,7 @@ id: 'exp_kitti'
 dataset: 'SemanticKitti'
 n_classes: 20 # 19 + 1(ignored)
 use_trainval: true 
+use_rangeinterpolation: false
 
 # Train config
 has_label: true

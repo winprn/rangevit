@@ -1,6 +1,17 @@
 import numpy as np
 
 
+class Transformation(object):
+    def __init__(self, inplace=True):
+        self.inplace = inplace
+
+    def __call__(self, pcloud, labels=None):
+        points = pcloud if self.inplace else pcloud.copy()
+        if labels is not None:
+            labels = labels if self.inplace else labels.copy()
+        return points, labels
+
+
 class RangeProjection(object):
     '''
     Project the 3D point cloud to 2D data with range projection
@@ -169,3 +180,95 @@ class ScanProjection(object):
         proj_mask = (proj_idx > 0).astype(np.int32)
 
         return proj_pointcloud, proj_range, proj_idx, proj_mask
+
+
+class RangeInterpolation(Transformation):
+    def __init__(self, H=64, W=2048, fov_up=3.0, fov_down=-25.0, ignore_index=255, inplace=True, scan_proj=False):
+        super().__init__(inplace)
+        self.H = H
+        self.W = W
+        self.scan_proj = scan_proj
+        self.fov_up = fov_up / 180.0 * np.pi
+        self.fov_down = fov_down / 180.0 * np.pi
+        self.fov = abs(self.fov_down) + abs(self.fov_up)
+        self.ignore_index = ignore_index
+
+    def __call__(self, pcloud, labels=None):
+        points, labels = super().__call__(pcloud, labels)
+
+        proj_image = np.full((self.H, self.W, 4), -1, dtype=np.float32)
+        proj_idx = np.full((self.H, self.W), -1, dtype=np.int64)
+
+        # get depth of all points
+        depth = np.linalg.norm(points[:, :3], 2, axis=1)
+
+        # get angles of all points
+        yaw = -np.arctan2(points[:, 1], points[:, 0])
+        if self.scan_proj:
+            proj_x = 0.5 * (yaw / np.pi + 1.0)
+            new_raw = np.nonzero((proj_x[1:] < 0.2) * (proj_x[:-1] > 0.8))[0] + 1
+            proj_y = np.zeros_like(proj_x)
+            proj_y[new_raw] = 1
+            proj_y = np.cumsum(proj_y)
+            proj_x = proj_x * self.W - 0.001
+        else:
+            pitch = np.arcsin(points[:, 2] / depth)
+            proj_x = 0.5 * (yaw / np.pi + 1.0)
+            proj_y = 1.0 - (pitch + abs(self.fov_down)) / self.fov
+            # scale to image size using angular resolution
+            proj_x *= self.W
+            proj_y *= self.H
+
+        # round and clamp for use as index
+        proj_x = np.floor(proj_x)
+        proj_x = np.minimum(self.W - 1, proj_x)
+        proj_x = np.maximum(0, proj_x).astype(np.int64)
+
+        proj_y = np.floor(proj_y)
+        proj_y = np.minimum(self.H - 1, proj_y)
+        proj_y = np.maximum(0, proj_y).astype(np.int64)
+
+        # order in decreasing depth
+        indices = np.arange(depth.shape[0])
+        order = np.argsort(depth)[::-1]
+        proj_idx[proj_y[order], proj_x[order]] = indices[order]
+        proj_image[proj_y[order], proj_x[order]] = points[order]
+        proj_mask = (proj_idx > 0).astype(np.int32)
+
+        if labels is not None:
+            proj_sem_label = np.full((self.H, self.W), self.ignore_index, dtype=np.int64)
+            proj_sem_label[proj_y[order], proj_x[order]] = labels[order]
+
+        # Interpolate missing points
+        interpolated_points = []
+        interpolated_labels = []
+
+        for y in range(self.H):
+            for x in range(self.W):
+                if proj_mask[y, x]:
+                    continue
+
+                if (x - 1 >= 0) and (x + 1 < self.W):
+                    if proj_mask[y, x - 1] and proj_mask[y, x + 1]:
+                        mean_points = (proj_image[y, x - 1] + proj_image[y, x + 1]) / 2
+                        proj_mask[y, x] = 1
+                        proj_image[y, x] = mean_points
+                        interpolated_points.append(mean_points)
+
+                        if labels is not None:
+                            if proj_sem_label[y, x - 1] == proj_sem_label[y, x + 1]:
+                                cur_label = proj_sem_label[y, x - 1]
+                            else:
+                                cur_label = self.ignore_index
+                            proj_sem_label[y, x] = cur_label
+                            interpolated_labels.append(cur_label)
+
+        if len(interpolated_points) > 0:
+            interpolated_points = np.array(interpolated_points, dtype=np.float32)
+            points = np.concatenate((points, interpolated_points), axis=0)
+
+        if labels is not None:
+            interpolated_labels = np.array(interpolated_labels, dtype=np.int64)
+            labels = np.concatenate((labels, interpolated_labels), axis=0)
+
+        return points, labels

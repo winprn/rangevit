@@ -1,2 +1,2 @@
 from .augmentor import Augmentor
-from .projection import RangeProjection
+from .projection import RangeProjection, RangeInterpolation, Transformation
