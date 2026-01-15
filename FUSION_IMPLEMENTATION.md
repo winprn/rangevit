@@ -719,3 +719,31 @@ scaled_coords = z.C[:, :3] / after_res
 
 **Key Insight:**
 The `init_res` parameter is meant for cases where input coordinates are pre-quantized. For SemanticKITTI where coordinates are in continuous meters, the formula should simply be `coords / voxel_size`.
+
+**Follow-up Issue:** After fixing coordinate scaling, voxelization produced **127,421 voxels** (was 4,581) at 0.05m resolution. This massive increase caused:
+1. Computational overload in torchsparse
+2. Batch dimension collapse (only batch 0 survived after 3 strides)
+3. Stage4 still failed with CUDA error
+
+**Final Fix:** Increased voxel resolution from 0.05m to 0.10m in `config_fusion_kitti.yaml`:
+```yaml
+voxel_branch:
+  vres: 0.10  # Increased from 0.05 to reduce voxel count
+```
+
+**Rationale:**
+- SemanticKITTI has ~80m x 60m x 8m range
+- At 0.05m: theoretical max ~1600 x 1200 x 160 = 307M voxels (sparse, but still huge)
+- At 0.10m: theoretical max ~800 x 600 x 80 = 38M voxels (8x reduction)
+- Expected actual voxels: ~15-20k per scene (manageable)
+- 0.10m resolution is still fine-grained for semantic segmentation
+
+**Test Command:**
+```bash
+python main.py 'config_fusion_kitti.yaml' --data_root '<path>' --save_path './test' --batch_size 4
+```
+
+**Expected Output:**
+- After voxelize: ~15-20k voxels (not 127k)
+- Standalone test: PASSED
+- All 4 batches should survive through all stages

@@ -41,8 +41,8 @@ voxel_branch:
   block_type: "Bottleneck"
   cr: 1.0
   planes: [32, 32, 64, 128, 256, 256, 128, 96, 96]
-  pres: 0.05  # Point resolution
-  vres: 0.05  # Voxel resolution
+  pres: 0.05  # Point resolution (not used after fix)
+  vres: 0.10  # Voxel resolution (increased from 0.05 to reduce voxel count)
   dropout_p: 0.3
 
 # Fusion config
