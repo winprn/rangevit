@@ -428,6 +428,7 @@ class FusionRangeViT(nn.Module):
         import sys; sys.stdout.flush()
 
         x0 = self.voxel_branch.stem(x0)
+        stem_out = x0  # Save original stem output for skip connection
         print(f"[DEBUG] After stem: coords={x0.C.shape}, feats={x0.F.shape}, stride={x0.s}")
         import sys; sys.stdout.flush()
 
@@ -531,7 +532,7 @@ class FusionRangeViT(nn.Module):
         y2_drop._caches = y2._caches
 
         y3 = self.voxel_branch.up3_deconv(y2_drop)
-        y3 = torchsparse.cat([y3, x0_fused])  # skip from stem
+        y3 = torchsparse.cat([y3, stem_out])  # skip from stem (original, unfused)
         y3 = self.voxel_branch.up3_blocks(y3)
         # y3 is final output (no up4 in 3-stage architecture)
 
