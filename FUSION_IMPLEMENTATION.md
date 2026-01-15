@@ -1086,3 +1086,125 @@ python main.py 'config_fusion_kitti.yaml' \
 4. **Batch scaling must be very large:** With spatial coords up to ~1000-2000, batch indices need to be scaled by 1M+ to remain distinguishable after multiple stride operations.
 
 5. **Avoid inplace operations with cache sharing:** When SparseTensors share caches, inplace operations (like `spnn.ReLU(True)`) can corrupt tensors needed for gradient computation.
+
+---
+
+## Active Debugging Session (January 16, 2026)
+
+### Problem Description
+
+Training crashes after 1 iteration with CUDA error:
+```
+CUDA error: an illegal memory access was encountered
+terminate called after throwing an instance of 'c10::Error'
+```
+
+**Error Context:**
+- Occurs after completing 1 training iteration (forward + backward pass)
+- Error happens in NCCL process group during distributed training
+- Traceback points to `ProcessGroupNCCL::WorkNCCL::finishedGPUExecutionInternal()`
+
+### Previous Issue (Resolved)
+
+Before this error, we had an "inplace operation" error:
+```
+RuntimeError: one of the variables needed for gradient computation has been modified
+by an inplace operation: [torch.cuda.FloatTensor [3287, 128]], which is output 0 of
+ReluBackward0, is at version 2; expected version 1 instead.
+```
+
+**Root Cause:** `nn.Dropout(inplace=True)` at line 311 modified `bottleneck_out.F` (aliased tensor)
+
+**Fix Applied:** Changed to `nn.Dropout(dropout_p, inplace=False)`
+
+### Current Issue Investigation
+
+#### Attempt 1: Change all ReLU to non-inplace
+
+**Changes Made:**
+- Changed all `spnn.ReLU(True)` to `spnn.ReLU(False)` in minkunet_voxel.py (7 occurrences)
+- Changed all `nn.ReLU(inplace=True)` to `nn.ReLU(inplace=False)` in fusion_modules.py
+
+**Result:** CUDA illegal memory access error appeared
+
+**Root Cause Analysis:**
+- `spnn.ReLU(False)` creates NEW SparseTensors that don't inherit internal caches (kmaps, cmaps)
+- These caches are required for transposed convolutions during backward pass
+- Without proper kmaps, torchsparse tries to access invalid GPU memory
+
+#### Attempt 2: Revert ReLU, keep dropout fix
+
+**Changes Made:**
+- Reverted all `spnn.ReLU(False)` back to `spnn.ReLU(True)` in minkunet_voxel.py
+- Kept `nn.Dropout(dropout_p, inplace=False)` (the actual fix for original issue)
+- Kept `nn.ReLU(inplace=False)` in fusion_modules.py (safe for standard PyTorch tensors)
+
+**Rationale:**
+- `spnn.Conv3d` creates NEW SparseTensors, so ReLU only modifies intermediate outputs
+- The aliased tensors (stem_out, x0, x1, x2, bottleneck_out) are created AFTER modules complete
+- Only the dropout directly accessed `x3.F` which was aliased by `bottleneck_out`
+
+**Result:** Still getting CUDA illegal memory access error (TO BE INVESTIGATED)
+
+### Current State of Files
+
+| File | Status |
+|------|--------|
+| `minkunet_voxel.py` | `spnn.ReLU(True)` (7 occurrences), `nn.Dropout(inplace=False)` |
+| `fusion_modules.py` | `nn.ReLU(inplace=False)` (5 occurrences) |
+| `fusion_rangevit.py` | `nn.Dropout(inplace=False)` |
+
+### Next Steps to Investigate
+
+1. **Enable CUDA error detection:**
+   ```bash
+   CUDA_LAUNCH_BLOCKING=1 python main.py ...
+   ```
+   This will give more precise error location.
+
+2. **Enable PyTorch anomaly detection:**
+   ```python
+   torch.autograd.set_detect_anomaly(True)
+   ```
+   Add to train.py before the training loop.
+
+3. **Check torchsparse version compatibility:**
+   ```bash
+   python -c "import torchsparse; print(torchsparse.__version__)"
+   ```
+   Current: torchsparse 2.1.0
+
+4. **Investigate potential causes:**
+   - Memory corruption in sparse convolution kernels
+   - Invalid coordinate access after strided operations
+   - Cache state corruption between forward and backward passes
+   - NCCL synchronization issues with sparse tensors
+
+5. **Try single-GPU training:**
+   ```bash
+   python main.py 'config_fusion_kitti.yaml' --data_root '<path>' --save_path './test' --batch_size 4
+   ```
+   Without distributed launch to rule out NCCL issues.
+
+6. **Check if error occurs on first or second iteration:**
+   - If first iteration: issue in forward/backward pass
+   - If second iteration: issue in optimizer step or state accumulation
+
+### Hypotheses
+
+1. **torchsparse kernel map corruption:** The transposed convolutions may be accessing stale or corrupted kernel maps during backward pass.
+
+2. **Batch index handling:** Despite batch_scale=1M, coordinate overflow or incorrect batch separation could cause memory access violations.
+
+3. **SparseTensor cache lifecycle:** The `_caches` copying pattern may not be sufficient for all torchsparse operations.
+
+4. **NCCL + SparseTensor incompatibility:** SyncBatchNorm or gradient synchronization may not work correctly with SparseTensors.
+
+### Environment
+
+- Python: 3.9
+- PyTorch: 2.0.1
+- torchsparse: 2.1.0
+- CUDA: (check with `nvcc --version`)
+- Server: `/raid/nnthao01/AutonomousDriving/rangevit_fusion2/`
+- Conda env: `/raid/nnthao01/AutonomousDriving/conda-env/fuse/`
