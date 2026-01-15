@@ -10,3 +10,5 @@ pretrained_model/*
 rangevit
 save*/
 artifact/
+
+segmentation/

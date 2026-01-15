@@ -187,6 +187,21 @@ def save_image(array: np.ndarray, path: Path):
     imageio.imwrite(path, array.astype(np.uint8))
 
 
+def build_collision_count_map(uproj_x: np.ndarray, uproj_y: np.ndarray, height: int, width: int) -> np.ndarray:
+    count_map = np.zeros((height, width), dtype=np.int32)
+    np.add.at(count_map, (uproj_y, uproj_x), 1)
+    return count_map
+
+
+def save_collision_image(count_map: np.ndarray, path: Path):
+    # Log scale to make low-count collisions visible; 0 stays black.
+    log_map = np.log1p(count_map).astype(np.float32)
+    if log_map.max() > 0:
+        log_map = log_map / log_map.max()
+    vis = (log_map * 255.0).astype(np.uint8)
+    save_image(vis, path)
+
+
 def build_settings_from_config(config: dict):
     # Minimal settings namespace for build_rangevit_model and inference_utils.
     class Settings:
@@ -269,6 +284,8 @@ def main():
         _sem_label_points,
     ) = loader[frame_idx]
 
+    height, width = proj_feature_tensor.shape[1], proj_feature_tensor.shape[2]
+
     mapped_labels = proj_sem_label_tensor.numpy().astype(np.int32)
     mask = proj_mask_tensor.numpy().astype(bool)
     gt_colors = colorize_labels(mapped_labels, learning_map_inv_lut, color_lut)
@@ -280,6 +297,27 @@ def main():
     frame_id = f"{int(args.frame):06d}"
     gt_path = DEFAULT_OUTPUT_DIR / f"range_gt_seq{seq_id}_frame{frame_id}.png"
     save_image(gt_colors, gt_path)
+
+    # Collision stats and visualization.
+    uproj_x = _uproj_x.numpy()
+    uproj_y = _uproj_y.numpy()
+    collision_count_map = build_collision_count_map(uproj_x, uproj_y, height, width)
+    total_pixels = height * width
+    valid_pixels = int(mask.sum())
+    void_pixels = total_pixels - valid_pixels
+    void_pct = (void_pixels / total_pixels * 100.0) if total_pixels > 0 else 0.0
+    collision_pixels = int((collision_count_map > 1).sum())
+    max_collisions = int(collision_count_map.max())
+    total_points = int(uproj_x.size)
+    collision_pixels_pct = (collision_pixels / total_points * 100.0) if total_points > 0 else 0.0
+
+    collision_path = DEFAULT_OUTPUT_DIR / f"range_collision_seq{seq_id}_frame{frame_id}.png"
+    save_collision_image(collision_count_map, collision_path)
+
+    print(f"Void pixels: {void_pixels}/{total_pixels} ({void_pct:.2f}%)")
+    print(f"Collision pixels (>1 point): {collision_pixels} ({collision_pixels_pct:.2f}%)")
+    print(f"Max points in a single pixel: {max_collisions}")
+    print(f"Collision count image saved to {collision_path}")
 
     # Optional inference (only if checkpoint is set in the config)
     if config.get("checkpoint"):
