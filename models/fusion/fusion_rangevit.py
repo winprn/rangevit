@@ -411,132 +411,46 @@ class FusionRangeViT(nn.Module):
         )
         z.additional_features = {'idx_query': {}, 'counts': {}}
 
-        # ========== FUSION 1: After Stem ==========
-        # Range stem
-        range_stem_out, skip = self.range_encoder.patch_embed(range_image_padded)
-        # skip: [B, D_h, H, W] (ConvStem hidden dim output before proj)
-
-        # DEBUG: Print input point info
-        print(f"[DEBUG] Input points: {point_coords.shape[0]} points, coords range: min={point_coords.min(dim=0).values.tolist()}, max={point_coords.max(dim=0).values.tolist()}")
-        print(f"[DEBUG] voxel_pres={self.voxel_pres}, voxel_vres={self.voxel_vres}")
-        import sys; sys.stdout.flush()
-
-        # Voxel stem
+        # ========== VOXEL BRANCH (runs completely, independent) ==========
+        # Voxelize points
         x0 = initial_voxelize(z, self.voxel_pres, self.voxel_vres)
-        print(f"[DEBUG] After voxelize: coords={x0.C.shape}, feats={x0.F.shape}, stride={x0.s}")
-        print(f"[DEBUG] After voxelize coords range: min={x0.C.min(dim=0).values.tolist()}, max={x0.C.max(dim=0).values.tolist()}")
-        import sys; sys.stdout.flush()
 
-        x0 = self.voxel_branch.stem(x0)
-        print(f"[DEBUG] After stem: coords={x0.C.shape}, feats={x0.F.shape}, stride={x0.s}")
-        import sys; sys.stdout.flush()
+        # Run voxel U-Net completely with its own internal skip connections
+        # This keeps torchsparse's internal state consistent
+        voxel_out = self.voxel_branch(x0)
+        # voxel_out contains: 'stem', 'bottleneck', 'final', 'x0', 'x1', 'x2'
 
-        # TEST: Run voxel branch standalone (without fusion) to check if torchsparse works
-        print("[DEBUG] Testing voxel branch standalone (no fusion)...")
-        import sys; sys.stdout.flush()
-        try:
-            _x1 = self.voxel_branch.stage1(x0)
-            print(f"[DEBUG] Standalone x1: coords={_x1.C.shape}, stride={_x1.s}")
-            _x2 = self.voxel_branch.stage2(_x1)
-            print(f"[DEBUG] Standalone x2: coords={_x2.C.shape}, stride={_x2.s}")
-            _x3 = self.voxel_branch.stage3(_x2)
-            print(f"[DEBUG] Standalone x3: coords={_x3.C.shape}, stride={_x3.s}")
-            # 3-stage architecture: stage3 is now bottleneck (no stage4)
-            print("[DEBUG] Voxel branch standalone test PASSED!")
-            del _x1, _x2, _x3
-        except Exception as e:
-            print(f"[DEBUG] Voxel branch standalone test FAILED: {e}")
-        import sys; sys.stdout.flush()
+        # ========== RANGE BRANCH (runs completely, independent) ==========
+        # Range stem (ConvStem)
+        range_stem_out, skip = self.range_encoder.patch_embed(range_image_padded)
+        # skip: [B, D_h, H, W]
 
-        # Fusion at point level
-        z0_voxel = voxel_to_point(x0, z)
+        # Range encoder (ViT)
+        range_enc_out, _ = self.range_encoder(range_image_padded)
+        range_enc = range_enc_out[:, 1:]  # Remove CLS token: [B, N_tokens, d_model]
+
+        # Range decoder
+        range_dec = self.range_decoder(range_enc, (H, W), skip, return_features=True)
+        range_dec = F.interpolate(range_dec, size=(H, W), mode='bilinear', align_corners=False)
+        range_dec = unpadding(range_dec, (H_ori, W_ori))
+
+        # ========== FUSION 1: After Stem ==========
+        # Extract features at point locations (V2P and R2P only, NO P2V injection)
+        z0_voxel = voxel_to_point(voxel_out['stem'], z)
         z0_range = range_to_point(skip, range_pxpy, batch_indices, B)
         z0_point = self.point_transforms[0](point_features)
         z0 = self.fusion_modules[0](z0_range, z0_voxel.F, z0_point)
 
-        # Update PointTensor with fused features
-        z_fused = PointTensor(z0, z.C, idx_query=z.idx_query, weights=z.weights)
-        z_fused.additional_features = z.additional_features
-
-        # Update voxel branch with fused features
-        x0_fused = point_to_voxel(x0, z_fused)
-
-        # ========== FUSION 2: After Encoder ==========
-        # Range encoder (full ViT forward)
-        range_enc_out, _ = self.range_encoder(range_image_padded)
-        # range_enc_out: [B, N_tokens+1, d_model]
-        range_enc = range_enc_out[:, 1:]  # Remove CLS token: [B, N_tokens, d_model]
-
-        # Voxel encoder stages
-        x1 = self.voxel_branch.stage1(x0_fused)
-
-        # DEBUG: Print tensor info before stage2
-        print(f"[DEBUG] x0_fused: coords={x0_fused.C.shape}, feats={x0_fused.F.shape}, stride={x0_fused.s}")
-        print(f"[DEBUG] x0_fused coords range: min={x0_fused.C.min(dim=0).values.tolist()}, max={x0_fused.C.max(dim=0).values.tolist()}")
-        print(f"[DEBUG] x1: coords={x1.C.shape}, feats={x1.F.shape}, stride={x1.s}")
-        print(f"[DEBUG] x1 coords range: min={x1.C.min(dim=0).values.tolist()}, max={x1.C.max(dim=0).values.tolist()}")
-        print(f"[DEBUG] x1 num voxels: {x1.C.shape[0]}")
-        import sys; sys.stdout.flush()
-
-        x2 = self.voxel_branch.stage2(x1)
-        print(f"[DEBUG] x2: coords={x2.C.shape}, feats={x2.F.shape}, stride={x2.s}")
-        print(f"[DEBUG] x2 coords range: min={x2.C.min(dim=0).values.tolist()}, max={x2.C.max(dim=0).values.tolist()}")
-        import sys; sys.stdout.flush()
-
-        x3 = self.voxel_branch.stage3(x2)  # Bottleneck (3-stage architecture)
-        bottleneck_out = x3  # Preserve original for cache preservation
-        print(f"[DEBUG] x3: coords={x3.C.shape}, feats={x3.F.shape}, stride={x3.s}")
-        print(f"[DEBUG] x3 coords range: min={x3.C.min(dim=0).values.tolist()}, max={x3.C.max(dim=0).values.tolist()}")
-        import sys; sys.stdout.flush()
-
-        # Fusion at point level (using x3 as bottleneck)
-        z1_voxel = voxel_to_point(x3, z_fused)
+        # ========== FUSION 2: After Encoder/Bottleneck ==========
+        z1_voxel = voxel_to_point(voxel_out['bottleneck'], z)
         z1_range = range_to_point_from_tokens(
             range_enc, range_pxpy, batch_indices, B, H, W, self.patch_stride
         )
         z1_point = self.point_transforms[1](z0)
         z1 = self.fusion_modules[1](z1_range, z1_voxel.F, z1_point)
 
-        # Update PointTensor
-        z_fused = PointTensor(z1, z_fused.C, idx_query=z_fused.idx_query, weights=z_fused.weights)
-        z_fused.additional_features = z.additional_features
-
-        # Update voxel branch (x3 is bottleneck in 3-stage architecture)
-        x3_fused = point_to_voxel(x3, z_fused)
-
         # ========== FUSION 3: After Decoder ==========
-        # Range decoder
-        GS_H, GS_W = H // self.patch_stride[0], W // self.patch_stride[1]
-        range_dec = self.range_decoder(range_enc, (H, W), skip, return_features=True)
-        # range_dec: [B, d_decoder, H, W] (full resolution features)
-
-        # Interpolate decoder output to original size
-        range_dec = F.interpolate(range_dec, size=(H, W), mode='bilinear', align_corners=False)
-        range_dec = unpadding(range_dec, (H_ori, W_ori))
-
-        # Voxel decoder (3-stage: 3 up blocks)
-        # Use original bottleneck caches (before fusion) for proper kernel map building
-        x3_drop = SparseTensor(self.dropout(x3_fused.F), x3_fused.C, x3_fused.s)
-        x3_drop._caches = bottleneck_out._caches
-
-        y1 = self.voxel_branch.up1_deconv(x3_drop)
-        y1 = torchsparse.cat([y1, x2])  # skip from stage2
-        y1 = self.voxel_branch.up1_blocks(y1)
-
-        y2 = self.voxel_branch.up2_deconv(y1)
-        y2 = torchsparse.cat([y2, x1])  # skip from stage1
-        y2 = self.voxel_branch.up2_blocks(y2)
-
-        y2_drop = SparseTensor(self.dropout(y2.F), y2.C, y2.s)
-        y2_drop._caches = y2._caches
-
-        y3 = self.voxel_branch.up3_deconv(y2_drop)
-        y3 = torchsparse.cat([y3, x0_fused])  # skip from stem (fused version that encoder stages used)
-        y3 = self.voxel_branch.up3_blocks(y3)
-        # y3 is final output (no up4 in 3-stage architecture)
-
-        # Fusion at point level
-        z2_voxel = voxel_to_point(y3, z_fused)
+        z2_voxel = voxel_to_point(voxel_out['final'], z)
         z2_range = range_to_point(range_dec, range_pxpy, batch_indices, B)
         z2_point = self.point_transforms[2](z1)
         z2 = self.fusion_modules[2](z2_range, z2_voxel.F, z2_point)
