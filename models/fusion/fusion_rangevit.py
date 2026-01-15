@@ -484,6 +484,7 @@ class FusionRangeViT(nn.Module):
         import sys; sys.stdout.flush()
 
         x3 = self.voxel_branch.stage3(x2)  # Bottleneck (3-stage architecture)
+        bottleneck_out = x3  # Preserve original for cache preservation
         print(f"[DEBUG] x3: coords={x3.C.shape}, feats={x3.F.shape}, stride={x3.s}")
         print(f"[DEBUG] x3 coords range: min={x3.C.min(dim=0).values.tolist()}, max={x3.C.max(dim=0).values.tolist()}")
         import sys; sys.stdout.flush()
@@ -514,8 +515,9 @@ class FusionRangeViT(nn.Module):
         range_dec = unpadding(range_dec, (H_ori, W_ori))
 
         # Voxel decoder (3-stage: 3 up blocks)
+        # Use original bottleneck caches (before fusion) for proper kernel map building
         x3_drop = SparseTensor(self.dropout(x3_fused.F), x3_fused.C, x3_fused.s)
-        x3_drop._caches = x3_fused._caches
+        x3_drop._caches = bottleneck_out._caches
 
         y1 = self.voxel_branch.up1_deconv(x3_drop)
         y1 = torchsparse.cat([y1, x2])  # skip from stage2
