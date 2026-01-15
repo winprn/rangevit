@@ -232,7 +232,7 @@ class FusionRangeViT(nn.Module):
         classifier_in = self.voxel_bottleneck_channels + self.voxel_final_channels
         self.classifier = nn.Linear(classifier_in, n_cls)
 
-        self.dropout = nn.Dropout(dropout_p, inplace=True)
+        self.dropout = nn.Dropout(dropout_p, inplace=False)
 
     def _get_vit_dim(self, backbone: str) -> int:
         """Get d_model dimension for ViT backbone."""

@@ -66,7 +66,7 @@ class BasicConvolutionBlock(nn.Module):
                 stride=stride,
             ),
             SyncBatchNorm(outc) if if_dist else BatchNorm(outc),
-            spnn.ReLU(True),
+            spnn.ReLU(False),
         )
 
     def forward(self, x):
@@ -93,7 +93,7 @@ class BasicDeconvolutionBlock(nn.Module):
                 transposed=True,
             ),
             SyncBatchNorm(outc) if if_dist else BatchNorm(outc),
-            spnn.ReLU(True),
+            spnn.ReLU(False),
         )
 
     def forward(self, x):
@@ -122,7 +122,7 @@ class ResidualBlock(nn.Module):
                 stride=stride,
             ),
             SyncBatchNorm(outc) if if_dist else BatchNorm(outc),
-            spnn.ReLU(True),
+            spnn.ReLU(False),
             spnn.Conv3d(
                 outc, outc,
                 kernel_size=ks,
@@ -143,7 +143,7 @@ class ResidualBlock(nn.Module):
                 ),
                 SyncBatchNorm(outc * self.expansion) if if_dist else BatchNorm(outc * self.expansion),
             )
-        self.relu = spnn.ReLU(True)
+        self.relu = spnn.ReLU(False)
 
     def forward(self, x):
         out = self.relu(self.net(x) + self.downsample(x))
@@ -198,7 +198,7 @@ class Bottleneck(nn.Module):
                 ),
                 SyncBatchNorm(outc * self.expansion) if if_dist else BatchNorm(outc * self.expansion),
             )
-        self.relu = spnn.ReLU(True)
+        self.relu = spnn.ReLU(False)
 
     def forward(self, x):
         out = self.relu(self.net(x) + self.downsample(x))
@@ -267,10 +267,10 @@ class MinkUNetVoxelEncoder(nn.Module):
         self.stem = nn.Sequential(
             spnn.Conv3d(in_feature_dim, cs[0], kernel_size=3, stride=1),
             SyncBatchNorm(cs[0]) if if_dist else BatchNorm(cs[0]),
-            spnn.ReLU(True),
+            spnn.ReLU(False),
             spnn.Conv3d(cs[0], cs[0], kernel_size=3, stride=1),
             SyncBatchNorm(cs[0]) if if_dist else BatchNorm(cs[0]),
-            spnn.ReLU(True),
+            spnn.ReLU(False),
         )
 
         # Encoder stages (3 stages to avoid Z-dimension collapse)
@@ -308,7 +308,7 @@ class MinkUNetVoxelEncoder(nn.Module):
         self.in_channels = cs[6] + cs[0]
         self.up3_blocks = nn.Sequential(*self._make_layer(self.block, cs[6], num_layer[5], if_dist=if_dist))
 
-        self.dropout = nn.Dropout(dropout_p, True)
+        self.dropout = nn.Dropout(dropout_p, inplace=False)  # Must be False to avoid modifying bottleneck_out.F
 
         # Initialize weights
         self._weight_initialization()
@@ -440,9 +440,10 @@ class MinkUNetVoxelEncoder(nn.Module):
         Returns:
             SparseTensor at final resolution
         """
-        x3 = SparseTensor(self.dropout(x3.F), x3.C, x3.s)
+        x3_dropped = SparseTensor(self.dropout(x3.F), x3.C, x3.s)
+        x3_dropped._caches = x3._caches  # Preserve caches for transposed convolutions
 
-        y1 = self.up1_deconv(x3)
+        y1 = self.up1_deconv(x3_dropped)
         y1 = torchsparse.cat([y1, x2])  # skip from stage2
         y1 = self.up1_blocks(y1)
 

@@ -66,7 +66,7 @@ class FusionMLP(nn.Module):
         layers = [
             nn.Linear(total_in, hidden_dim),
             nn.SyncBatchNorm(hidden_dim) if if_dist else nn.BatchNorm1d(hidden_dim),
-            nn.ReLU(inplace=True),
+            nn.ReLU(inplace=False),
         ]
 
         if dropout_p > 0:
@@ -75,7 +75,7 @@ class FusionMLP(nn.Module):
         layers.extend([
             nn.Linear(hidden_dim, out_channels),
             nn.SyncBatchNorm(out_channels) if if_dist else nn.BatchNorm1d(out_channels),
-            nn.ReLU(inplace=True),
+            nn.ReLU(inplace=False),
         ])
 
         self.mlp = nn.Sequential(*layers)
@@ -144,7 +144,7 @@ class PointTransform(nn.Module):
         self.transform = nn.Sequential(
             nn.Linear(in_channels, out_channels),
             nn.SyncBatchNorm(out_channels) if if_dist else nn.BatchNorm1d(out_channels),
-            nn.ReLU(inplace=True),
+            nn.ReLU(inplace=False),
         )
 
         self._init_weights()
@@ -213,7 +213,7 @@ class FusionMLPWithResidual(nn.Module):
         layers = [
             nn.Linear(total_in, hidden_dim),
             nn.SyncBatchNorm(hidden_dim) if if_dist else nn.BatchNorm1d(hidden_dim),
-            nn.ReLU(inplace=True),
+            nn.ReLU(inplace=False),
         ]
 
         if dropout_p > 0:
@@ -225,7 +225,7 @@ class FusionMLPWithResidual(nn.Module):
         ])
 
         self.mlp = nn.Sequential(*layers)
-        self.relu = nn.ReLU(inplace=True)
+        self.relu = nn.ReLU(inplace=False)
 
         self._init_weights()
 

@@ -858,3 +858,231 @@ python main.py 'config_fusion_kitti.yaml' --data_root '<path>' --save_path './te
 2. Always ensure sufficient voxel count after downsampling (aim for >8 voxels in smallest dimension)
 3. Use very large batch_scale (1M+) to prevent batch mixing in torchsparse
 4. 3-stage architecture still provides sufficient receptive field (8x downsampling) for semantic segmentation
+
+---
+
+## Final Working Architecture (January 15, 2026)
+
+After extensive debugging, the fusion model now works correctly. This section documents the final architecture and critical design decisions.
+
+### Architecture Overview
+
+```
+Range Branch:    ConvStem → ViT Encoder → DecoderUpConv
+                    ↓           ↓              ↓
+                   R2P         R2P            R2P
+                    ↓           ↓              ↓
+Point Fusion:    fuse1 ───→ fuse2 ────────→ fuse3 → Classifier
+                    ↑           ↑              ↑
+                   V2P         V2P            V2P
+                    ↑           ↑              ↑
+Voxel Branch:    stem → stage1 → stage2 → stage3 → up1 → up2 → up3
+                 (runs completely independently with internal skip connections)
+```
+
+### Critical Design Principle: Independent Branches
+
+**The voxel branch MUST run completely independently.** Do NOT inject fused features back into the voxel branch using `point_to_voxel()`. This corrupts torchsparse's internal state (kernel maps, coordinate caches) and causes various errors.
+
+**Correct Pattern:**
+```python
+# Run voxel branch completely FIRST
+voxel_out = self.voxel_branch(x0)  # Returns dict with 'stem', 'bottleneck', 'final'
+
+# Run range branch completely
+skip = self.range_stem(image)
+range_enc = self.range_encoder(image)
+range_dec = self.range_decoder(range_enc)
+
+# Fusion at point level ONLY (V2P and R2P, NO P2V)
+z0_voxel = voxel_to_point(voxel_out['stem'], z)      # V2P: extract features
+z0_range = range_to_point(skip, pxpy, batch, B)      # R2P: extract features
+z0 = fusion_module(z0_range, z0_voxel.F, z0_point)   # Fuse at point level
+# NO point_to_voxel() call!
+```
+
+**Wrong Pattern (causes torchsparse corruption):**
+```python
+# DON'T DO THIS - corrupts torchsparse internal state
+x0_fused = point_to_voxel(x0, z_fused)  # Injects features back
+x1 = self.voxel_branch.stage1(x0_fused)  # Encoder uses corrupted tensor
+# ... decoder fails with coordinate mismatches
+```
+
+### Files and Their Current State
+
+#### 1. `models/fusion/minkunet_voxel.py`
+
+**3-Stage Architecture** (to avoid Z-dimension collapse):
+- Encoder: stem → stage1 (stride 2) → stage2 (stride 4) → stage3 (stride 8, bottleneck)
+- Decoder: up1 → up2 → up3 (back to stride 1)
+- Skip connections: up1←stage2, up2←stage1, up3←stem
+
+**Configuration:**
+```python
+num_layer = [2, 3, 4, 2, 2, 2]  # 3 encoder + 3 decoder stages
+planes = [32, 32, 64, 128, 128, 96, 96]  # 7 values for 3-stage
+```
+
+**Output Channels (with ResBlock, expansion=1):**
+- `stem_out_channels = 32`
+- `bottleneck_out_channels = 128`  (cs[3] * expansion)
+- `final_out_channels = 96`  (cs[6] * expansion)
+
+**Dropout:** Applied ONLY at bottleneck (after encoder, before decoder). Mid-decoder dropout was removed to avoid inplace operation conflicts during backward pass.
+
+```python
+def forward(self, x0):
+    # Stem
+    x0 = self.stem(x0)
+    stem_out = x0
+
+    # Encoder
+    x1 = self.stage1(x0)
+    x2 = self.stage2(x1)
+    x3 = self.stage3(x2)
+    bottleneck_out = x3
+
+    # Dropout at bottleneck only
+    x3 = SparseTensor(self.dropout(x3.F), x3.C, x3.s)
+    x3._caches = bottleneck_out._caches
+
+    # Decoder with skip connections
+    y1 = self.up1_deconv(x3)
+    y1 = torchsparse.cat([y1, x2])
+    y1 = self.up1_blocks(y1)
+
+    y2 = self.up2_deconv(y1)
+    y2 = torchsparse.cat([y2, x1])
+    y2 = self.up2_blocks(y2)
+
+    # NO dropout here - causes inplace operation conflicts
+
+    y3 = self.up3_deconv(y2)
+    y3 = torchsparse.cat([y3, x0])
+    y3 = self.up3_blocks(y3)
+
+    return {'stem': stem_out, 'bottleneck': bottleneck_out, 'final': y3, ...}
+```
+
+#### 2. `models/fusion/fusion_rangevit.py`
+
+**Simplified Forward Pass** (~70 lines instead of ~170):
+
+```python
+def forward(self, range_image, point_features, point_coords, batch_indices, range_pxpy):
+    # Initialize PointTensor
+    z = PointTensor(point_features, coords_with_batch, ...)
+
+    # ========== VOXEL BRANCH (runs completely, independent) ==========
+    x0 = initial_voxelize(z, self.voxel_pres, self.voxel_vres)
+    voxel_out = self.voxel_branch(x0)
+
+    # ========== RANGE BRANCH (runs completely, independent) ==========
+    range_stem_out, skip = self.range_encoder.patch_embed(range_image_padded)
+    range_enc_out, _ = self.range_encoder(range_image_padded)
+    range_enc = range_enc_out[:, 1:]
+    range_dec = self.range_decoder(range_enc, (H, W), skip, return_features=True)
+
+    # ========== FUSION 1: After Stem ==========
+    z0_voxel = voxel_to_point(voxel_out['stem'], z)
+    z0_range = range_to_point(skip, range_pxpy, batch_indices, B)
+    z0_point = self.point_transforms[0](point_features)
+    z0 = self.fusion_modules[0](z0_range, z0_voxel.F, z0_point)
+
+    # ========== FUSION 2: After Encoder/Bottleneck ==========
+    z1_voxel = voxel_to_point(voxel_out['bottleneck'], z)
+    z1_range = range_to_point_from_tokens(range_enc, ...)
+    z1_point = self.point_transforms[1](z0)
+    z1 = self.fusion_modules[1](z1_range, z1_voxel.F, z1_point)
+
+    # ========== FUSION 3: After Decoder ==========
+    z2_voxel = voxel_to_point(voxel_out['final'], z)
+    z2_range = range_to_point(range_dec, range_pxpy, batch_indices, B)
+    z2_point = self.point_transforms[2](z1)
+    z2 = self.fusion_modules[2](z2_range, z2_voxel.F, z2_point)
+
+    # ========== CLASSIFICATION ==========
+    out = self.classifier(torch.cat([z1, z2], dim=1))
+    return out
+```
+
+#### 3. `models/fusion/representation_utils.py`
+
+**Key Parameters:**
+- `batch_scale = 1000000` - Ensures batch indices are far apart in coordinate space to survive strided convolutions
+
+**Coordinate Scaling:**
+```python
+def initial_voxelize(z, init_res, after_res):
+    # Correct formula: coords / voxel_size (not coords * init_res / after_res)
+    scaled_coords = z.C[:, :3] / after_res
+
+    # Offset to non-negative
+    coord_min = scaled_coords.min(dim=0).values
+    scaled_coords = scaled_coords - coord_min
+
+    # Scale batch index to survive stride operations
+    batch_scale = 1000000
+    scaled_batch = z.C[:, -1:] * batch_scale
+    ...
+```
+
+#### 4. `config_fusion_kitti.yaml`
+
+```yaml
+use_fusion_voxel: true
+
+voxel_branch:
+  in_channels: 4
+  num_layer: [2, 3, 4, 2, 2, 2]  # 3-stage
+  block_type: "ResBlock"
+  cr: 1.0
+  planes: [32, 32, 64, 128, 128, 96, 96]
+  pres: 0.05
+  vres: 0.10  # 10cm voxels
+  dropout_p: 0.3
+
+fusion:
+  hidden_ratio: 2.0
+```
+
+### Issues Encountered and Solutions
+
+| Issue | Cause | Solution |
+|-------|-------|----------|
+| CUDA error in stage4 | Z-dimension collapsed to <8 voxels after 4 strides | Changed to 3-stage architecture |
+| Batch dimension collapse | Batch indices mixed with spatial coords after striding | Increased batch_scale to 1M |
+| NoneType kernel map error | Cache lost when creating SparseTensor for dropout | Preserve caches: `caches = x._caches; x = SparseTensor(...); x._caches = caches` |
+| Skip connection mismatch (4 vs 75920 voxels) | `point_to_voxel` created tensors with corrupted internal state | Run voxel branch completely independently, NO P2V injection |
+| Inplace operation error on backward | Mid-decoder dropout with cache sharing caused tensor version conflicts | Removed mid-decoder dropout, keep only bottleneck dropout |
+
+### Training Command
+
+```bash
+python main.py 'config_fusion_kitti.yaml' \
+    --data_root '/path/to/semantic_kitti/dataset/sequences/' \
+    --save_path '/path/to/logs' \
+    --batch_size 4
+```
+
+### Expected Behavior
+
+1. **Voxelization:** ~78k voxels at stride 1, coords range [0, ~1100] × [0, ~700] × [0, ~74] × [0, 3M]
+2. **After stage3:** ~5k voxels at stride 8, Z dimension ~9 voxels (healthy)
+3. **All batches survive:** Batch max should be >0 at all stages
+4. **Forward pass:** Completes without errors
+5. **Backward pass:** Completes without inplace operation errors
+6. **Training:** Proceeds normally with loss decreasing
+
+### Lessons Learned
+
+1. **torchsparse is sensitive to tensor state:** Creating new SparseTensors loses internal caches (kmaps, cmaps) needed for transposed convolutions. Always preserve caches when applying operations like dropout.
+
+2. **Don't inject features into sparse branches:** The voxel branch should run as a self-contained forward pass. Injecting fused features via `point_to_voxel` corrupts the encoder-decoder coordinate relationship.
+
+3. **3-stage is sufficient for KITTI:** SemanticKITTI's limited vertical range (7-8m) means Z-dimension only has ~74 voxels at 0.1m resolution. 4 stride-2 operations would collapse this to ~4 voxels, causing torchsparse failures.
+
+4. **Batch scaling must be very large:** With spatial coords up to ~1000-2000, batch indices need to be scaled by 1M+ to remain distinguishable after multiple stride operations.
+
+5. **Avoid inplace operations with cache sharing:** When SparseTensors share caches, inplace operations (like `spnn.ReLU(True)`) can corrupt tensors needed for gradient computation.
