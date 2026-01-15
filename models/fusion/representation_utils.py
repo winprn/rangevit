@@ -66,8 +66,10 @@ def initial_voxelize(z: PointTensor, init_res: float, after_res: float) -> Spars
     # torchsparse applies stride to all coordinates including batch dimension
     # Use large scale factor to ensure batches are far apart in coordinate space
     # This prevents batch mixing and ensures each batch survives sparse convolutions
-    # With max spatial coord ~1000-2000, use scale > 10000 to separate batches clearly
-    batch_scale = 10000
+    # With max spatial coord ~1000-2000 and 4 stride-2 ops (divides by 16 total),
+    # use batch_scale = 1,000,000 so scaled indices (0, 1M, 2M, 3M, ...) remain
+    # far larger than spatial coords even after striding: 1M/16 = 62,500 >> 1000
+    batch_scale = 1000000
     scaled_batch = z.C[:, -1:] * batch_scale
 
     new_float_coord = torch.cat(
