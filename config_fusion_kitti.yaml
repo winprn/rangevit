@@ -38,7 +38,7 @@ voxel_features:
 voxel_branch:
   in_channels: 4  # x, y, z, intensity
   num_layer: [2, 3, 4, 6, 2, 2, 2, 2]
-  block_type: "Bottleneck"
+  block_type: "ResBlock"  # Changed from Bottleneck to ResBlock
   cr: 1.0
   planes: [32, 32, 64, 128, 256, 256, 128, 96, 96]
   pres: 0.05  # Point resolution (not used after fix)

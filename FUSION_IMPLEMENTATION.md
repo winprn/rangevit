@@ -747,3 +747,39 @@ python main.py 'config_fusion_kitti.yaml' --data_root '<path>' --save_path './te
 - After voxelize: ~15-20k voxels (not 127k)
 - Standalone test: PASSED
 - All 4 batches should survive through all stages
+
+**Second Iteration - Batch Dimension Collapse:**
+
+After applying vres=0.10, voxelization produced ~78k voxels (good), but stage4 still failed. Debug output showed:
+- x3: `batch max = 0` (only batch 0 survived)
+- Other batches filtered out during sparse convolutions
+
+**Root Cause:** Batch scaling factor of 16 was insufficient. With max spatial coords ~1000-2000, batches with indices 0, 16, 32, 48 were too close together, causing torchsparse to mix or filter them during sparse convolution kernels.
+
+**Additional Fixes Applied:**
+
+1. **Increased Batch Scale Factor** (`representation_utils.py:70`):
+   ```python
+   batch_scale = 10000  # Increased from 16
+   ```
+   - Ensures batches are far apart in coordinate space (0, 10000, 20000, 30000)
+   - Prevents batch mixing during sparse convolution
+   - All batches survive striding: 10000/16 = 625 (still clearly separated)
+
+2. **Changed Block Type** (`config_fusion_kitti.yaml:41`):
+   ```yaml
+   block_type: "ResBlock"  # Changed from "Bottleneck"
+   ```
+   - Simpler architecture (expansion=1 instead of 4)
+   - Less memory usage
+   - May avoid edge cases in torchsparse kernel building
+
+**Test Again:**
+```bash
+python main.py 'config_fusion_kitti.yaml' --data_root '<path>' --save_path './test' --batch_size 4
+```
+
+**Expected:**
+- After voxelize: batch max = 30000 (not 48)
+- x3: batch max > 0 (all batches survive)
+- Standalone test: PASSED
