@@ -271,10 +271,15 @@ class Experiment(object):
             # Run one epoch
             self.trainer.run(epoch, mode='Train')
 
-            # Run validation
-            if (epoch % self.settings.val_frequency == 0 or
-                epoch == self.settings.n_epochs - 1 or
-                epoch == self.epoch_start):
+            # Run validation (disable when val_frequency <= 0)
+            try:
+                val_frequency = int(getattr(self.settings, 'val_frequency', 0))
+            except (TypeError, ValueError):
+                val_frequency = 0
+            do_validation = val_frequency > 0
+            if do_validation and (epoch % val_frequency == 0 or
+                                  epoch == self.settings.n_epochs - 1 or
+                                  epoch == self.epoch_start):
                 val_result = self.trainer.run(epoch, mode='Validation')
                 primary_iou_key = 'IOU_point' if 'IOU_point' in val_result else 'IOU'
 
