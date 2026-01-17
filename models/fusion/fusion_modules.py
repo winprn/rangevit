@@ -23,7 +23,7 @@ Implements:
 import torch
 import torch.nn as nn
 
-__all__ = ['FusionMLP', 'PointTransform']
+__all__ = ['FusionMLP', 'PointTransform', 'PointToRangeCrossAttention']
 
 
 class FusionMLP(nn.Module):
@@ -263,3 +263,143 @@ class FusionMLPWithResidual(nn.Module):
             out = out + point_feats
 
         return self.relu(out)
+
+
+class PointToRangeCrossAttention(nn.Module):
+    """
+    Cross-attention where points query local ViT features.
+
+    Each point attends to a local neighborhood (e.g., 3x3) in the range image
+    around its projected pixel location.
+
+    Args:
+        dim: Feature dimension for Q, K, V projections
+        window_size: Size of local attention window (default: 3 for 3x3)
+        num_heads: Number of attention heads (default: 1)
+        if_dist: Whether to use SyncBatchNorm for distributed training
+    """
+
+    def __init__(
+        self,
+        dim: int,
+        window_size: int = 3,
+        num_heads: int = 1,
+        if_dist: bool = True,
+    ):
+        super().__init__()
+
+        assert dim % num_heads == 0, f"dim ({dim}) must be divisible by num_heads ({num_heads})"
+
+        self.dim = dim
+        self.window_size = window_size
+        self.num_heads = num_heads
+        self.head_dim = dim // num_heads
+        self.scale = self.head_dim ** -0.5
+
+        self.q_proj = nn.Linear(dim, dim)
+        self.k_proj = nn.Linear(dim, dim)
+        self.v_proj = nn.Linear(dim, dim)
+        self.out_proj = nn.Linear(dim, dim)
+
+        BatchNorm = nn.SyncBatchNorm if if_dist else nn.BatchNorm1d
+        self.norm = BatchNorm(dim)
+
+        self._init_weights()
+
+    def _init_weights(self):
+        """Initialize weights."""
+        for m in [self.q_proj, self.k_proj, self.v_proj, self.out_proj]:
+            nn.init.xavier_uniform_(m.weight)
+            nn.init.constant_(m.bias, 0)
+        nn.init.constant_(self.norm.weight, 1)
+        nn.init.constant_(self.norm.bias, 0)
+
+    def forward(
+        self,
+        point_feats: torch.Tensor,
+        vit_feats: torch.Tensor,
+        proj_y: torch.Tensor,
+        proj_x: torch.Tensor,
+    ) -> torch.Tensor:
+        """
+        Cross-attention from points to range image features.
+
+        Args:
+            point_feats: [N, D] point features (queries)
+            vit_feats: [H, W, D] ViT feature map (keys/values)
+            proj_y: [N] row indices for each point (0 to H-1)
+            proj_x: [N] col indices for each point (0 to W-1)
+
+        Returns:
+            fused_feats: [N, D] fused point features
+        """
+        N, D = point_feats.shape
+        H, W, _ = vit_feats.shape
+
+        # Gather local neighborhood for each point
+        neighbor_feats = self._gather_neighbors(vit_feats, proj_y, proj_x)  # [N, K, D]
+        K = neighbor_feats.shape[1]  # window_size^2
+
+        # Multi-head attention
+        Q = self.q_proj(point_feats).view(N, 1, self.num_heads, self.head_dim)  # [N, 1, H, D/H]
+        K_feat = self.k_proj(neighbor_feats).view(N, K, self.num_heads, self.head_dim)  # [N, K, H, D/H]
+        V = self.v_proj(neighbor_feats).view(N, K, self.num_heads, self.head_dim)  # [N, K, H, D/H]
+
+        # Transpose for attention: [N, H, 1, D/H] and [N, H, K, D/H]
+        Q = Q.transpose(1, 2)  # [N, H, 1, D/H]
+        K_feat = K_feat.transpose(1, 2)  # [N, H, K, D/H]
+        V = V.transpose(1, 2)  # [N, H, K, D/H]
+
+        # Attention scores
+        attn = torch.matmul(Q, K_feat.transpose(-2, -1)) * self.scale  # [N, H, 1, K]
+        attn = torch.softmax(attn, dim=-1)
+
+        # Apply attention to values
+        out = torch.matmul(attn, V)  # [N, H, 1, D/H]
+        out = out.transpose(1, 2).reshape(N, D)  # [N, D]
+
+        # Output projection + residual
+        out = self.out_proj(out)
+        out = point_feats + out  # Residual connection
+        out = self.norm(out)
+
+        return out
+
+    def _gather_neighbors(
+        self,
+        vit_feats: torch.Tensor,
+        proj_y: torch.Tensor,
+        proj_x: torch.Tensor,
+    ) -> torch.Tensor:
+        """
+        Gather local window around each point's projected pixel.
+
+        Args:
+            vit_feats: [H, W, D] feature map
+            proj_y: [N] row indices
+            proj_x: [N] col indices
+
+        Returns:
+            neighbor_feats: [N, window_size^2, D]
+        """
+        H, W, D = vit_feats.shape
+        N = proj_y.shape[0]
+        device = vit_feats.device
+
+        # Generate window offsets
+        half = self.window_size // 2
+        offsets_y = torch.arange(-half, half + 1, device=device)
+        offsets_x = torch.arange(-half, half + 1, device=device)
+        grid_y, grid_x = torch.meshgrid(offsets_y, offsets_x, indexing='ij')
+        offsets = torch.stack([grid_y.flatten(), grid_x.flatten()], dim=1)  # [K, 2]
+        K = offsets.shape[0]
+
+        # Compute neighbor coordinates [N, K]
+        # Ensure indices are long type for safe indexing
+        ny = (proj_y.long().unsqueeze(1) + offsets[:, 0].unsqueeze(0)).clamp(0, H - 1)  # [N, K]
+        nx = (proj_x.long().unsqueeze(1) + offsets[:, 1].unsqueeze(0)).clamp(0, W - 1)  # [N, K]
+
+        # Gather features [N, K, D]
+        neighbor_feats = vit_feats[ny, nx]
+
+        return neighbor_feats
