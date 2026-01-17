@@ -185,11 +185,11 @@ class PointFusionRangeViT(nn.Module):
     def _get_vit_dim(self, backbone: str) -> int:
         """Get d_model dimension for ViT backbone."""
         dims = {
-            'vit_small_patch16_384': 384,
-            'vit_base_patch16_384': 768,
+            'vit_small_patch16_384': 256,
+            'vit_base_patch16_384': 256,
             'vit_large_patch16_384': 1024,
         }
-        return dims.get(backbone, 384)
+        return dims.get(backbone, 256)
 
     def _build_range_encoder(
         self,
