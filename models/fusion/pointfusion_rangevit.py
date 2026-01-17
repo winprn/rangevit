@@ -440,3 +440,7 @@ class PointFusionRangeViT(nn.Module):
             'cross_attention': count(self.cross_attn_encoder) + count(self.cross_attn_decoder),
             'classifier': count(self.classifier),
         }
+
+    def counter_model_parameters(self) -> dict:
+        """Alias for count_parameters to match other models."""
+        return self.count_parameters()

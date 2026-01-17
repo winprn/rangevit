@@ -29,6 +29,7 @@ import utils
 import utils.tools as tools
 from models.model_utils import resize_pos_embed
 from utils.tools.mlflow_utils import MLflowManager
+from models.fusion.pointfusion_rangevit import PointFusionRangeViT
 
 
 def build_rangevit_model(settings, pretrained_path=None):
@@ -84,6 +85,35 @@ def build_fusion_model(settings):
         # Pretrained paths (will be loaded later)
         range_pretrained_path=settings.range_pretrained_model,
         voxel_pretrained_path=settings.voxel_pretrained_model,
+    )
+    return model
+
+
+def build_pointfusion_model(settings):
+    """Build PointFusionRangeViT model (range + point branches with cross-attention)."""
+    point_config = getattr(settings, 'point_branch', {}) or {}
+    cross_attn_config = getattr(settings, 'cross_attention', {}) or {}
+
+    model = PointFusionRangeViT(
+        range_in_channels=settings.in_channels,
+        n_cls=settings.n_classes,
+        vit_backbone=settings.vit_backbone,
+        image_size=settings.original_image_size,
+        range_pretrained_path=getattr(settings, 'range_pretrained_model', None),
+        patch_size=settings.patch_size,
+        patch_stride=settings.patch_stride,
+        conv_stem=settings.conv_stem,
+        stem_base_channels=settings.stem_base_channels,
+        stem_hidden_dim=settings.D_h,
+        decoder=settings.decoder,
+        decoder_d_decoder=settings.D_h,
+        skip_filters=settings.skip_filters,
+        point_in_channels=point_config.get('in_channels', 7),
+        point_hidden_dim=point_config.get('hidden_dim', 256),
+        cross_attn_window=cross_attn_config.get('window_size', 3),
+        cross_attn_heads=cross_attn_config.get('num_heads', 4),
+        if_dist=settings.distributed,
+        dropout_p=getattr(settings, 'dropout_p', 0.3),
     )
     return model
 
@@ -167,7 +197,10 @@ class Experiment(object):
 
     def _initModel(self):
         # Model
-        if self.settings.use_fusion_voxel:
+        if getattr(self.settings, 'use_pointfusion', False):
+            # PointFusion model (range + point branches with cross-attention)
+            model = build_pointfusion_model(self.settings)
+        elif self.settings.use_fusion_voxel:
             # Fusion model (range + voxel branches)
             model = build_fusion_model(self.settings)
         else:
@@ -177,7 +210,7 @@ class Experiment(object):
                 pretrained_path=self.settings.pretrained_model)
 
         # Freezing the ViT encoder weights.
-        if self.settings.freeze_vit_encoder and not self.settings.use_fusion_voxel:
+        if self.settings.freeze_vit_encoder and not self.settings.use_fusion_voxel and not getattr(self.settings, 'use_pointfusion', False):
             # Get the encoder based on model type
             encoder = model.rangevit.encoder
 
@@ -214,7 +247,7 @@ class Experiment(object):
                     encoder.blocks[block_id].mlp.fc1.bias.requires_grad = True
                     encoder.blocks[block_id].mlp.fc2.weight.requires_grad = True
                     encoder.blocks[block_id].mlp.fc2.bias.requires_grad = True
-        elif self.settings.freeze_vit_encoder and self.settings.use_fusion_voxel:
+        elif self.settings.freeze_vit_encoder and (self.settings.use_fusion_voxel or getattr(self.settings, 'use_pointfusion', False)):
             print('==> NOTE: freeze_vit_encoder is ignored for fusion model (use pretrained weights loading instead)')
 
 
@@ -251,6 +284,24 @@ class Experiment(object):
                     print(f'==> Load checkpoint msg: {msg}')
                 else:
                     raise ValueError('Invalid checkpoint format for fusion model')
+
+                if not self.settings.finetune_pretrained_model:
+                    print(f'==> Loading optimizer')
+                    if self.settings.val_only is False and 'optimizer' in checkpoint_data:
+                        self.trainer.optimizer.load_state_dict(checkpoint_data['optimizer'])
+                    if 'epoch' in checkpoint_data:
+                        self.epoch_start = checkpoint_data['epoch'] + 1
+
+                    if ('fp16_scaler' in checkpoint_data) and (checkpoint_data['fp16_scaler'] is not None):
+                        self.trainer.fp16_scaler.load_state_dict(checkpoint_data['fp16_scaler'])
+            elif getattr(self.settings, 'use_pointfusion', False):
+                # PointFusion model checkpoint loading
+                if 'model' in checkpoint_data:
+                    print('==> Loading PointFusion model checkpoint')
+                    msg = self.model.load_state_dict(checkpoint_data['model'], strict=False)
+                    print(f'==> Load checkpoint msg: {msg}')
+                else:
+                    raise ValueError('Invalid checkpoint format for PointFusion model')
 
                 if not self.settings.finetune_pretrained_model:
                     print(f'==> Loading optimizer')
