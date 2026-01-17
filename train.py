@@ -263,7 +263,13 @@ class Trainer(object):
 
 
     def run(self, epoch, mode='Train', print_results=False, save_results_path=None):
-        if self.settings.use_fusion_voxel:
+        if getattr(self.settings, 'use_pointfusion', False):
+            # Training and validation with PointFusion model
+            return self.run_with_pointfusion(
+                epoch=epoch, mode=mode,
+                print_results=print_results,
+                save_results_path=save_results_path)
+        elif self.settings.use_fusion_voxel:
             # Training and validation with fusion model (range + voxel branches)
             return self.run_with_fusion(
                 epoch=epoch, mode=mode,
@@ -981,6 +987,271 @@ class Trainer(object):
                                  print_data_distribution=True)
 
             # Print validation point-wise results (fusion)
+            if mode == 'Validation' and (print_results or epoch == self.settings.n_epochs-1):
+                eval_results(pixel_or_point='Point',
+                             settings=self.settings,
+                             recorder=self.recorder,
+                             metrics_dict=metrics_dict,
+                             dataloader=self.val_range_loader,
+                             print_data_distribution=True)
+
+            # Tensorboard logger
+            tensorboard_logger(epoch=epoch,
+                               mode=mode,
+                               recorder=self.recorder,
+                               metrics_dict=metrics_dict,
+                               loss_dict=loss_dict,
+                               lr=epoch_lr,
+                               mapped_cls_name=self.mapped_cls_name)
+
+            # Results at the end of the epoch
+            log_str = '>>> {} Loss {:0.4f} Acc {:0.4f} IOU {:0.4F} Recall {:0.4f}'.format(
+                mode, loss_meter.avg, mean_acc.item(), mean_iou.item(), mean_recall.item())
+            self.recorder.logger.info(log_str)
+
+        if self.mlflow_manager is not None:
+            mlflow_metrics = {
+                f'{mode.lower()}_epoch_loss': loss_meter.avg,
+                f'{mode.lower()}_epoch_acc': mean_acc.item(),
+                f'{mode.lower()}_epoch_iou': mean_iou.item(),
+                f'{mode.lower()}_epoch_recall': mean_recall.item(),
+            }
+            if (mode == 'Train') and (epoch_lr is not None):
+                mlflow_metrics[f'{mode.lower()}_epoch_lr'] = epoch_lr
+            self.mlflow_manager.log_metrics(mlflow_metrics, step=self.iter_steps[mode])
+
+        result_metrics = {
+            'Acc': mean_acc.item(),
+            'IOU': mean_iou.item(),
+            'Recall': mean_recall.item()
+        }
+
+        return result_metrics
+
+    # Method for training and validation with PointFusion model
+    def run_with_pointfusion(self, epoch, mode='Train', print_results=False, save_results_path=None):
+        if mode == 'Train':
+            dataloader = self.train_loader
+            self.model.train()
+            if self.train_sampler is not None:
+                self.train_sampler.set_epoch(epoch)
+        elif mode == 'Validation':
+            dataloader = self.val_loader
+            self.model.eval()
+        else:
+            raise ValueError('invalid mode: {}'.format(mode))
+
+        track_remain_time_1epoch = tools.RemainTime(1)
+
+        model_without_ddp = self.model
+        if hasattr(self.model, 'module'):
+            model_without_ddp = self.model.module
+
+        # Init metrics
+        loss_meter = tools.AverageMeter()
+        self.metrics.reset()
+
+        total_iter = len(dataloader)
+        t_start = time.time()
+
+        log_frequency = max(1, self.settings.log_frequency)
+
+        for i, batch_dict in enumerate(dataloader):
+            t_process_start = time.time()
+            current_lr = None
+
+            # Extract PointFusion inputs from batch dict
+            range_image = batch_dict['range_image'].cuda(non_blocking=True)  # [B, 5, H, W]
+            point_features = batch_dict['point_features'].cuda(non_blocking=True)  # [N_total, 4]
+            cluster_offset = batch_dict['cluster_offset'].cuda(non_blocking=True)  # [N_total, 3]
+            batch_indices = batch_dict['batch_indices'].cuda(non_blocking=True)  # [N_total]
+            range_pxpy = batch_dict['range_pxpy'].cuda(non_blocking=True)  # [N_total, 2]
+            point_labels = batch_dict['point_labels'].cuda(non_blocking=True).long()  # [N_total]
+
+            # Mask for valid labels (ignore class 0)
+            point_labels = point_labels * point_labels.ge(1).long()
+            point_mask = point_labels.ge(1).float()
+
+            # Forward propagation
+            if mode == 'Train':
+                with torch.cuda.amp.autocast(self.fp16_scaler is not None):
+                    # PointFusion model forward: returns [N_total, n_classes]
+                    output = self.model(
+                        range_image, point_features, cluster_offset,
+                        batch_indices, range_pxpy
+                    )
+
+                    # Reshape for loss computation: [N, 1, 1, C] -> match expected format
+                    output_reshaped = output.unsqueeze(1).unsqueeze(2)  # [N, 1, 1, C]
+                    output_reshaped = output_reshaped.permute(0, 3, 1, 2)  # [N, C, 1, 1]
+                    output_softmax = F.softmax(output_reshaped, dim=1)
+
+                    # Labels: [N] -> [N, 1, 1]
+                    labels_reshaped = point_labels.unsqueeze(1).unsqueeze(2)
+                    mask_reshaped = point_mask.unsqueeze(1).unsqueeze(2)
+
+                    # Loss calculation
+                    total_loss, loss_lovasz, loss_focal = self.compute_losses(
+                        output_reshaped, output_softmax, labels_reshaped, mask_reshaped)
+
+                # Backward
+                self.optimizer.zero_grad()
+                if self.fp16_scaler is None:
+                    total_loss.backward()
+                    self.optimizer.step()
+                else:
+                    self.fp16_scaler.scale(total_loss).backward()
+                    self.fp16_scaler.step(self.optimizer)
+                    self.fp16_scaler.update()
+
+                # Update lr after backward (required by pytorch)
+                self.scheduler.step()
+
+            with torch.no_grad():
+                if mode == 'Validation':
+                    # Validation with PointFusion model
+                    with torch.cuda.amp.autocast(self.fp16_scaler is not None):
+                        output = model_without_ddp(
+                            range_image, point_features, cluster_offset,
+                            batch_indices, range_pxpy
+                        )
+
+                    # Reshape for loss computation
+                    output_reshaped = output.unsqueeze(1).unsqueeze(2)  # [N, 1, 1, C]
+                    output_reshaped = output_reshaped.permute(0, 3, 1, 2)  # [N, C, 1, 1]
+                    output_softmax = F.softmax(output_reshaped, dim=1)
+
+                    # Labels: [N] -> [N, 1, 1]
+                    labels_reshaped = point_labels.unsqueeze(1).unsqueeze(2)
+                    mask_reshaped = point_mask.unsqueeze(1).unsqueeze(2)
+
+                    # Loss calculation
+                    total_loss, loss_lovasz, loss_focal = self.compute_losses(
+                        output_reshaped, output_softmax, labels_reshaped, mask_reshaped)
+
+            current_lr = self.optimizer.param_groups[0]['lr']
+
+            # Measure IoU and record loss
+            loss = total_loss.mean()
+            with torch.no_grad():
+                # Get argmax predictions: [N, C, 1, 1] -> [N, 1, 1]
+                argmax = output_reshaped.argmax(dim=1)
+                self.metrics.addBatch(argmax, labels_reshaped)  # Point predictions
+
+            loss_meter.update(loss.item(), range_image.size(0))
+
+            with torch.no_grad():
+                mean_iou_tensor, _, mean_acc_tensor, _ = self.metrics.getIoUnAcc()
+                mean_recall_tensor, _ = self.metrics.getRecall()
+            mean_iou_running = float(mean_iou_tensor)
+            mean_acc_running = float(mean_acc_tensor)
+            mean_recall_running = float(mean_recall_tensor)
+
+            should_log = (i % log_frequency == 0) or (i == total_iter - 1)
+
+            if should_log and self.mlflow_manager is not None:
+                step_id = self.iter_steps[mode]
+                self.iter_steps[mode] += 1
+                mlflow_metrics = {
+                    f'{mode.lower()}_loss': loss.item(),
+                    f'{mode.lower()}_mean_iou': mean_iou_running,
+                    f'{mode.lower()}_mean_acc': mean_acc_running,
+                    f'{mode.lower()}_mean_recall': mean_recall_running,
+                }
+                if mode == 'Train':
+                    mlflow_metrics[f'{mode.lower()}_lr'] = current_lr
+                self.mlflow_manager.log_metrics(mlflow_metrics, step=step_id)
+
+            # Save the predictions
+            if (mode == 'Validation' and save_results_path is not None):
+                pred_np = argmax.squeeze().cpu().numpy()
+                pred_np = pred_np.reshape((-1)).astype(np.int32)
+                index = batch_dict['index']
+                if isinstance(index, torch.Tensor):
+                    assert index.shape[0] == 1
+                    index = index.item()
+                if self.settings.dataset == 'nuScenes':
+                    pred_path = os.path.join(save_results_path, 'lidarseg', self.data_split)
+                    nu_dataset = self.val_loader.dataset.dataset
+                    lidar_token = nu_dataset.token_list[index]
+                    if not os.path.isdir(pred_path):
+                        os.makedirs(pred_path)
+                    pred_result_path = os.path.join(pred_path, '{}_lidarseg.bin'.format(lidar_token))
+                    pred_np.tofile(pred_result_path)
+
+                elif self.settings.dataset == 'SemanticKitti':
+                    sk_dataset = self.val_loader.dataset.dataset
+                    pred_np_origin = sk_dataset.class_map_lut_inv[pred_np]
+                    seq_id, frame_id = sk_dataset.parsePathInfoByIndex(index)
+                    pred_path = os.path.join(save_results_path, 'sequences', seq_id, 'predictions')
+                    if not os.path.isdir(pred_path):
+                        os.makedirs(pred_path)
+                    pred_result_path = os.path.join(pred_path, '{}.label'.format(frame_id))
+                    pred_np_origin.tofile(pred_result_path)
+
+            # Timer logger
+            t_process_end = time.time()
+            data_cost_time = t_process_start - t_start
+            process_cost_time = t_process_end - t_process_start
+            self.remain_time.update(cost_time=(time.time() - t_start), mode=mode)
+            remain_time = datetime.timedelta(
+                seconds=self.remain_time.getRemainTime(
+                    epoch=epoch, iters=i, total_iter=total_iter, mode=mode))
+
+            track_remain_time_1epoch.update(cost_time=(time.time() - t_start), mode=mode)
+            remain_time_1epoch = datetime.timedelta(
+                seconds=track_remain_time_1epoch.getRemainTime(
+                    epoch=0, iters=i, total_iter=total_iter, mode=mode))
+
+            t_start = time.time()
+
+            # Logging
+            if should_log:
+                if self.recorder is not None:
+                    log_str = '>>> {} E[{:03d}|{:03d}] I[{:04d}|{:04d}] DT[{:.3f}] PT[{:.3f}] '.format(
+                        mode, self.settings.n_epochs, epoch+1, total_iter, i+1, data_cost_time, process_cost_time)
+                    log_str += 'LR {} Loss {:0.4f} Acc {:0.4f} IOU {:0.4F} '.format(
+                        current_lr, loss.item(), mean_acc_running, mean_iou_running)
+                    log_str += 'RT {} '.format(remain_time)
+                    log_str += 'RT PER EPOCH {}'.format(remain_time_1epoch)
+                    self.recorder.logger.info(log_str)
+
+        with torch.no_grad():
+            mean_acc, class_acc = self.metrics.getAcc()
+            mean_recall, class_recall = self.metrics.getRecall()
+            mean_iou, class_iou = self.metrics.getIoU()
+
+            metrics_dict = {
+                'mean_acc': mean_acc,
+                'class_acc': class_acc,
+                'mean_recall': mean_recall,
+                'class_recall': class_recall,
+                'mean_iou': mean_iou,
+                'class_iou': class_iou,
+                'conf_matrix': self.metrics.conf_matrix.clone().cpu(),
+            }
+
+        loss_dict = {
+                'loss_meter_avg': loss_meter.avg,
+                'loss_focal': loss_focal,
+                'loss_lovasz': loss_lovasz,
+            }
+
+        epoch_lr = self.optimizer.param_groups[0]['lr']
+
+        # Print results
+        if self.recorder is not None:
+            # Print train point-wise results (PointFusion)
+            if mode == 'Train':
+                if (epoch % self.settings.train_result_frequency == 0) or (epoch == self.settings.n_epochs-1):
+                    eval_results(pixel_or_point='Point',
+                                 settings=self.settings,
+                                 recorder=self.recorder,
+                                 metrics_dict=metrics_dict,
+                                 dataloader=self.train_range_loader,
+                                 print_data_distribution=True)
+
+            # Print validation point-wise results (PointFusion)
             if mode == 'Validation' and (print_results or epoch == self.settings.n_epochs-1):
                 eval_results(pixel_or_point='Point',
                              settings=self.settings,
