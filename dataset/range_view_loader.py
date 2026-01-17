@@ -22,6 +22,48 @@ from scipy.spatial.ckdtree import cKDTree as kdtree
 from .preprocess import augmentor, projection, voxelization
 
 
+def compute_cluster_offset(points_xyz: np.ndarray, voxel_size: float = 0.1) -> np.ndarray:
+    """
+    Compute cluster center offset for each point.
+
+    Voxelizes points and computes the offset from each point to its voxel center.
+
+    Args:
+        points_xyz: [N, 3] point coordinates
+        voxel_size: Voxel size for clustering (default: 0.1m = 10cm)
+
+    Returns:
+        cluster_offset: [N, 3] offset from each point to its cluster center
+    """
+    # Handle empty point cloud edge case
+    if points_xyz.shape[0] == 0:
+        return np.zeros((0, 3), dtype=np.float32)
+
+    # Voxelize: compute voxel indices for each point
+    voxel_coords = np.floor(points_xyz / voxel_size).astype(np.int32)
+
+    # Get unique voxels and inverse mapping
+    unique_voxels, inverse_idx = np.unique(voxel_coords, axis=0, return_inverse=True)
+
+    # Compute mean position per voxel
+    num_voxels = len(unique_voxels)
+    voxel_sums = np.zeros((num_voxels, 3), dtype=np.float64)
+    voxel_counts = np.zeros(num_voxels, dtype=np.int32)
+
+    np.add.at(voxel_sums, inverse_idx, points_xyz)
+    np.add.at(voxel_counts, inverse_idx, 1)
+
+    voxel_centers = voxel_sums / voxel_counts[:, np.newaxis]
+
+    # Map cluster centers back to points
+    point_cluster_center = voxel_centers[inverse_idx]
+
+    # Compute offset
+    cluster_offset = points_xyz - point_cluster_center
+
+    return cluster_offset.astype(np.float32)
+
+
 class RangeViewLoader(Dataset):
     def __init__(self, dataset, config, data_len=-1, is_train=True, return_uproj=False, use_kpconv=False, use_fusion_voxel=False):
         self.dataset = dataset
@@ -283,6 +325,10 @@ class RangeViewLoader(Dataset):
             torch.from_numpy(py).float()
         ], dim=1)  # [N, 2]
 
+        # Compute cluster offset for PointFusion
+        cluster_offset = compute_cluster_offset(points_xyz, voxel_size=0.1)
+        cluster_offset_tensor = torch.from_numpy(cluster_offset).float()  # [N, 3]
+
         output = {
             'range_image': proj_tensor[:5],  # [5, H, W]
             'range_label': proj_tensor[5],   # [H, W]
@@ -291,6 +337,7 @@ class RangeViewLoader(Dataset):
             'point_coords': point_coords_tensor,      # [N, 3]
             'point_labels': point_labels_tensor,      # [N]
             'range_pxpy': range_pxpy_tensor,          # [N, 2]
+            'cluster_offset': cluster_offset_tensor,  # [N, 3]
             'num_points': point_features_tensor.shape[0],
             'index': index,
         }
@@ -455,6 +502,7 @@ def custom_collate_fusion_fn(list_data):
     point_coords_list = []
     point_labels_list = []
     range_pxpy_list = []
+    cluster_offset_list = []
     batch_indices_list = []
     num_points_list = []
 
@@ -464,6 +512,7 @@ def custom_collate_fusion_fn(list_data):
         point_coords_list.append(d['point_coords'])
         point_labels_list.append(d['point_labels'])
         range_pxpy_list.append(d['range_pxpy'])
+        cluster_offset_list.append(d['cluster_offset'])
 
         # Create batch indices for this sample
         batch_indices_list.append(torch.full((n,), batch_idx, dtype=torch.long))
@@ -473,6 +522,7 @@ def custom_collate_fusion_fn(list_data):
     output['point_coords'] = torch.cat(point_coords_list, dim=0)       # [N_total, 3]
     output['point_labels'] = torch.cat(point_labels_list, dim=0)       # [N_total]
     output['range_pxpy'] = torch.cat(range_pxpy_list, dim=0)           # [N_total, 2]
+    output['cluster_offset'] = torch.cat(cluster_offset_list, dim=0)   # [N_total, 3]
     output['batch_indices'] = torch.cat(batch_indices_list, dim=0)     # [N_total]
     output['num_points'] = torch.LongTensor(num_points_list)           # [B]
     output['index'] = torch.LongTensor([d['index'] for d in list_data])  # [B]
