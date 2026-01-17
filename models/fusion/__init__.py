@@ -14,7 +14,9 @@
 
 from .fusion_rangevit import FusionRangeViT
 from .minkunet_voxel import MinkUNetVoxelEncoder
-from .fusion_modules import FusionMLP, PointTransform
+from .fusion_modules import FusionMLP, PointTransform, PointToRangeCrossAttention
+from .point_encoder import PointMLPEncoder
+from .pointfusion_rangevit import PointFusionRangeViT
 from .representation_utils import (
     initial_voxelize,
     voxel_to_point,
@@ -28,6 +30,9 @@ __all__ = [
     'MinkUNetVoxelEncoder',
     'FusionMLP',
     'PointTransform',
+    'PointToRangeCrossAttention',
+    'PointMLPEncoder',
+    'PointFusionRangeViT',
     'initial_voxelize',
     'voxel_to_point',
     'point_to_voxel',
