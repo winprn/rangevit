@@ -278,7 +278,7 @@ class RangeViT(nn.Module):
             patch_size = 16
             dropout = 0.0
             drop_path_rate = 0.1
-            d_model = 768
+            d_model = 384
         elif backbone == 'vit_large_patch16_384':
             n_heads = 16
             n_layers = 24
