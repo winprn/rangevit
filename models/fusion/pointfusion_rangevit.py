@@ -206,7 +206,7 @@ class PointFusionRangeViT(nn.Module):
         if backbone == 'vit_small_patch16_384':
             n_heads, n_layers, d_model = 6, 12, 384
         elif backbone == 'vit_base_patch16_384':
-            n_heads, n_layers, d_model = 12, 12, 768
+            n_heads, n_layers, d_model = 12, 12, 384
         elif backbone == 'vit_large_patch16_384':
             n_heads, n_layers, d_model = 16, 24, 1024
         else:
