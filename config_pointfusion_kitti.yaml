@@ -1,0 +1,137 @@
+# config_pointfusion_kitti.yaml
+# Configuration for PointFusionRangeViT on SemanticKITTI
+
+# General config
+num_workers: 4
+id: "exp_pointfusion_kitti"
+
+# MLflow config
+mlflow:
+  enable: true
+  tracking_uri: "http://140.245.117.232:5000"
+  experiment_name: "rangevit_pointfusion"
+  run_name: null
+  nested: false
+  log_checkpoints: false
+  log_code_snapshot: false
+
+# Data config
+dataset: "SemanticKitti"
+n_classes: 20  # 19 + 1(ignored)
+use_trainval: false
+
+# Train config
+has_label: true
+val_frequency: 1
+n_epochs: 60
+warmup_epochs: 10
+batch_size: 4
+batch_size_val: 1
+lr: 0.0004
+train_result_frequency: 100
+
+# Enable PointFusion model
+use_pointfusion: true
+use_fusion_voxel: true  # Use fusion data loader (provides point data)
+
+# Voxel features disabled
+voxel_features:
+  enable: false
+
+# Point branch config (for PointFusion)
+point_branch:
+  in_channels: 7  # xyz (3) + intensity (1) + cluster_offset (3)
+  hidden_dim: 256
+  cluster_voxel_size: 0.1  # 10cm voxels for cluster computation
+
+# Cross-attention config
+cross_attention:
+  window_size: 3  # 3x3 local attention
+  num_heads: 4
+
+# Model config (range branch)
+vit_backbone: "vit_base_patch16_384"
+in_channels: 5  # Range branch: range, x, y, z, intensity
+patch_size: [2, 8]
+patch_stride: [2, 8]
+image_size: [64, 768]
+window_size: [64, 768]
+window_stride: [64, 256]
+original_image_size: [64, 2048]
+
+# Stem
+conv_stem: "ConvStem"
+stem_base_channels: 32
+D_h: 128
+
+# Decoder
+decoder: "up_conv"
+skip_filters: 128
+
+# 3D refiner disabled
+use_kpconv: false
+
+# Checkpoint model
+checkpoint: null
+pretrained_model: null
+
+# Pretrained paths
+range_pretrained_model: null  # Path to pretrained RangeViT checkpoint
+
+# Loading pre-trained patch and positional embeddings
+reuse_pos_emb: false
+reuse_patch_emb: false
+
+# Dropout
+dropout_p: 0.3
+
+# Data augmentation config
+augmentation:
+  # flip
+  p_flipx: 0.
+  p_flipy: 0.5
+
+  # translation
+  p_transx: 0.5
+  trans_xmin: -5
+  trans_xmax: 5
+  p_transy: 0.5
+  trans_ymin: -3
+  trans_ymax: 3
+  p_transz: 0.5
+  trans_zmin: -1
+  trans_zmax: 0.
+
+  # rotation
+  p_rot_roll: 0.5
+  rot_rollmin: -5
+  rot_rollmax: 5
+  p_rot_pitch: 0.5
+  rot_pitchmin: -5
+  rot_pitchmax: 5
+  p_rot_yaw: 0.5
+  rot_yawmin: 5
+  rot_yawmax: -5
+
+sensor:
+  name: "HDL64"
+  type: "spherical"
+  scan_proj: true
+  proj_h: 64
+  proj_w: 2048
+  fov_up: 3.
+  fov_down: -25.
+  fov_left: -180
+  fov_right: 180
+  img_mean:
+    - 12.12  # range
+    - 10.88  # x
+    - 0.23   # y
+    - -1.04  # z
+    - 0.21   # intensity
+  img_stds:
+    - 12.32  # range
+    - 11.47  # x
+    - 6.91   # y
+    - 0.86   # z
+    - 0.16   # intensity
