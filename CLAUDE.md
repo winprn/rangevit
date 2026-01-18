@@ -88,3 +88,49 @@ Supports multiple ViT initialization strategies:
 - Supports both ConvStem and standard patch embedding
 - Optional KPConv 3D refiner for post-processing predictions
 - Configurable skip connections between encoder and decoder
+
+## RangeViT-Fusion
+
+RangeViT-Fusion extends RangeViT with HARP-NeXt style bidirectional point-pixel fusion. Instead of only refining predictions at the end with KPConv, it maintains 3D point information throughout the ViT encoder via fusion at blocks 4, 8, and 12.
+
+### Key Components
+- **FeaturesEncoder**: Encodes raw point attributes (xyz, intensity, range) into features
+- **VisionTransformerFusion**: ViT backbone with bidirectional Pt<->Px fusion at specified blocks
+- **FusionHead**: Combines final pixel and point features for per-point prediction
+
+### Training Commands
+
+For nuScenes with fusion model:
+```bash
+python -m torch.distributed.launch --nproc_per_node=4 --master_port=63545 \
+    --use_env main.py 'config_fusion_nusc.yaml' \
+    --data_root '<path_to_nuscenes_dataset>' \
+    --save_path '<path_to_log>'
+```
+
+For SemanticKITTI with fusion model:
+```bash
+python -m torch.distributed.launch --nproc_per_node=4 --master_port=63545 \
+    --use_env main.py 'config_fusion_kitti.yaml' \
+    --data_root '<path_to_kitti_dataset>/dataset/sequences/' \
+    --save_path '<path_to_log>'
+```
+
+### Configuration
+The fusion model is enabled via `model_type: 'fusion'` in the config. Key fusion settings:
+```yaml
+model_type: 'fusion'
+fusion:
+  enabled: true
+  fusion_blocks: [4, 8, 12]
+  aux_loss_weight: 0.4
+```
+
+### New Files
+- `models/rangevit_fusion.py` - Main fusion model
+- `models/vit_fusion.py` - ViT with fusion
+- `models/features_encoder.py` - Point feature encoder
+- `models/fusion_modules.py` - Fusion layers and transformation pipeline
+- `models/fusion_head.py` - Prediction head
+- `config_fusion_nusc.yaml` - nuScenes fusion config
+- `config_fusion_kitti.yaml` - SemanticKITTI fusion config
