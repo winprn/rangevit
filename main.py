@@ -28,6 +28,7 @@ import models
 import utils
 import utils.tools as tools
 from models.model_utils import resize_pos_embed
+from models.rangevit_fusion import RangeViTFusion
 from utils.tools.mlflow_utils import MLflowManager
 
 
@@ -50,6 +51,26 @@ def build_rangevit_model(settings, pretrained_path=None):
         up_conv_d_decoder=settings.D_h,
         up_conv_scale_factor=settings.patch_stride,
         use_kpconv=settings.use_kpconv)
+    return model
+
+
+def build_rangevit_fusion_model(settings, pretrained_path=None):
+    """Build RangeViT-Fusion model."""
+    model = RangeViTFusion(
+        in_channels=settings.in_channels,
+        n_cls=settings.n_classes,
+        backbone=settings.vit_backbone,
+        image_size=tuple(settings.image_size),
+        patch_size=tuple(settings.patch_size),
+        patch_stride=tuple(settings.patch_stride) if settings.patch_stride else None,
+        pretrained_path=pretrained_path,
+        reuse_pos_emb=settings.reuse_pos_emb,
+        conv_stem=settings.conv_stem,
+        stem_base_channels=settings.stem_base_channels,
+        stem_hidden_dim=settings.D_h,
+        fusion_blocks=settings.fusion_blocks,
+        aux_loss_weight=settings.aux_loss_weight,
+    )
     return model
 
 
@@ -130,9 +151,11 @@ class Experiment(object):
 
     def _initModel(self):
         # Model
-        model = build_rangevit_model(
-            self.settings,
-            pretrained_path=self.settings.pretrained_model)
+        pretrained_path = self.settings.pretrained_model
+        if self.settings.model_type == 'fusion':
+            model = build_rangevit_fusion_model(self.settings, pretrained_path)
+        else:
+            model = build_rangevit_model(self.settings, pretrained_path)
 
         # Freezing the ViT encoder weights.
         if self.settings.freeze_vit_encoder:
