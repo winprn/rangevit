@@ -17,6 +17,7 @@ from models.fusion_modules import (
     AuxiliaryHead,
 )
 from models.fusion_head import FusionHead
+from models.vit_fusion import VisionTransformerFusion
 
 # Device constant for cuda/cpu detection
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -570,9 +571,81 @@ def test_vit_fusion_forward_shape():
     Verifies:
     - Multi-scale features have expected shapes at each level
     - Fusion features are correctly integrated into ViT output
-    - Attention outputs have correct dimensions
+    - Auxiliary outputs have correct dimensions
     """
-    pass
+    # Test parameters
+    batch_size = 2
+    image_size = (32, 384)
+    patch_size = (2, 8)
+    patch_stride = (2, 8)
+    n_layers = 12
+    d_model = 384
+    d_ff = 1536
+    n_heads = 6
+    n_cls = 17
+    channels = 5
+    fusion_blocks = [4, 8, 12]
+
+    # Create model
+    model = VisionTransformerFusion(
+        image_size=image_size,
+        patch_size=patch_size,
+        n_layers=n_layers,
+        d_model=d_model,
+        d_ff=d_ff,
+        n_heads=n_heads,
+        n_cls=n_cls,
+        channels=channels,
+        patch_stride=patch_stride,
+        fusion_blocks=fusion_blocks,
+    ).to(DEVICE)
+
+    # Compute expected grid size
+    grid_h = image_size[0] // patch_stride[0]
+    grid_w = image_size[1] // patch_stride[1]
+
+    # Create input image
+    im = torch.randn(batch_size, channels, image_size[0], image_size[1], device=DEVICE)
+
+    # Create point features and coordinates
+    n_points = 500
+    point_feats = torch.randn(n_points, d_model, device=DEVICE)
+
+    # Create valid coordinates: (N, 3) [batch_idx, y, x] in pixel space
+    batch_idx = torch.randint(0, batch_size, (n_points,), device=DEVICE).float()
+    y_coords = torch.randint(0, image_size[0], (n_points,), device=DEVICE).float()
+    x_coords = torch.randint(0, image_size[1], (n_points,), device=DEVICE).float()
+    coords = torch.stack([batch_idx, y_coords, x_coords], dim=1)
+
+    # Forward pass with point features
+    pixel_feats, updated_point_feats, aux_outputs = model(im, point_feats, coords)
+
+    # Verify pixel features shape
+    assert pixel_feats.shape == (batch_size, d_model, grid_h, grid_w), \
+        f"Expected pixel_feats shape {(batch_size, d_model, grid_h, grid_w)}, got {pixel_feats.shape}"
+
+    # Verify updated point features shape
+    assert updated_point_feats.shape == (n_points, d_model), \
+        f"Expected updated_point_feats shape {(n_points, d_model)}, got {updated_point_feats.shape}"
+
+    # Verify auxiliary outputs
+    assert len(aux_outputs) == len(fusion_blocks), \
+        f"Expected {len(fusion_blocks)} auxiliary outputs, got {len(aux_outputs)}"
+
+    for i, aux_out in enumerate(aux_outputs):
+        expected_shape = (batch_size, n_cls, grid_h, grid_w)
+        assert aux_out.shape == expected_shape, \
+            f"Expected aux_output[{i}] shape {expected_shape}, got {aux_out.shape}"
+
+    # Test gradient flow
+    loss = pixel_feats.mean() + sum(aux.mean() for aux in aux_outputs)
+    loss.backward()
+
+    # Verify gradients exist for model parameters
+    for name, param in model.named_parameters():
+        if param.requires_grad:
+            assert param.grad is not None, f"Gradient for {name} should not be None"
+            assert not torch.isnan(param.grad).any(), f"Gradient for {name} should not contain NaN"
 
 
 def test_vit_fusion_without_points():
@@ -584,7 +657,86 @@ def test_vit_fusion_without_points():
     - Falls back to standard ViT behavior
     - Output shape remains consistent
     """
-    pass
+    # Test parameters
+    batch_size = 2
+    image_size = (32, 384)
+    patch_size = (2, 8)
+    patch_stride = (2, 8)
+    n_layers = 12
+    d_model = 384
+    d_ff = 1536
+    n_heads = 6
+    n_cls = 17
+    channels = 5
+    fusion_blocks = [4, 8, 12]
+
+    # Create model
+    model = VisionTransformerFusion(
+        image_size=image_size,
+        patch_size=patch_size,
+        n_layers=n_layers,
+        d_model=d_model,
+        d_ff=d_ff,
+        n_heads=n_heads,
+        n_cls=n_cls,
+        channels=channels,
+        patch_stride=patch_stride,
+        fusion_blocks=fusion_blocks,
+    ).to(DEVICE)
+
+    # Compute expected grid size
+    grid_h = image_size[0] // patch_stride[0]
+    grid_w = image_size[1] // patch_stride[1]
+
+    # Create input image (no point features)
+    im = torch.randn(batch_size, channels, image_size[0], image_size[1], device=DEVICE)
+
+    # Forward pass without point features
+    pixel_feats, point_feats_out, aux_outputs = model(im)
+
+    # Verify pixel features shape
+    assert pixel_feats.shape == (batch_size, d_model, grid_h, grid_w), \
+        f"Expected pixel_feats shape {(batch_size, d_model, grid_h, grid_w)}, got {pixel_feats.shape}"
+
+    # Verify point features is None (since we didn't provide any)
+    assert point_feats_out is None, \
+        f"Expected point_feats to be None when not provided, got {type(point_feats_out)}"
+
+    # Verify auxiliary outputs still exist (but without fusion)
+    assert len(aux_outputs) == len(fusion_blocks), \
+        f"Expected {len(fusion_blocks)} auxiliary outputs, got {len(aux_outputs)}"
+
+    for i, aux_out in enumerate(aux_outputs):
+        expected_shape = (batch_size, n_cls, grid_h, grid_w)
+        assert aux_out.shape == expected_shape, \
+            f"Expected aux_output[{i}] shape {expected_shape}, got {aux_out.shape}"
+
+    # Test forward with point_feats=None explicitly
+    pixel_feats2, point_feats_out2, aux_outputs2 = model(im, point_feats=None, coords=None)
+
+    # Results should be the same
+    assert pixel_feats2.shape == pixel_feats.shape, \
+        "Output shape should be consistent with explicit None arguments"
+
+    # Test in eval mode
+    model.eval()
+    with torch.no_grad():
+        pixel_feats_eval, _, aux_outputs_eval = model(im)
+
+    # Verify shapes are consistent in eval mode
+    assert pixel_feats_eval.shape == (batch_size, d_model, grid_h, grid_w), \
+        f"Eval mode: Expected pixel_feats shape {(batch_size, d_model, grid_h, grid_w)}, got {pixel_feats_eval.shape}"
+
+    for i, aux_out in enumerate(aux_outputs_eval):
+        expected_shape = (batch_size, n_cls, grid_h, grid_w)
+        assert aux_out.shape == expected_shape, \
+            f"Eval mode: Expected aux_output[{i}] shape {expected_shape}, got {aux_out.shape}"
+
+    # Test determinism in eval mode
+    with torch.no_grad():
+        pixel_feats_eval2, _, _ = model(im)
+    assert torch.allclose(pixel_feats_eval, pixel_feats_eval2), \
+        "Model output should be deterministic in eval mode"
 
 
 def test_rangevit_fusion_forward():
