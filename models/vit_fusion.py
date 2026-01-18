@@ -209,6 +209,14 @@ class VisionTransformerFusion(nn.Module):
         """
         B, _, H, W = im.shape
 
+        # Compute actual grid size from input dimensions (handles variable-size inputs)
+        if isinstance(self.patch_stride, (list, tuple)):
+            actual_grid_h = H // self.patch_stride[0]
+            actual_grid_w = W // self.patch_stride[1]
+        else:
+            actual_grid_h = H // self.patch_stride
+            actual_grid_w = W // self.patch_stride
+
         # Patch embedding
         x, skip = self.patch_embed(im)
 
@@ -237,6 +245,9 @@ class VisionTransformerFusion(nn.Module):
         if coords is not None:
             patch_coords = self._convert_coords_to_patch_space(coords)
 
+        # Create dynamic ETP for actual grid size (needed for fusion operations)
+        dynamic_etp = EfficientTransformationPipeline(actual_grid_h, actual_grid_w)
+
         aux_outputs = []
         fusion_idx = 0
 
@@ -251,21 +262,21 @@ class VisionTransformerFusion(nn.Module):
                 cls_token = x[:, :1]
                 tokens = x[:, 1:]
 
-                # Reshape to 2D
-                pixel_feats = self._reshape_tokens_to_2d(tokens, self.grid_h, self.grid_w)
+                # Reshape to 2D using actual grid size
+                pixel_feats = self._reshape_tokens_to_2d(tokens, actual_grid_h, actual_grid_w)
 
                 if point_feats is not None and patch_coords is not None:
                     # Pixel -> Point: map pixel features to point locations
-                    mapped_pixel = self.etp.pixel2point(pixel_feats, patch_coords)
+                    mapped_pixel = dynamic_etp.pixel2point(pixel_feats, patch_coords)
 
                     # Point fusion: combine mapped pixel features with point features
                     point_feats = self.point_fusion_layers[fusion_idx](mapped_pixel, point_feats)
 
                     # Point -> Cluster: aggregate point features into voxels
-                    voxel_coords, cluster_feats = self.etp.point2cluster(point_feats, patch_coords)
+                    voxel_coords, cluster_feats = dynamic_etp.point2cluster(point_feats, patch_coords)
 
                     # Cluster -> Pixel: convert sparse voxel features to dense grid
-                    pixel_from_points = self.etp.cluster2pixel(cluster_feats, voxel_coords, B)
+                    pixel_from_points = dynamic_etp.cluster2pixel(cluster_feats, voxel_coords, B)
 
                     # Pixel fusion: combine aggregated point features with pixel features
                     pixel_feats = self.pixel_fusion_layers[fusion_idx](pixel_from_points, pixel_feats)
@@ -283,8 +294,8 @@ class VisionTransformerFusion(nn.Module):
         # Final layer normalization
         x = self.norm(x)
 
-        # Remove CLS and reshape to 2D spatial format
+        # Remove CLS and reshape to 2D spatial format using actual grid size
         tokens = x[:, 1:]
-        pixel_feats = self._reshape_tokens_to_2d(tokens, self.grid_h, self.grid_w)
+        pixel_feats = self._reshape_tokens_to_2d(tokens, actual_grid_h, actual_grid_w)
 
         return pixel_feats, point_feats, aux_outputs

@@ -287,6 +287,8 @@ class RangeViTFusion(nn.Module):
         labels: torch.Tensor,
         coords: torch.Tensor,
         batch_size: int,
+        grid_h: int,
+        grid_w: int,
     ) -> torch.Tensor:
         """
         Create pixel pseudo-labels from point labels for auxiliary supervision.
@@ -297,12 +299,14 @@ class RangeViTFusion(nn.Module):
             labels: (N,) point labels
             coords: (N, 3) coordinates [batch_idx, y, x] in patch space
             batch_size: Number of samples in batch
+            grid_h: Actual grid height
+            grid_w: Actual grid width
 
         Returns:
             pixel_labels: (B, grid_H, grid_W) pixel pseudo-labels
         """
         device = labels.device
-        H, W = self.grid_h, self.grid_w
+        H, W = grid_h, grid_w
 
         # Initialize with ignore_index
         pixel_labels = torch.full(
@@ -420,7 +424,15 @@ class RangeViTFusion(nn.Module):
                 - 'aux_outputs': List of auxiliary pixel logits
                 - 'losses': Dictionary of losses (if labels provided)
         """
-        B = images.shape[0]
+        B, _, H, W = images.shape
+
+        # Compute actual grid size from input dimensions (handles variable-size inputs)
+        if isinstance(self.patch_stride, (list, tuple)):
+            actual_grid_h = H // self.patch_stride[0]
+            actual_grid_w = W // self.patch_stride[1]
+        else:
+            actual_grid_h = H // self.patch_stride
+            actual_grid_w = W // self.patch_stride
 
         # 1. Encode point attributes to feature vectors
         point_feats = self.features_encoder(point_attrs)  # (N, d_model)
@@ -431,8 +443,10 @@ class RangeViTFusion(nn.Module):
         )  # pixel_feats: (B, d_model, grid_H, grid_W), point_feats: (N, d_model)
 
         # 3. Map final pixel features to point locations
+        # Create dynamic ETP for actual grid size
+        dynamic_etp = EfficientTransformationPipeline(actual_grid_h, actual_grid_w)
         patch_coords = self._convert_coords_to_patch_space(coords)
-        mapped_pixel_feats = self.etp.pixel2point(pixel_feats, patch_coords)  # (N, d_model)
+        mapped_pixel_feats = dynamic_etp.pixel2point(pixel_feats, patch_coords)  # (N, d_model)
 
         # 4. Predict point-level logits using fusion head
         point_logits = self.fusion_head(mapped_pixel_feats, point_feats)  # (N, n_cls)
@@ -448,7 +462,9 @@ class RangeViTFusion(nn.Module):
         # 5. Compute losses if labels are provided
         if labels is not None:
             # Create pseudo-labels for auxiliary pixel supervision
-            pixel_pseudo_labels = self._create_pseudo_labels(labels, patch_coords, B)
+            pixel_pseudo_labels = self._create_pseudo_labels(
+                labels, patch_coords, B, actual_grid_h, actual_grid_w
+            )
 
             losses = self._compute_loss(
                 point_logits=point_logits,
