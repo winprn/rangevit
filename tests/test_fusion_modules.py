@@ -748,7 +748,103 @@ def test_rangevit_fusion_forward():
     - Output segmentation logits have correct shape (B, C, H, W)
     - All intermediate features are correctly sized
     """
-    pass
+    from models.rangevit_fusion import RangeViTFusion
+
+    # Test parameters
+    batch_size = 2
+    image_size = (32, 384)
+    in_channels = 5
+    point_channels = 5
+    n_cls = 17
+    n_points = 500
+    fusion_blocks = [4, 8, 12]
+
+    # Create model
+    model = RangeViTFusion(
+        in_channels=in_channels,
+        point_channels=point_channels,
+        n_cls=n_cls,
+        backbone='vit_small_patch16_384',
+        image_size=image_size,
+        new_patch_size=(2, 8),
+        new_patch_stride=(2, 8),
+        fusion_blocks=fusion_blocks,
+    ).to(DEVICE)
+
+    # Create inputs
+    images = torch.randn(batch_size, in_channels, image_size[0], image_size[1], device=DEVICE)
+    point_attrs = torch.randn(n_points, point_channels, device=DEVICE)
+
+    # Create valid coordinates: (N, 3) [batch_idx, y, x] in pixel space
+    batch_idx = torch.randint(0, batch_size, (n_points,), device=DEVICE).float()
+    y_coords = torch.randint(0, image_size[0], (n_points,), device=DEVICE).float()
+    x_coords = torch.randint(0, image_size[1], (n_points,), device=DEVICE).float()
+    coords = torch.stack([batch_idx, y_coords, x_coords], dim=1)
+
+    # Create labels for training mode
+    labels = torch.randint(0, n_cls, (n_points,), device=DEVICE)
+
+    # Forward pass with labels (training mode)
+    model.train()
+    outputs = model(images, point_attrs, coords, labels=labels)
+
+    # Verify output dictionary keys
+    assert 'point_logits' in outputs, "Output should contain 'point_logits'"
+    assert 'pixel_feats' in outputs, "Output should contain 'pixel_feats'"
+    assert 'point_feats' in outputs, "Output should contain 'point_feats'"
+    assert 'aux_outputs' in outputs, "Output should contain 'aux_outputs'"
+    assert 'losses' in outputs, "Output should contain 'losses' when labels provided"
+
+    # Verify point_logits shape
+    assert outputs['point_logits'].shape == (n_points, n_cls), \
+        f"Expected point_logits shape {(n_points, n_cls)}, got {outputs['point_logits'].shape}"
+
+    # Verify pixel_feats shape
+    grid_h = image_size[0] // 2  # patch_stride[0]
+    grid_w = image_size[1] // 8  # patch_stride[1]
+    d_model = 384  # vit_small
+    assert outputs['pixel_feats'].shape == (batch_size, d_model, grid_h, grid_w), \
+        f"Expected pixel_feats shape {(batch_size, d_model, grid_h, grid_w)}, got {outputs['pixel_feats'].shape}"
+
+    # Verify point_feats shape
+    assert outputs['point_feats'].shape == (n_points, d_model), \
+        f"Expected point_feats shape {(n_points, d_model)}, got {outputs['point_feats'].shape}"
+
+    # Verify aux_outputs
+    assert len(outputs['aux_outputs']) == len(fusion_blocks), \
+        f"Expected {len(fusion_blocks)} aux_outputs, got {len(outputs['aux_outputs'])}"
+
+    for i, aux_out in enumerate(outputs['aux_outputs']):
+        expected_shape = (batch_size, n_cls, grid_h, grid_w)
+        assert aux_out.shape == expected_shape, \
+            f"Expected aux_output[{i}] shape {expected_shape}, got {aux_out.shape}"
+
+    # Verify losses
+    assert 'total_loss' in outputs['losses'], "Losses should contain 'total_loss'"
+    assert 'point_loss' in outputs['losses'], "Losses should contain 'point_loss'"
+    assert 'aux_loss' in outputs['losses'], "Losses should contain 'aux_loss'"
+
+    # Verify losses are valid
+    assert not torch.isnan(outputs['losses']['total_loss']), "Total loss should not be NaN"
+    assert not torch.isinf(outputs['losses']['total_loss']), "Total loss should not be Inf"
+    assert outputs['losses']['total_loss'] > 0, "Total loss should be positive"
+
+    # Test gradient flow
+    outputs['losses']['total_loss'].backward()
+
+    # Verify gradients exist for model parameters
+    grad_count = 0
+    for name, param in model.named_parameters():
+        if param.requires_grad and param.grad is not None:
+            grad_count += 1
+            assert not torch.isnan(param.grad).any(), f"Gradient for {name} should not be NaN"
+
+    assert grad_count > 0, "At least some parameters should have gradients"
+
+    # Test parameter counting
+    param_stats = model.count_parameters()
+    assert 'total' in param_stats, "Parameter stats should contain 'total'"
+    assert param_stats['total'] > 0, "Model should have trainable parameters"
 
 
 def test_rangevit_fusion_inference_mode():
@@ -760,7 +856,97 @@ def test_rangevit_fusion_inference_mode():
     - Dropout and batch norm are in eval mode
     - Output is deterministic in eval mode
     """
-    pass
+    from models.rangevit_fusion import RangeViTFusion
+
+    # Test parameters
+    batch_size = 2
+    image_size = (32, 384)
+    in_channels = 5
+    point_channels = 5
+    n_cls = 17
+    n_points = 500
+    fusion_blocks = [4, 8, 12]
+
+    # Create model
+    model = RangeViTFusion(
+        in_channels=in_channels,
+        point_channels=point_channels,
+        n_cls=n_cls,
+        backbone='vit_small_patch16_384',
+        image_size=image_size,
+        new_patch_size=(2, 8),
+        new_patch_stride=(2, 8),
+        fusion_blocks=fusion_blocks,
+    ).to(DEVICE)
+
+    # Create inputs
+    images = torch.randn(batch_size, in_channels, image_size[0], image_size[1], device=DEVICE)
+    point_attrs = torch.randn(n_points, point_channels, device=DEVICE)
+
+    # Create valid coordinates: (N, 3) [batch_idx, y, x] in pixel space
+    batch_idx = torch.randint(0, batch_size, (n_points,), device=DEVICE).float()
+    y_coords = torch.randint(0, image_size[0], (n_points,), device=DEVICE).float()
+    x_coords = torch.randint(0, image_size[1], (n_points,), device=DEVICE).float()
+    coords = torch.stack([batch_idx, y_coords, x_coords], dim=1)
+
+    # Set model to eval mode
+    model.eval()
+
+    # Forward pass without labels (inference mode) - no gradients
+    with torch.no_grad():
+        outputs1 = model(images, point_attrs, coords, labels=None)
+
+    # Verify output dictionary keys (no losses without labels)
+    assert 'point_logits' in outputs1, "Output should contain 'point_logits'"
+    assert 'pixel_feats' in outputs1, "Output should contain 'pixel_feats'"
+    assert 'point_feats' in outputs1, "Output should contain 'point_feats'"
+    assert 'aux_outputs' in outputs1, "Output should contain 'aux_outputs'"
+    assert 'losses' not in outputs1, "Output should NOT contain 'losses' when labels not provided"
+
+    # Verify point_logits shape
+    assert outputs1['point_logits'].shape == (n_points, n_cls), \
+        f"Expected point_logits shape {(n_points, n_cls)}, got {outputs1['point_logits'].shape}"
+
+    # Verify pixel_feats shape
+    grid_h = image_size[0] // 2  # patch_stride[0]
+    grid_w = image_size[1] // 8  # patch_stride[1]
+    d_model = 384  # vit_small
+    assert outputs1['pixel_feats'].shape == (batch_size, d_model, grid_h, grid_w), \
+        f"Expected pixel_feats shape {(batch_size, d_model, grid_h, grid_w)}, got {outputs1['pixel_feats'].shape}"
+
+    # Verify point_feats shape
+    assert outputs1['point_feats'].shape == (n_points, d_model), \
+        f"Expected point_feats shape {(n_points, d_model)}, got {outputs1['point_feats'].shape}"
+
+    # Verify no NaN or Inf in outputs
+    assert not torch.isnan(outputs1['point_logits']).any(), "point_logits should not contain NaN"
+    assert not torch.isinf(outputs1['point_logits']).any(), "point_logits should not contain Inf"
+
+    # Test determinism: run forward pass again with same inputs
+    with torch.no_grad():
+        outputs2 = model(images, point_attrs, coords, labels=None)
+
+    # Verify outputs are identical (deterministic in eval mode)
+    assert torch.allclose(outputs1['point_logits'], outputs2['point_logits']), \
+        "Model output should be deterministic in eval mode"
+    assert torch.allclose(outputs1['pixel_feats'], outputs2['pixel_feats']), \
+        "Pixel features should be deterministic in eval mode"
+    assert torch.allclose(outputs1['point_feats'], outputs2['point_feats']), \
+        "Point features should be deterministic in eval mode"
+
+    # Verify batch norm and dropout are in eval mode by checking model state
+    for name, module in model.named_modules():
+        if isinstance(module, nn.BatchNorm1d) or isinstance(module, nn.BatchNorm2d):
+            assert not module.training, f"BatchNorm {name} should be in eval mode"
+        if isinstance(module, nn.Dropout):
+            assert not module.training, f"Dropout {name} should be in eval mode"
+
+    # Test that we can get predictions (argmax of logits)
+    predictions = outputs1['point_logits'].argmax(dim=1)
+    assert predictions.shape == (n_points,), \
+        f"Expected predictions shape {(n_points,)}, got {predictions.shape}"
+    assert (predictions >= 0).all() and (predictions < n_cls).all(), \
+        "Predictions should be valid class indices"
 
 
 def test_rangevit_fusion_loss_components():
