@@ -16,6 +16,7 @@ from models.fusion_modules import (
     PixelFusionLayer,
     AuxiliaryHead,
 )
+from models.fusion_head import FusionHead
 
 # Device constant for cuda/cpu detection
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -470,7 +471,40 @@ def test_fusion_head_output_shape():
     - Spatial dimensions match input range image size
     - Batch dimension is preserved
     """
-    pass
+    # Test parameters
+    n_points = 1000
+    d_model = 384
+    n_classes = 17
+
+    # Create head
+    fusion_head = FusionHead(d_model=d_model, n_classes=n_classes).to(DEVICE)
+
+    # Create input features
+    mapped_pixel_feats = torch.randn(n_points, d_model, device=DEVICE)
+    point_feats = torch.randn(n_points, d_model, device=DEVICE)
+
+    # Forward pass
+    logits = fusion_head(mapped_pixel_feats, point_feats)
+
+    # Verify output shape
+    assert logits.shape == (n_points, n_classes), \
+        f"Expected shape {(n_points, n_classes)}, got {logits.shape}"
+
+    # Test with different n_classes values
+    for test_n_classes in [10, 17, 20, 32]:
+        head_test = FusionHead(d_model=d_model, n_classes=test_n_classes).to(DEVICE)
+        logits_test = head_test(mapped_pixel_feats, point_feats)
+        assert logits_test.shape == (n_points, test_n_classes), \
+            f"Expected shape {(n_points, test_n_classes)}, got {logits_test.shape}"
+
+    # Test with different d_model values
+    for test_d_model in [128, 256, 384, 768]:
+        head_test = FusionHead(d_model=test_d_model, n_classes=n_classes).to(DEVICE)
+        pixel_feats_test = torch.randn(n_points, test_d_model, device=DEVICE)
+        point_feats_test = torch.randn(n_points, test_d_model, device=DEVICE)
+        logits_test = head_test(pixel_feats_test, point_feats_test)
+        assert logits_test.shape == (n_points, n_classes), \
+            f"Expected shape {(n_points, n_classes)}, got {logits_test.shape}"
 
 
 def test_fusion_head_gradient_flow():
@@ -482,7 +516,51 @@ def test_fusion_head_gradient_flow():
     - Gradients from both pixel and point branches are combined
     - No vanishing or exploding gradients
     """
-    pass
+    # Test parameters
+    n_points = 1000
+    d_model = 384
+    n_classes = 17
+
+    # Create head
+    fusion_head = FusionHead(d_model=d_model, n_classes=n_classes).to(DEVICE)
+
+    # Create input features with requires_grad=True
+    mapped_pixel_feats = torch.randn(n_points, d_model, device=DEVICE, requires_grad=True)
+    point_feats = torch.randn(n_points, d_model, device=DEVICE, requires_grad=True)
+
+    # Forward pass
+    logits = fusion_head(mapped_pixel_feats, point_feats)
+
+    # Compute a simple loss (mean of output)
+    loss = logits.mean()
+
+    # Backward pass
+    loss.backward()
+
+    # Verify gradients exist for both inputs
+    assert mapped_pixel_feats.grad is not None, "Gradients should flow to mapped_pixel_feats"
+    assert not torch.isnan(mapped_pixel_feats.grad).any(), "mapped_pixel_feats gradients should not contain NaN"
+    assert mapped_pixel_feats.grad.abs().sum() > 0, "mapped_pixel_feats gradients should not be all zeros"
+
+    assert point_feats.grad is not None, "Gradients should flow to point_feats"
+    assert not torch.isnan(point_feats.grad).any(), "point_feats gradients should not contain NaN"
+    assert point_feats.grad.abs().sum() > 0, "point_feats gradients should not be all zeros"
+
+    # Verify gradients exist for all trainable parameters
+    for name, param in fusion_head.named_parameters():
+        if param.requires_grad:
+            assert param.grad is not None, f"Gradient for {name} should not be None"
+            assert not torch.isnan(param.grad).any(), f"Gradient for {name} should not contain NaN"
+            # Check that gradient is not all zeros (model is being trained)
+            assert param.grad.abs().sum() > 0, f"Gradient for {name} should not be all zeros"
+
+    # Verify no exploding gradients (gradient norm should be reasonable)
+    total_grad_norm = 0.0
+    for param in fusion_head.parameters():
+        if param.grad is not None:
+            total_grad_norm += param.grad.norm().item() ** 2
+    total_grad_norm = total_grad_norm ** 0.5
+    assert total_grad_norm < 1e6, f"Total gradient norm {total_grad_norm} suggests exploding gradients"
 
 
 def test_vit_fusion_forward_shape():
