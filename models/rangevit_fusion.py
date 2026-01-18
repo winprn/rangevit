@@ -12,6 +12,8 @@ from .vit_fusion import VisionTransformerFusion
 from .fusion_head import FusionHead
 from .fusion_modules import EfficientTransformationPipeline
 from .model_utils import resize_pos_embed, adapt_input_conv
+from utils.optim.focal_softmax import FocalSoftmaxLoss
+from utils.optim.lovasz_softmax import Lovasz_softmax
 
 
 def count_parameters(model: nn.Module) -> int:
@@ -142,6 +144,10 @@ class RangeViTFusion(nn.Module):
             d_model=d_model,
             n_classes=n_cls,
         )
+
+        # 5. Loss functions
+        self.focal_loss = FocalSoftmaxLoss(n_classes=n_cls, gamma=2, alpha=0.25)
+        self.lovasz_loss = Lovasz_softmax(ignore=ignore_index)
 
         # Load pretrained weights if provided
         if pretrained_path is not None:
@@ -337,6 +343,9 @@ class RangeViTFusion(nn.Module):
         """
         Compute point-level and auxiliary pixel-level losses.
 
+        Uses Focal loss + Lovasz loss for point-level supervision, which are
+        better suited for semantic segmentation with class imbalance.
+
         Args:
             point_logits: (N, n_cls) point classification logits
             labels: (N,) ground truth point labels
@@ -344,31 +353,45 @@ class RangeViTFusion(nn.Module):
             pixel_pseudo_labels: (B, H, W) pseudo-labels for pixel supervision
 
         Returns:
-            Dictionary containing 'total_loss', 'point_loss', and 'aux_loss'
+            Dictionary containing loss components:
+            - 'loss': total combined loss
+            - 'focal_loss': focal loss component
+            - 'lovasz_loss': lovasz loss component
+            - 'point_loss': combined point loss (focal + lovasz)
+            - 'aux_loss': auxiliary pixel-level loss
         """
-        # Point-level cross-entropy loss
-        point_loss = F.cross_entropy(
-            point_logits,
-            labels,
-            ignore_index=self.ignore_index,
-        )
+        # Focal loss for point-level supervision
+        focal = self.focal_loss(point_logits, labels)
 
-        # Auxiliary pixel-level losses
+        # Lovasz loss for point-level supervision
+        # Lovasz expects probabilities, not logits
+        point_probs = F.softmax(point_logits, dim=1)
+        # Reshape for lovasz: (N, C) -> (1, C, N, 1) to match expected (B, C, H, W) format
+        point_probs_reshaped = point_probs.unsqueeze(0).unsqueeze(-1).permute(0, 2, 1, 3)
+        labels_reshaped = labels.unsqueeze(0).unsqueeze(-1)  # (1, N, 1)
+        lovasz = self.lovasz_loss(point_probs_reshaped, labels_reshaped)
+
+        # Point loss = focal + lovasz
+        point_loss = focal + lovasz
+
+        # Auxiliary pixel-level losses (use cross-entropy for simplicity)
         aux_loss = torch.tensor(0.0, device=point_logits.device)
-        if len(aux_outputs) > 0 and self.training:
+        if self.training and len(aux_outputs) > 0:
             for aux_logits in aux_outputs:
                 aux_loss = aux_loss + F.cross_entropy(
                     aux_logits,
                     pixel_pseudo_labels,
                     ignore_index=self.ignore_index,
                 )
-            aux_loss = aux_loss / len(aux_outputs)
+            aux_loss = aux_loss / len(aux_outputs) * self.aux_loss_weight
 
         # Total loss
-        total_loss = point_loss + self.aux_loss_weight * aux_loss
+        total_loss = point_loss + aux_loss
 
         return {
-            'total_loss': total_loss,
+            'loss': total_loss,
+            'focal_loss': focal,
+            'lovasz_loss': lovasz,
             'point_loss': point_loss,
             'aux_loss': aux_loss,
         }

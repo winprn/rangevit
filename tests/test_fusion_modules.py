@@ -820,17 +820,19 @@ def test_rangevit_fusion_forward():
             f"Expected aux_output[{i}] shape {expected_shape}, got {aux_out.shape}"
 
     # Verify losses
-    assert 'total_loss' in outputs['losses'], "Losses should contain 'total_loss'"
+    assert 'loss' in outputs['losses'], "Losses should contain 'loss' (total loss)"
+    assert 'focal_loss' in outputs['losses'], "Losses should contain 'focal_loss'"
+    assert 'lovasz_loss' in outputs['losses'], "Losses should contain 'lovasz_loss'"
     assert 'point_loss' in outputs['losses'], "Losses should contain 'point_loss'"
     assert 'aux_loss' in outputs['losses'], "Losses should contain 'aux_loss'"
 
     # Verify losses are valid
-    assert not torch.isnan(outputs['losses']['total_loss']), "Total loss should not be NaN"
-    assert not torch.isinf(outputs['losses']['total_loss']), "Total loss should not be Inf"
-    assert outputs['losses']['total_loss'] > 0, "Total loss should be positive"
+    assert not torch.isnan(outputs['losses']['loss']), "Total loss should not be NaN"
+    assert not torch.isinf(outputs['losses']['loss']), "Total loss should not be Inf"
+    assert outputs['losses']['loss'] > 0, "Total loss should be positive"
 
     # Test gradient flow
-    outputs['losses']['total_loss'].backward()
+    outputs['losses']['loss'].backward()
 
     # Verify gradients exist for model parameters
     grad_count = 0
@@ -954,9 +956,114 @@ def test_rangevit_fusion_loss_components():
     Test that loss components are correctly computed.
 
     Verifies:
-    - Main segmentation loss is computed
-    - Auxiliary losses (if any) are computed
-    - Loss values are valid (not NaN or Inf)
+    - Focal loss is computed and valid
+    - Lovasz loss is computed and valid
+    - Point loss (focal + lovasz) is computed correctly
+    - Auxiliary losses are computed
+    - All loss values are valid (not NaN or Inf)
     - Loss gradients flow to model parameters
     """
-    pass
+    from models.rangevit_fusion import RangeViTFusion
+
+    # Test parameters
+    batch_size = 2
+    image_size = (32, 384)
+    in_channels = 5
+    point_channels = 5
+    n_cls = 17
+    n_points = 500
+    fusion_blocks = [4, 8, 12]
+
+    # Create model
+    model = RangeViTFusion(
+        in_channels=in_channels,
+        point_channels=point_channels,
+        n_cls=n_cls,
+        backbone='vit_small_patch16_384',
+        image_size=image_size,
+        new_patch_size=(2, 8),
+        new_patch_stride=(2, 8),
+        fusion_blocks=fusion_blocks,
+    ).to(DEVICE)
+
+    # Create inputs
+    images = torch.randn(batch_size, in_channels, image_size[0], image_size[1], device=DEVICE)
+    point_attrs = torch.randn(n_points, point_channels, device=DEVICE)
+
+    # Create valid coordinates: (N, 3) [batch_idx, y, x] in pixel space
+    batch_idx = torch.randint(0, batch_size, (n_points,), device=DEVICE).float()
+    y_coords = torch.randint(0, image_size[0], (n_points,), device=DEVICE).float()
+    x_coords = torch.randint(0, image_size[1], (n_points,), device=DEVICE).float()
+    coords = torch.stack([batch_idx, y_coords, x_coords], dim=1)
+
+    # Create labels for training mode (avoid ignore_index=0 for some labels)
+    labels = torch.randint(1, n_cls, (n_points,), device=DEVICE)
+
+    # Forward pass with labels (training mode)
+    model.train()
+    outputs = model(images, point_attrs, coords, labels=labels)
+
+    # Verify losses exist
+    assert 'losses' in outputs, "Output should contain 'losses' when labels provided"
+    losses = outputs['losses']
+
+    # Verify all expected loss components are present
+    assert 'loss' in losses, "Losses should contain 'loss' (total loss)"
+    assert 'focal_loss' in losses, "Losses should contain 'focal_loss'"
+    assert 'lovasz_loss' in losses, "Losses should contain 'lovasz_loss'"
+    assert 'point_loss' in losses, "Losses should contain 'point_loss'"
+    assert 'aux_loss' in losses, "Losses should contain 'aux_loss'"
+
+    # Verify focal_loss is valid
+    assert not torch.isnan(losses['focal_loss']), "Focal loss should not be NaN"
+    assert not torch.isinf(losses['focal_loss']), "Focal loss should not be Inf"
+    assert losses['focal_loss'] >= 0, "Focal loss should be non-negative"
+
+    # Verify lovasz_loss is valid
+    assert not torch.isnan(losses['lovasz_loss']), "Lovasz loss should not be NaN"
+    assert not torch.isinf(losses['lovasz_loss']), "Lovasz loss should not be Inf"
+    assert losses['lovasz_loss'] >= 0, "Lovasz loss should be non-negative"
+
+    # Verify point_loss is the sum of focal and lovasz
+    expected_point_loss = losses['focal_loss'] + losses['lovasz_loss']
+    assert torch.allclose(losses['point_loss'], expected_point_loss, atol=1e-6), \
+        f"Point loss should equal focal + lovasz: {losses['point_loss']} vs {expected_point_loss}"
+
+    # Verify aux_loss is valid
+    assert not torch.isnan(losses['aux_loss']), "Auxiliary loss should not be NaN"
+    assert not torch.isinf(losses['aux_loss']), "Auxiliary loss should not be Inf"
+    assert losses['aux_loss'] >= 0, "Auxiliary loss should be non-negative"
+
+    # Verify total loss is valid
+    assert not torch.isnan(losses['loss']), "Total loss should not be NaN"
+    assert not torch.isinf(losses['loss']), "Total loss should not be Inf"
+    assert losses['loss'] > 0, "Total loss should be positive"
+
+    # Verify total loss = point_loss + aux_loss
+    expected_total = losses['point_loss'] + losses['aux_loss']
+    assert torch.allclose(losses['loss'], expected_total, atol=1e-6), \
+        f"Total loss should equal point_loss + aux_loss: {losses['loss']} vs {expected_total}"
+
+    # Test gradient flow through the total loss
+    losses['loss'].backward()
+
+    # Verify gradients exist for model parameters
+    grad_count = 0
+    for name, param in model.named_parameters():
+        if param.requires_grad and param.grad is not None:
+            grad_count += 1
+            assert not torch.isnan(param.grad).any(), f"Gradient for {name} should not be NaN"
+
+    assert grad_count > 0, "At least some parameters should have gradients"
+
+    # Test in eval mode (aux_loss should be 0)
+    model.eval()
+    model.zero_grad()
+
+    outputs_eval = model(images, point_attrs, coords, labels=labels)
+    losses_eval = outputs_eval['losses']
+
+    # In eval mode, aux_loss should still be computed but model behavior may differ
+    assert 'focal_loss' in losses_eval, "Eval mode should still compute focal_loss"
+    assert 'lovasz_loss' in losses_eval, "Eval mode should still compute lovasz_loss"
+    assert not torch.isnan(losses_eval['loss']), "Eval mode total loss should not be NaN"
