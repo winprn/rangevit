@@ -5,6 +5,16 @@
 num_workers: 4
 id: 'rangevit_fusion_kitti'
 
+# MLflow config
+mlflow:
+  enable: true
+  tracking_uri: "http://140.245.117.232:5000" # e.g. 'file:./mlruns' or an HTTP URL
+  experiment_name: "rangevit"
+  run_name: null # defaults to the CLI-provided id when null
+  nested: false
+  log_checkpoints: false
+  log_code_snapshot: false
+
 # Data config
 dataset: 'SemanticKitti'
 n_classes: 20  # 19 + 1 (ignored)
