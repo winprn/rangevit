@@ -80,9 +80,9 @@ class Experiment(object):
 
         # Init gpu
 
+        tools.init_distributed_mode(self.settings)
         if tools.is_dist_avail_and_initialized():
-            tools.init_distributed_mode(self.settings)
-        # torch.distributed.barrier()
+            torch.distributed.barrier()
 
         self.settings.check_path()
 
