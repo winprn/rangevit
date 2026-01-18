@@ -84,6 +84,12 @@ class Option(object):
         # 3D refiner
         self.use_kpconv = self.config.get('use_kpconv', True)
 
+        # Fusion config (for RangeViT-Fusion model)
+        self.model_type = self.config.get('model_type', 'original')
+        fusion_config = self.config.get('fusion', {})
+        self.fusion_enabled = fusion_config.get('enabled', False)
+        self.fusion_blocks = fusion_config.get('fusion_blocks', [4, 8, 12])
+        self.aux_loss_weight = fusion_config.get('aux_loss_weight', 0.4)
 
         # Checkpoint model
         self.checkpoint = self.config.get('checkpoint', None)
