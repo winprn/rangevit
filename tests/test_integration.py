@@ -22,8 +22,8 @@ def test_full_training_step():
         n_cls=17,
         backbone="vit_small_patch16_384",
         image_size=(32, 384),
-        patch_size=(2, 8),
-        patch_stride=(2, 8),
+        new_patch_size=(2, 8),
+        new_patch_stride=(2, 8),
     ).to(DEVICE)
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4)
@@ -43,7 +43,7 @@ def test_full_training_step():
 
     # Forward
     outputs = model(images, point_attrs, coords, labels)
-    loss = outputs["loss"]
+    loss = outputs["losses"]["loss"]
 
     # Backward
     optimizer.zero_grad()
@@ -67,8 +67,8 @@ def test_inference_speed():
         n_cls=17,
         backbone="vit_small_patch16_384",
         image_size=(32, 384),
-        patch_size=(2, 8),
-        patch_stride=(2, 8),
+        new_patch_size=(2, 8),
+        new_patch_stride=(2, 8),
     ).to(DEVICE)
     model.eval()
 
@@ -115,8 +115,8 @@ def test_model_save_load():
         n_cls=17,
         backbone="vit_small_patch16_384",
         image_size=(32, 384),
-        patch_size=(2, 8),
-        patch_stride=(2, 8),
+        new_patch_size=(2, 8),
+        new_patch_stride=(2, 8),
     ).to(DEVICE)
 
     # Save
@@ -129,8 +129,8 @@ def test_model_save_load():
             n_cls=17,
             backbone="vit_small_patch16_384",
             image_size=(32, 384),
-            patch_size=(2, 8),
-            patch_stride=(2, 8),
+            new_patch_size=(2, 8),
+            new_patch_stride=(2, 8),
         ).to(DEVICE)
         model2.load_state_dict(torch.load(f.name))
 
@@ -160,8 +160,8 @@ def test_parameter_count():
         n_cls=17,
         backbone="vit_small_patch16_384",
         image_size=(32, 384),
-        patch_size=(2, 8),
-        patch_stride=(2, 8),
+        new_patch_size=(2, 8),
+        new_patch_stride=(2, 8),
     )
 
     stats = model.count_parameters()
