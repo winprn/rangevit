@@ -9,6 +9,8 @@ import pytest
 import torch
 import torch.nn as nn
 
+from models.features_encoder import FeaturesEncoder
+
 # Device constant for cuda/cpu detection
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -27,7 +29,31 @@ def test_features_encoder_output_shape():
     - Output feature dimension matches configured embedding dimension
     - Spatial dimensions are correctly preserved or transformed
     """
-    pass
+    # Test parameters
+    batch_size = 4
+    n_points = 1000
+    in_channels = 5
+    d_model = 384
+
+    # Create encoder
+    encoder = FeaturesEncoder(in_channels=in_channels, d_model=d_model).to(DEVICE)
+
+    # Create random input: (batch_size * n_points, in_channels)
+    point_attrs = torch.randn(batch_size * n_points, in_channels, device=DEVICE)
+
+    # Forward pass
+    output = encoder(point_attrs)
+
+    # Verify output shape
+    assert output.shape == (batch_size * n_points, d_model), \
+        f"Expected shape {(batch_size * n_points, d_model)}, got {output.shape}"
+
+    # Test with different d_model values
+    for test_d_model in [128, 256, 384, 768]:
+        encoder_test = FeaturesEncoder(in_channels=in_channels, d_model=test_d_model).to(DEVICE)
+        output_test = encoder_test(point_attrs)
+        assert output_test.shape == (batch_size * n_points, test_d_model), \
+            f"Expected shape {(batch_size * n_points, test_d_model)}, got {output_test.shape}"
 
 
 def test_features_encoder_gradient_flow():
@@ -39,7 +65,38 @@ def test_features_encoder_gradient_flow():
     - No gradient is None or zero for active parameters
     - Backward pass completes without errors
     """
-    pass
+    # Test parameters
+    batch_size = 4
+    n_points = 1000
+    in_channels = 5
+    d_model = 384
+
+    # Create encoder
+    encoder = FeaturesEncoder(in_channels=in_channels, d_model=d_model).to(DEVICE)
+
+    # Create input with requires_grad=True
+    point_attrs = torch.randn(batch_size * n_points, in_channels, device=DEVICE, requires_grad=True)
+
+    # Forward pass
+    output = encoder(point_attrs)
+
+    # Compute a simple loss (mean of output)
+    loss = output.mean()
+
+    # Backward pass
+    loss.backward()
+
+    # Verify gradients exist for input
+    assert point_attrs.grad is not None, "Input gradients should not be None"
+    assert not torch.isnan(point_attrs.grad).any(), "Input gradients should not contain NaN"
+
+    # Verify gradients exist for all trainable parameters
+    for name, param in encoder.named_parameters():
+        if param.requires_grad:
+            assert param.grad is not None, f"Gradient for {name} should not be None"
+            assert not torch.isnan(param.grad).any(), f"Gradient for {name} should not contain NaN"
+            # Check that gradient is not all zeros (model is being trained)
+            assert param.grad.abs().sum() > 0, f"Gradient for {name} should not be all zeros"
 
 
 def test_pixel2point_mapping():
