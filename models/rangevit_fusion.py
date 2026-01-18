@@ -480,6 +480,20 @@ class RangeViTFusion(nn.Module):
 
         return stats
 
+    def counter_model_parameters(self) -> Dict[str, int]:
+        """Return parameter counts in format compatible with main.py."""
+        stats = {}
+        stats['total_num_parameters'] = count_parameters(self)
+        stats['encoder_num_parameters'] = count_parameters(self.vit_fusion)
+        stats['stem_num_parameters'] = count_parameters(self.vit_fusion.patch_embed)
+        stats['decoder_num_parameters'] = count_parameters(self.fusion_head)
+        stats['features_encoder_num_parameters'] = count_parameters(self.features_encoder)
+        stats['fusion_layers_num_parameters'] = (
+            count_parameters(self.vit_fusion.point_fusion_layers) +
+            count_parameters(self.vit_fusion.pixel_fusion_layers)
+        )
+        return stats
+
     @torch.jit.ignore
     def no_weight_decay(self):
         """Return parameter names that should not have weight decay."""
