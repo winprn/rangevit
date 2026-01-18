@@ -810,7 +810,7 @@ class Trainer(object):
                 if mode == 'Validation':
                     with torch.cuda.amp.autocast(self.fp16_scaler is not None):
                         # For validation, model should handle inference internally
-                        outputs = self.model(proj_images, point_attrs, point_coords, point_labels)
+                        outputs = self.model(proj_images, point_attrs, point_coords, point_labels)["losses"]
 
                         total_loss = outputs['loss']
                         loss_focal = outputs.get('focal_loss', torch.tensor(0.0))
