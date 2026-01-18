@@ -785,13 +785,14 @@ class Trainer(object):
             if mode == 'Train':
                 with torch.cuda.amp.autocast(self.fp16_scaler is not None):
                     # Fusion model returns dict with losses and point logits
-                    outputs = self.model(proj_images, point_attrs, point_coords, point_labels)["losses"]
+                    model_outputs = self.model(proj_images, point_attrs, point_coords, point_labels)
+                    losses = model_outputs['losses']
+                    point_logits = model_outputs['point_logits']  # (total_N, n_classes)
 
-                    total_loss = outputs['loss']
-                    loss_focal = outputs.get('focal_loss', torch.tensor(0.0))
-                    loss_lovasz = outputs.get('lovasz_loss', torch.tensor(0.0))
-                    aux_loss = outputs.get('aux_loss', torch.tensor(0.0))
-                    point_logits = outputs['point_logits']  # (total_N, n_classes)
+                    total_loss = losses['loss']
+                    loss_focal = losses.get('focal_loss', torch.tensor(0.0))
+                    loss_lovasz = losses.get('lovasz_loss', torch.tensor(0.0))
+                    aux_loss = losses.get('aux_loss', torch.tensor(0.0))
 
                 # Backward
                 self.optimizer.zero_grad()
@@ -810,13 +811,14 @@ class Trainer(object):
                 if mode == 'Validation':
                     with torch.cuda.amp.autocast(self.fp16_scaler is not None):
                         # For validation, model should handle inference internally
-                        outputs = self.model(proj_images, point_attrs, point_coords, point_labels)["losses"]
+                        model_outputs = self.model(proj_images, point_attrs, point_coords, point_labels)
+                        losses = model_outputs["losses"]
+                        point_logits = model_outputs['point_logits']  # (total_N, n_classes)
 
-                        total_loss = outputs['loss']
-                        loss_focal = outputs.get('focal_loss', torch.tensor(0.0))
-                        loss_lovasz = outputs.get('lovasz_loss', torch.tensor(0.0))
-                        aux_loss = outputs.get('aux_loss', torch.tensor(0.0))
-                        point_logits = outputs['point_logits']  # (total_N, n_classes)
+                        total_loss = losses['loss']
+                        loss_focal = losses.get('focal_loss', torch.tensor(0.0))
+                        loss_lovasz = losses.get('lovasz_loss', torch.tensor(0.0))
+                        aux_loss = losses.get('aux_loss', torch.tensor(0.0))
 
             current_lr = self.optimizer.param_groups[0]['lr']
 
