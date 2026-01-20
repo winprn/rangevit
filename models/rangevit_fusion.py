@@ -11,6 +11,7 @@ from .features_encoder import FeaturesEncoder
 from .vit_fusion import VisionTransformerFusion
 from .fusion_head import FusionHead
 from .fusion_modules import EfficientTransformationPipeline
+from .decoders import DecoderUpConv
 from .model_utils import resize_pos_embed, adapt_input_conv
 from utils.optim.focal_softmax import FocalSoftmaxLoss
 from utils.optim.lovasz_softmax import Lovasz_softmax
@@ -29,14 +30,16 @@ class RangeViTFusion(nn.Module):
     This model combines:
     1. FeaturesEncoder: Encodes raw point attributes to feature vectors
     2. VisionTransformerFusion: ViT backbone with bidirectional fusion at specified blocks
-    3. FusionHead: Combines pixel and point features for per-point classification
+    3. DecoderUpConv: Upsamples grid features to full resolution with skip connections
+    4. FusionHead: Combines pixel and point features for per-point classification
 
     Architecture Flow:
         1. point_attrs -> FeaturesEncoder -> point_feats
-        2. images + point_feats + coords -> VisionTransformerFusion -> pixel_feats, point_feats, aux_outputs
-        3. pixel_feats -> pixel2point -> mapped_pixel_feats
-        4. mapped_pixel_feats + point_feats -> FusionHead -> point_logits
-        5. Compute losses (point-level + auxiliary pixel-level)
+        2. images + point_feats + coords -> VisionTransformerFusion -> pixel_feats, point_feats, skip
+        3. pixel_feats + skip -> DecoderUpConv -> full_res_feats
+        4. full_res_feats -> pixel2point (full res coords) -> mapped_pixel_feats
+        5. mapped_pixel_feats + point_feats -> FusionHead -> point_logits
+        6. Compute losses (point-level: Focal + Lovasz)
 
     Args:
         in_channels: Number of input channels for range image (default: 5)
@@ -50,9 +53,9 @@ class RangeViTFusion(nn.Module):
         reuse_pos_emb: Whether to reuse pretrained positional embeddings
         conv_stem: Type of convolutional stem ('none' or 'ConvStem')
         stem_base_channels: Base channels for ConvStem
-        stem_hidden_dim: Hidden dimension for ConvStem
+        stem_hidden_dim: Hidden dimension for ConvStem (D_h), also used for decoder output
         fusion_blocks: List of block indices (1-indexed) for fusion operations
-        aux_loss_weight: Weight for auxiliary pixel-level losses
+        aux_loss_weight: Weight for auxiliary pixel-level losses (0 to disable)
         ignore_index: Label index to ignore in loss computation
     """
 
@@ -136,12 +139,25 @@ class RangeViTFusion(nn.Module):
             stem_hidden_dim=stem_hidden_dim,
         )
 
-        # 3. Efficient Transformation Pipeline for final pixel2point mapping
-        self.etp = EfficientTransformationPipeline(self.grid_h, self.grid_w)
+        # 3. Decoder: upsamples grid features to full resolution with skip connections
+        # Use stem_hidden_dim (D_h) as decoder output dimension
+        d_decoder = stem_hidden_dim if stem_hidden_dim is not None else 128
+        self.d_decoder = d_decoder
+
+        self.decoder = DecoderUpConv(
+            n_cls=n_cls,  # Not used since we use return_features=True
+            patch_size=patch_size,
+            d_encoder=d_model,
+            d_decoder=d_decoder,
+            scale_factor=patch_stride,
+            skip_filters=d_decoder,  # Skip from ConvStem uses same dim
+        )
 
         # 4. Fusion Head: combines mapped pixel features with point features
+        # d_pixel comes from decoder (D_h), d_point comes from ViT (d_model)
         self.fusion_head = FusionHead(
-            d_model=d_model,
+            d_pixel=d_decoder,
+            d_point=d_model,
             n_classes=n_cls,
         )
 
@@ -379,8 +395,10 @@ class RangeViTFusion(nn.Module):
         point_loss = focal + lovasz
 
         # Auxiliary pixel-level losses (use cross-entropy for simplicity)
+        # Only compute if aux_loss_weight > 0 and pseudo_labels are provided
         aux_loss = torch.tensor(0.0, device=point_logits.device)
-        if self.training and len(aux_outputs) > 0:
+        if (self.training and self.aux_loss_weight > 0 and
+            len(aux_outputs) > 0 and pixel_pseudo_labels is not None):
             for aux_logits in aux_outputs:
                 aux_loss = aux_loss + F.cross_entropy(
                     aux_logits,
@@ -426,51 +444,44 @@ class RangeViTFusion(nn.Module):
         """
         B, _, H, W = images.shape
 
-        # Compute actual grid size from input dimensions (handles variable-size inputs)
-        if isinstance(self.patch_stride, (list, tuple)):
-            actual_grid_h = H // self.patch_stride[0]
-            actual_grid_w = W // self.patch_stride[1]
-        else:
-            actual_grid_h = H // self.patch_stride
-            actual_grid_w = W // self.patch_stride
-
         # 1. Encode point attributes to feature vectors
         point_feats = self.features_encoder(point_attrs)  # (N, d_model)
 
         # 2. Process through ViT with bidirectional fusion
-        pixel_feats, point_feats, aux_outputs = self.vit_fusion(
+        pixel_feats, point_feats, aux_outputs, skip = self.vit_fusion(
             images, point_feats, coords
-        )  # pixel_feats: (B, d_model, grid_H, grid_W), point_feats: (N, d_model)
+        )  # pixel_feats: (B, d_model, grid_H, grid_W), point_feats: (N, d_model), skip: (B, D_h, H, W)
 
-        # 3. Map final pixel features to point locations
-        # Create dynamic ETP for actual grid size
-        dynamic_etp = EfficientTransformationPipeline(actual_grid_h, actual_grid_w)
-        patch_coords = self._convert_coords_to_patch_space(coords)
-        mapped_pixel_feats = dynamic_etp.pixel2point(pixel_feats, patch_coords)  # (N, d_model)
+        # 3. Upsample pixel features to full resolution using decoder with skip connections
+        # Reshape pixel_feats from (B, D, grid_H, grid_W) to token format for decoder
+        grid_h, grid_w = pixel_feats.shape[2], pixel_feats.shape[3]
+        pixel_tokens = pixel_feats.flatten(2).transpose(1, 2)  # (B, grid_H*grid_W, d_model)
+        full_res_feats = self.decoder(pixel_tokens, (H, W), skip=skip, return_features=True)
+        # full_res_feats: (B, d_decoder, H, W)
 
-        # 4. Predict point-level logits using fusion head
+        # 4. Map full resolution features to point locations (using original pixel coords)
+        # Create ETP for full resolution
+        full_res_etp = EfficientTransformationPipeline(H, W)
+        mapped_pixel_feats = full_res_etp.pixel2point(full_res_feats, coords)  # (N, d_decoder)
+
+        # 5. Predict point-level logits using fusion head
         point_logits = self.fusion_head(mapped_pixel_feats, point_feats)  # (N, n_cls)
 
         # Build output dictionary
         outputs = {
             'point_logits': point_logits,
-            'pixel_feats': pixel_feats,
+            'pixel_feats': full_res_feats,
             'point_feats': point_feats,
             'aux_outputs': aux_outputs,
         }
 
-        # 5. Compute losses if labels are provided
+        # 6. Compute losses if labels are provided
         if labels is not None:
-            # Create pseudo-labels for auxiliary pixel supervision
-            pixel_pseudo_labels = self._create_pseudo_labels(
-                labels, patch_coords, B, actual_grid_h, actual_grid_w
-            )
-
             losses = self._compute_loss(
                 point_logits=point_logits,
                 labels=labels,
                 aux_outputs=aux_outputs,
-                pixel_pseudo_labels=pixel_pseudo_labels,
+                pixel_pseudo_labels=None,  # Not used when aux_loss_weight=0
             )
             outputs['losses'] = losses
 
@@ -482,6 +493,7 @@ class RangeViTFusion(nn.Module):
             'total': count_parameters(self),
             'features_encoder': count_parameters(self.features_encoder),
             'vit_fusion': count_parameters(self.vit_fusion),
+            'decoder': count_parameters(self.decoder),
             'fusion_head': count_parameters(self.fusion_head),
         }
 
@@ -502,7 +514,8 @@ class RangeViTFusion(nn.Module):
         stats['total_num_parameters'] = count_parameters(self)
         stats['encoder_num_parameters'] = count_parameters(self.vit_fusion)
         stats['stem_num_parameters'] = count_parameters(self.vit_fusion.patch_embed)
-        stats['decoder_num_parameters'] = count_parameters(self.fusion_head)
+        stats['decoder_num_parameters'] = count_parameters(self.decoder)
+        stats['fusion_head_num_parameters'] = count_parameters(self.fusion_head)
         stats['features_encoder_num_parameters'] = count_parameters(self.features_encoder)
         stats['fusion_layers_num_parameters'] = (
             count_parameters(self.vit_fusion.point_fusion_layers) +

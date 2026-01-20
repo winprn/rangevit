@@ -44,17 +44,17 @@ original_image_size: [64, 2048]
 # Stem config
 conv_stem: 'ConvStem'
 stem_base_channels: 32
-D_h: 128
+D_h: 256  # Hidden dim for ConvStem and decoder output (try 256 for richer features)
 
 # Fusion config
 fusion:
   enabled: true
   fusion_blocks: [4, 8, 12]
-  aux_loss_weight: 0.4
+  aux_loss_weight: 0.0  # Disabled - using decoder instead
 
-# Decoder - not used in fusion model
-decoder: 'none'
-skip_filters: 0
+# Decoder config - used for upsampling to full resolution
+decoder: 'up_conv'
+skip_filters: 256  # Must match D_h
 
 # 3D refiner - not used in fusion model
 use_kpconv: false

@@ -10,26 +10,39 @@ class FusionHead(nn.Module):
     Prediction head that combines pixel and point features for per-point classification.
 
     Architecture:
-        concat(mapped_pixel, point) -> Linear(2D, D) -> BN -> ReLU
-                                    -> Linear(D, D//2) -> BN -> ReLU
-                                    -> Linear(D//2, n_classes)
+        concat(mapped_pixel, point) -> Linear(d_pixel+d_point, hidden) -> BN -> ReLU
+                                    -> Linear(hidden, hidden//2) -> BN -> ReLU
+                                    -> Linear(hidden//2, n_classes)
 
     Args:
-        d_model: Feature dimension
+        d_pixel: Pixel feature dimension (from decoder)
+        d_point: Point feature dimension (from ViT)
         n_classes: Number of semantic classes
+        hidden_dim: Hidden dimension (defaults to d_point)
     """
 
-    def __init__(self, d_model: int, n_classes: int):
+    def __init__(
+        self,
+        d_pixel: int,
+        d_point: int,
+        n_classes: int,
+        hidden_dim: int = None,
+    ):
         super().__init__()
 
+        if hidden_dim is None:
+            hidden_dim = d_point
+
+        concat_dim = d_pixel + d_point
+
         self.mlp = nn.Sequential(
-            nn.Linear(d_model * 2, d_model),
-            nn.BatchNorm1d(d_model),
+            nn.Linear(concat_dim, hidden_dim),
+            nn.BatchNorm1d(hidden_dim),
             nn.ReLU(inplace=True),
-            nn.Linear(d_model, d_model // 2),
-            nn.BatchNorm1d(d_model // 2),
+            nn.Linear(hidden_dim, hidden_dim // 2),
+            nn.BatchNorm1d(hidden_dim // 2),
             nn.ReLU(inplace=True),
-            nn.Linear(d_model // 2, n_classes),
+            nn.Linear(hidden_dim // 2, n_classes),
         )
 
         self._init_weights()
@@ -47,8 +60,8 @@ class FusionHead(nn.Module):
     def forward(self, mapped_pixel_feats: torch.Tensor, point_feats: torch.Tensor) -> torch.Tensor:
         """
         Args:
-            mapped_pixel_feats: (N, D) pixel features mapped to points
-            point_feats: (N, D) final point features
+            mapped_pixel_feats: (N, d_pixel) pixel features mapped to points
+            point_feats: (N, d_point) final point features
 
         Returns:
             logits: (N, n_classes) per-point class logits

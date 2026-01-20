@@ -206,6 +206,7 @@ class VisionTransformerFusion(nn.Module):
             pixel_feats: (B, D, grid_H, grid_W) final pixel features
             point_feats: (N_total, D) updated point features (or None if not provided)
             aux_outputs: List of (B, n_cls, grid_H, grid_W) auxiliary logits
+            skip: (B, D_h, H, W) skip features from ConvStem (or None if no ConvStem)
         """
         B, _, H, W = im.shape
 
@@ -298,4 +299,4 @@ class VisionTransformerFusion(nn.Module):
         tokens = x[:, 1:]
         pixel_feats = self._reshape_tokens_to_2d(tokens, actual_grid_h, actual_grid_w)
 
-        return pixel_feats, point_feats, aux_outputs
+        return pixel_feats, point_feats, aux_outputs, skip
