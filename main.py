@@ -480,7 +480,8 @@ if __name__ == '__main__':
         settings_infer.checkpoint = checkpoint_path
         settings_infer.pretrained_model = None
         settings_infer.finetune_pretrained_model = False
-        settings_infer.save_path = os.path.join(args.save_path, f'Inference_{settings_infer.id}')
+        base_save_root = args.save_path if args.save_path is not None else os.path.dirname(settings.save_path)
+        settings_infer.save_path = os.path.join(base_save_root, f'Inference_{settings_infer.id}')
 
         if args.window_stride is not None:
             settings_infer.window_stride = [settings_infer.window_stride[0], args.window_stride]

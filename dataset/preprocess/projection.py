@@ -100,7 +100,7 @@ class RangeProjection(object):
         proj_idx = np.full((self.proj_h, self.proj_w), -1, dtype=np.int32)
         proj_idx[proj_y, proj_x] = indices
 
-        proj_mask = (proj_idx > 0).astype(np.int32)
+        proj_mask = (proj_idx >= 0).astype(np.int32)
 
         return proj_pointcloud, proj_range, proj_idx, proj_mask
 
@@ -177,7 +177,7 @@ class ScanProjection(object):
         proj_idx = np.full((self.proj_h, self.proj_w), -1, dtype=np.int32)
         proj_idx[proj_y, proj_x] = indices
 
-        proj_mask = (proj_idx > 0).astype(np.int32)
+        proj_mask = (proj_idx >= 0).astype(np.int32)
 
         return proj_pointcloud, proj_range, proj_idx, proj_mask
 
@@ -233,7 +233,7 @@ class RangeInterpolation(Transformation):
         order = np.argsort(depth)[::-1]
         proj_idx[proj_y[order], proj_x[order]] = indices[order]
         proj_image[proj_y[order], proj_x[order]] = points[order]
-        proj_mask = (proj_idx > 0).astype(np.int32)
+        proj_mask = (proj_idx >= 0).astype(np.int32)
 
         if labels is not None:
             proj_sem_label = np.full((self.H, self.W), self.ignore_index, dtype=np.int64)

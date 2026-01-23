@@ -133,7 +133,7 @@ class RangeViewLoader(Dataset):
         px, py = self.projection.cached_data['px'], self.projection.cached_data['py']
 
         proj_mask_tensor = torch.from_numpy(proj_mask)
-        mask = proj_idx > 0
+        mask = proj_idx >= 0
         proj_sem_label = np.zeros((proj_mask.shape[0], proj_mask.shape[1]), dtype=np.float32)
         proj_sem_label[mask] = sem_label[proj_idx[mask]]
         proj_sem_label_tensor = torch.from_numpy(proj_sem_label)
@@ -209,7 +209,7 @@ class RangeViewLoader(Dataset):
         proj_pointcloud, proj_range, proj_idx, proj_mask = self.projection.doProjection(pointcloud)
 
         proj_mask_tensor = torch.from_numpy(proj_mask)
-        mask = proj_idx > 0
+        mask = proj_idx >= 0
         proj_sem_label = np.zeros((proj_mask.shape[0], proj_mask.shape[1]), dtype=np.float32)
         proj_sem_label[mask] = self.dataset.labelMapping(sem_label[proj_idx[mask]])
         proj_sem_label_tensor = torch.from_numpy(proj_sem_label)
