@@ -161,6 +161,10 @@ class RangeViTFusion(nn.Module):
             n_classes=n_cls,
         )
 
+        # Make both streams same dim (d_decoder here)
+        self.point_to_dec = torch.nn.Linear(d_model, d_decoder)   # point_feats -> d_decoder
+        self.fuse_alpha = torch.nn.Parameter(torch.tensor(0.0))  # ReZero-style, starts as "no residual"
+
         # 5. Loss functions
         self.focal_loss = FocalSoftmaxLoss(n_classes=n_cls, gamma=2, alpha=0.25)
         self.lovasz_loss = Lovasz_softmax(ignore=ignore_index)
@@ -464,9 +468,12 @@ class RangeViTFusion(nn.Module):
         full_res_etp = EfficientTransformationPipeline(H, W)
         mapped_pixel_feats = full_res_etp.pixel2point(full_res_feats, coords)  # (N, d_decoder)
 
+        point_in_dec = self.point_to_dec(point_feats)
+        # Residual fuse (stable b/c alpha starts at 0)
+        fused_feats = mapped_pixel_feats + self.fuse_alpha * point_in_dec
+
         # 5. Predict point-level logits using fusion head
-        point_logits = self.fusion_head(mapped_pixel_feats, point_feats)  # (N, n_cls)
-        point_logits = torch.cat([point_logits, point_feats])
+        point_logits = self.fusion_head(fused_feats, point_feats)  # (N, n_cls)
 
         # Build output dictionary
         outputs = {
