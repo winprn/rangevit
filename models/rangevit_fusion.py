@@ -466,7 +466,7 @@ class RangeViTFusion(nn.Module):
 
         # 5. Predict point-level logits using fusion head
         point_logits = self.fusion_head(mapped_pixel_feats, point_feats)  # (N, n_cls)
-        point_logits = torch.cat([point_logits, point_feats], dim=1)
+        point_logits = torch.cat([point_logits, point_feats])
 
         # Build output dictionary
         outputs = {
