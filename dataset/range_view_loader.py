@@ -171,13 +171,13 @@ class RangeViewLoader(Dataset):
             labels_are_mapped = True
 
         if self.is_train:
+            if self.instance_cutmix is not None:
+                pointcloud, sem_label = self.instance_cutmix(pointcloud, sem_label, inst_label)
             if self.polarmix is not None:
                 mix_pc, mix_sem, _ = self._load_mix_sample()
                 if labels_are_mapped:
                     mix_sem = self.dataset.labelMapping(mix_sem)
                 pointcloud, sem_label = self.polarmix(pointcloud, sem_label, mix_pc, mix_sem)
-            if self.instance_cutmix is not None:
-                pointcloud, sem_label = self.instance_cutmix(pointcloud, sem_label, inst_label)
             pointcloud, sem_label, inst_label = self._maybe_sample_points(pointcloud, sem_label, inst_label)
             if self.scan_proj is False and self.augmentor is not None:
                 pointcloud = self.augmentor.doAugmentation(pointcloud)  # n, 4
@@ -384,13 +384,13 @@ class RangeViewLoader(Dataset):
             sem_label = self.dataset.labelMapping(sem_label)
             labels_are_mapped = True
         if self.is_train:
+            if self.instance_cutmix is not None:
+                pointcloud, sem_label = self.instance_cutmix(pointcloud, sem_label, inst_label)
             if self.polarmix is not None:
                 mix_pc, mix_sem, _ = self._load_mix_sample()
                 if labels_are_mapped:
                     mix_sem = self.dataset.labelMapping(mix_sem)
                 pointcloud, sem_label = self.polarmix(pointcloud, sem_label, mix_pc, mix_sem)
-            if self.instance_cutmix is not None:
-                pointcloud, sem_label = self.instance_cutmix(pointcloud, sem_label, inst_label)
             pointcloud, sem_label, inst_label = self._maybe_sample_points(pointcloud, sem_label, inst_label)
             if self.augmentor is not None:
                 pointcloud = self.augmentor.doAugmentation(pointcloud)  # n, 4
