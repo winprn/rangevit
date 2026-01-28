@@ -19,7 +19,7 @@ import torchvision.transforms as T
 import torchvision.transforms.functional as TF
 from scipy.spatial.ckdtree import cKDTree as kdtree
 
-from .preprocess import augmentor, projection
+from .preprocess import augmentor, projection, ClusterMix, InstanceCopy, PolarMix, InstanceCutMix
 
 
 class RangeViewLoader(Dataset):
@@ -34,6 +34,8 @@ class RangeViewLoader(Dataset):
 
         augment_params = augmentor.AugmentParams()
         augment_config = self.config['augmentation']
+        adapted_config = self.config.get('adapted_augmentation', {})
+        self.adapted_use_mapped_labels = bool(adapted_config.get('use_mapped_labels', False))
 
         # Point cloud augmentations
         if self.is_train:
@@ -62,6 +64,54 @@ class RangeViewLoader(Dataset):
             self.augmentor = augmentor.Augmentor(augment_params)
         else:
             self.augmentor = None
+
+        pointsample_cfg = adapted_config.get('pointsample', {})
+        self.point_sampler = None
+        if self.is_train and pointsample_cfg.get('enable', False):
+            self.point_sampler = augmentor.PointSampler(
+                num_points=pointsample_cfg.get('num_points', 0),
+                replace=pointsample_cfg.get('replace', False),
+                inplace=True,
+            )
+
+        polarmix_cfg = adapted_config.get('polarmix', {})
+        self.polarmix = None
+        if self.is_train and polarmix_cfg.get('enable', False):
+            self.polarmix = PolarMix(
+                classes=polarmix_cfg.get('classes', []),
+                prob=polarmix_cfg.get('prob', 0.5),
+            )
+
+        cutmix_cfg = adapted_config.get('instance_cutmix', {})
+        self.instance_cutmix = None
+        if self.is_train and cutmix_cfg.get('enable', False):
+            bank_root = cutmix_cfg.get('instance_bank_root', 'cache/instance_bank')
+            self.instance_cutmix = InstanceCutMix(
+                rootdir=bank_root,
+                classes=cutmix_cfg.get('classes', []),
+                num_to_add=tuple(cutmix_cfg.get('num_to_add', [0, 2])),
+                min_points=cutmix_cfg.get('min_points', 20),
+                prob=cutmix_cfg.get('prob', 1.0),
+            )
+
+        clustermix_cfg = adapted_config.get('clustermix', {})
+        self.clustermix = None
+        if self.is_train and clustermix_cfg.get('enable', False):
+            self.clustermix = ClusterMix(
+                prob=clustermix_cfg.get('prob', 0.5),
+                vertical_prob=clustermix_cfg.get('vertical_prob', 0.5),
+                sector_width=clustermix_cfg.get('sector_width', np.pi / 2),
+                height_ratio=clustermix_cfg.get('height_ratio', 0.5),
+            )
+
+        instcopy_cfg = adapted_config.get('instance_copy', {})
+        self.instance_copy = None
+        if self.is_train and instcopy_cfg.get('enable', False):
+            self.instance_copy = InstanceCopy(
+                prob=instcopy_cfg.get('prob', 0.5),
+                classes=instcopy_cfg.get('classes', []),
+                max_instances_per_class=instcopy_cfg.get('max_instances_per_class', 1),
+            )
 
         self.proj_p_hflip = augment_config.get('p_hflip', 0.0)
         if self.proj_p_hflip > 0.0:
@@ -115,6 +165,15 @@ class RangeViewLoader(Dataset):
                               self.config['original_image_size'][1]))
             ])
 
+    def _maybe_sample_points(self, pointcloud, sem_label=None, inst_label=None):
+        if self.point_sampler is None:
+            return pointcloud, sem_label, inst_label
+        return self.point_sampler(pointcloud, sem_label, inst_label)
+
+    def _load_mix_sample(self):
+        mix_index = np.random.randint(0, len(self.dataset))
+        return self.dataset.loadDataByIndex(mix_index)
+
     def get_item_for_kpconv(self, index):
         '''
         proj_feature_tensor: CxHxW
@@ -123,10 +182,35 @@ class RangeViewLoader(Dataset):
         '''
         pointcloud, sem_label, inst_label = self.dataset.loadDataByIndex(index)
         points_xyz = pointcloud[:, :3]
-        sem_label = self.dataset.labelMapping(sem_label)
+        labels_are_mapped = False
+        if self.is_train and self.adapted_use_mapped_labels:
+            sem_label = self.dataset.labelMapping(sem_label)
+            labels_are_mapped = True
 
-        if self.is_train and (self.scan_proj is False):
-            pointcloud = self.augmentor.doAugmentation(pointcloud)  # n, 4
+        if self.is_train:
+            if self.polarmix is not None:
+                mix_pc, mix_sem, _ = self._load_mix_sample()
+                if labels_are_mapped:
+                    mix_sem = self.dataset.labelMapping(mix_sem)
+                pointcloud, sem_label = self.polarmix(pointcloud, sem_label, mix_pc, mix_sem)
+            if self.instance_cutmix is not None:
+                pointcloud, sem_label = self.instance_cutmix(pointcloud, sem_label, inst_label)
+            pointcloud, sem_label, inst_label = self._maybe_sample_points(pointcloud, sem_label, inst_label)
+            if self.scan_proj is False and self.augmentor is not None:
+                pointcloud = self.augmentor.doAugmentation(pointcloud)  # n, 4
+
+            if (self.clustermix is not None) or (self.instance_copy is not None):
+                mix_pc, mix_sem, mix_inst = self._load_mix_sample()
+                if labels_are_mapped:
+                    mix_sem = self.dataset.labelMapping(mix_sem)
+                mix_pc, mix_sem, mix_inst = self._maybe_sample_points(mix_pc, mix_sem, mix_inst)
+                if self.scan_proj is False and self.augmentor is not None:
+                    mix_pc = self.augmentor.doAugmentation(mix_pc)
+                if self.clustermix is not None:
+                    pointcloud, sem_label = self.clustermix(pointcloud, sem_label, mix_pc, mix_sem)
+                if self.instance_copy is not None:
+                    pointcloud, sem_label = self.instance_copy(
+                        pointcloud, sem_label, mix_pc, mix_sem, mix_inst)
         if self.use_rangeinterpolation:
             pointcloud, sem_label = self.range_interpolation(pointcloud, sem_label)
         proj_pointcloud, proj_range, proj_idx, proj_mask = self.projection.doProjection(pointcloud)
@@ -135,7 +219,10 @@ class RangeViewLoader(Dataset):
         proj_mask_tensor = torch.from_numpy(proj_mask)
         mask = proj_idx >= 0
         proj_sem_label = np.zeros((proj_mask.shape[0], proj_mask.shape[1]), dtype=np.float32)
-        proj_sem_label[mask] = sem_label[proj_idx[mask]]
+        if labels_are_mapped:
+            proj_sem_label[mask] = sem_label[proj_idx[mask]]
+        else:
+            proj_sem_label[mask] = self.dataset.labelMapping(sem_label[proj_idx[mask]])
         proj_sem_label_tensor = torch.from_numpy(proj_sem_label)
         proj_sem_label_tensor = proj_sem_label_tensor * proj_mask_tensor.float()
 
@@ -202,8 +289,34 @@ class RangeViewLoader(Dataset):
             return self.get_item_for_kpconv(index)
 
         pointcloud, sem_label, inst_label = self.dataset.loadDataByIndex(index)
+        labels_are_mapped = False
+        if self.is_train and self.adapted_use_mapped_labels:
+            sem_label = self.dataset.labelMapping(sem_label)
+            labels_are_mapped = True
         if self.is_train:
-            pointcloud = self.augmentor.doAugmentation(pointcloud)  # n, 4
+            if self.polarmix is not None:
+                mix_pc, mix_sem, _ = self._load_mix_sample()
+                if labels_are_mapped:
+                    mix_sem = self.dataset.labelMapping(mix_sem)
+                pointcloud, sem_label = self.polarmix(pointcloud, sem_label, mix_pc, mix_sem)
+            if self.instance_cutmix is not None:
+                pointcloud, sem_label = self.instance_cutmix(pointcloud, sem_label, inst_label)
+            pointcloud, sem_label, inst_label = self._maybe_sample_points(pointcloud, sem_label, inst_label)
+            if self.augmentor is not None:
+                pointcloud = self.augmentor.doAugmentation(pointcloud)  # n, 4
+
+            if (self.clustermix is not None) or (self.instance_copy is not None):
+                mix_pc, mix_sem, mix_inst = self._load_mix_sample()
+                if labels_are_mapped:
+                    mix_sem = self.dataset.labelMapping(mix_sem)
+                mix_pc, mix_sem, mix_inst = self._maybe_sample_points(mix_pc, mix_sem, mix_inst)
+                if self.augmentor is not None:
+                    mix_pc = self.augmentor.doAugmentation(mix_pc)
+                if self.clustermix is not None:
+                    pointcloud, sem_label = self.clustermix(pointcloud, sem_label, mix_pc, mix_sem)
+                if self.instance_copy is not None:
+                    pointcloud, sem_label = self.instance_copy(
+                        pointcloud, sem_label, mix_pc, mix_sem, mix_inst)
         if self.use_rangeinterpolation:
             pointcloud, sem_label = self.range_interpolation(pointcloud, sem_label)
         proj_pointcloud, proj_range, proj_idx, proj_mask = self.projection.doProjection(pointcloud)
@@ -211,7 +324,10 @@ class RangeViewLoader(Dataset):
         proj_mask_tensor = torch.from_numpy(proj_mask)
         mask = proj_idx >= 0
         proj_sem_label = np.zeros((proj_mask.shape[0], proj_mask.shape[1]), dtype=np.float32)
-        proj_sem_label[mask] = self.dataset.labelMapping(sem_label[proj_idx[mask]])
+        if labels_are_mapped:
+            proj_sem_label[mask] = sem_label[proj_idx[mask]]
+        else:
+            proj_sem_label[mask] = self.dataset.labelMapping(sem_label[proj_idx[mask]])
         proj_sem_label_tensor = torch.from_numpy(proj_sem_label)
         proj_sem_label_tensor = proj_sem_label_tensor * proj_mask_tensor.float()
 
@@ -227,7 +343,8 @@ class RangeViewLoader(Dataset):
         proj_feature_tensor = proj_feature_tensor * proj_mask_tensor.unsqueeze(0).float()
 
         if self.return_uproj:
-            sem_label = self.dataset.labelMapping(sem_label)
+            if not labels_are_mapped:
+                sem_label = self.dataset.labelMapping(sem_label)
             sem_label = torch.from_numpy(sem_label).long()
 
             uproj_x_tensor = torch.from_numpy(self.projection.cached_data['uproj_x_idx']).long()
