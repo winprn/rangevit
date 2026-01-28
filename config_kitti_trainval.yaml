@@ -81,6 +81,40 @@ augmentation:
   rot_yawmin: 5
   rot_yawmax: -5
 
+adapted_augmentation:
+  # SemanticKITTI mapped class ids:
+  # 0=unlabeled, 1=car, 2=bicycle, 3=motorcycle, 4=truck, 5=other-vehicle,
+  # 6=person, 7=bicyclist, 8=motorcyclist, 9=road, 10=parking, 11=sidewalk,
+  # 12=other-ground, 13=building, 14=fence, 15=vegetation, 16=trunk,
+  # 17=terrain, 18=pole, 19=traffic-sign
+  use_mapped_labels: true
+  pointsample:
+    enable: true
+    num_points: 120000
+    replace: false
+  polarmix:
+    enable: true
+    prob: 0.5
+    classes: [2, 3, 4, 5, 6, 7, 8] # bicycle, motorcycle, truck, other-vehicle, person, bicyclist, motorcyclist
+  instance_cutmix:
+    enable: true
+    prob: 1.0
+    instance_bank_root: "cache/instance_bank"
+    classes: [2, 3, 4, 5, 6, 7, 8] # bicycle, motorcycle, truck, other-vehicle, person, bicyclist, motorcyclist
+    min_points: 20
+    num_to_add: [0, 2]
+  clustermix:
+    enable: true
+    prob: 0.5
+    vertical_prob: 0.5
+    sector_width: 1.570796
+    height_ratio: 0.5
+  instance_copy:
+    enable: true
+    prob: 0.5
+    classes: [2, 3, 4, 5, 6, 7, 8] # bicycle, motorcycle, truck, other-vehicle, person, bicyclist, motorcyclist
+    max_instances_per_class: 1
+
 sensor:
   name: 'HDL64'
   type: 'spherical'

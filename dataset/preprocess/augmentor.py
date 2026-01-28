@@ -204,3 +204,25 @@ class Augmentor(object):
         pointcloud = self.rotation(pointcloud, rot_roll, rot_pitch, rot_yaw)
 
         return pointcloud
+
+
+class PointSampler(object):
+    def __init__(self, num_points, replace=False, inplace=True):
+        self.num_points = int(num_points)
+        self.replace = replace
+        self.inplace = inplace
+
+    def __call__(self, pointcloud, labels=None, inst_labels=None):
+        if self.num_points <= 0:
+            return pointcloud, labels, inst_labels
+        n_points = pointcloud.shape[0]
+        if n_points <= self.num_points:
+            return pointcloud, labels, inst_labels
+        indices = np.random.choice(n_points, self.num_points, replace=self.replace)
+        points = pointcloud if self.inplace else pointcloud.copy()
+        points = points[indices]
+        if labels is not None:
+            labels = labels[indices]
+        if inst_labels is not None:
+            inst_labels = inst_labels[indices]
+        return points, labels, inst_labels
