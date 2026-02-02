@@ -194,8 +194,8 @@ class RangeViewLoader(Dataset):
                 if self.instance_copy is not None:
                     pointcloud, sem_label = self.instance_copy(
                         pointcloud, sem_label, mix_pc, mix_sem, mix_inst)
-        if self.use_rangeinterpolation:
-            pointcloud, sem_label = self.range_interpolation(pointcloud, sem_label)
+        # if self.use_rangeinterpolation:
+        #     pointcloud, sem_label = self.range_interpolation(pointcloud, sem_label)
         proj_pointcloud, proj_range, proj_idx, proj_mask = self.projection.doProjection(pointcloud)
         px, py = self.projection.cached_data['px'], self.projection.cached_data['py']
 
@@ -443,8 +443,8 @@ class RangeViewLoader(Dataset):
                 if self.instance_copy is not None:
                     pointcloud, sem_label = self.instance_copy(
                         pointcloud, sem_label, mix_pc, mix_sem, mix_inst)
-        if self.use_rangeinterpolation:
-            pointcloud, sem_label = self.range_interpolation(pointcloud, sem_label)
+        # if self.use_rangeinterpolation:
+        #     pointcloud, sem_label = self.range_interpolation(pointcloud, sem_label)
         proj_pointcloud, proj_range, proj_idx, proj_mask = self.projection.doProjection(pointcloud)
 
         proj_mask_tensor = torch.from_numpy(proj_mask)
