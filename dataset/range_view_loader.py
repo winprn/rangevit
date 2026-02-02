@@ -173,11 +173,13 @@ class RangeViewLoader(Dataset):
         if self.is_train:
             if self.instance_cutmix is not None:
                 pointcloud, sem_label = self.instance_cutmix(pointcloud, sem_label, inst_label)
+                inst_label = None  # inst_label is invalid after cutmix changes point count
             if self.polarmix is not None:
                 mix_pc, mix_sem, _ = self._load_mix_sample()
                 if labels_are_mapped:
                     mix_sem = self.dataset.labelMapping(mix_sem)
                 pointcloud, sem_label = self.polarmix(pointcloud, sem_label, mix_pc, mix_sem)
+                inst_label = None  # inst_label is invalid after polarmix changes point count
             pointcloud, sem_label, inst_label = self._maybe_sample_points(pointcloud, sem_label, inst_label)
             if self.scan_proj is False and self.augmentor is not None:
                 pointcloud = self.augmentor.doAugmentation(pointcloud)  # n, 4
@@ -191,9 +193,11 @@ class RangeViewLoader(Dataset):
                     mix_pc = self.augmentor.doAugmentation(mix_pc)
                 if self.clustermix is not None:
                     pointcloud, sem_label = self.clustermix(pointcloud, sem_label, mix_pc, mix_sem)
+                    inst_label = None  # inst_label is invalid after clustermix changes point count
                 if self.instance_copy is not None:
                     pointcloud, sem_label = self.instance_copy(
                         pointcloud, sem_label, mix_pc, mix_sem, mix_inst)
+                    inst_label = None  # inst_label is invalid after instance_copy changes point count
         # if self.use_rangeinterpolation:
         #     pointcloud, sem_label = self.range_interpolation(pointcloud, sem_label)
         proj_pointcloud, proj_range, proj_idx, proj_mask = self.projection.doProjection(pointcloud)
@@ -285,11 +289,13 @@ class RangeViewLoader(Dataset):
             # Mix-based augmentations before basic augmentation
             if self.instance_cutmix is not None:
                 pointcloud, sem_label = self.instance_cutmix(pointcloud, sem_label, inst_label)
+                inst_label = None  # inst_label is invalid after cutmix changes point count
             if self.polarmix is not None:
                 mix_pc, mix_sem, _ = self._load_mix_sample()
                 if labels_are_mapped:
                     mix_sem = self.dataset.labelMapping(mix_sem)
                 pointcloud, sem_label = self.polarmix(pointcloud, sem_label, mix_pc, mix_sem)
+                inst_label = None  # inst_label is invalid after polarmix changes point count
 
             # Point sampling
             pointcloud, sem_label, inst_label = self._maybe_sample_points(pointcloud, sem_label, inst_label)
@@ -308,9 +314,11 @@ class RangeViewLoader(Dataset):
                     mix_pc = self.augmentor.doAugmentation(mix_pc)
                 if self.clustermix is not None:
                     pointcloud, sem_label = self.clustermix(pointcloud, sem_label, mix_pc, mix_sem)
+                    inst_label = None  # inst_label is invalid after clustermix changes point count
                 if self.instance_copy is not None:
                     pointcloud, sem_label = self.instance_copy(
                         pointcloud, sem_label, mix_pc, mix_sem, mix_inst)
+                    inst_label = None  # inst_label is invalid after instance_copy changes point count
 
         # Perform projection
         proj_pointcloud, proj_range, proj_idx, proj_mask = self.projection.doProjection(pointcloud)
