@@ -275,9 +275,42 @@ class RangeViewLoader(Dataset):
         '''
         pointcloud, sem_label, inst_label = self.dataset.loadDataByIndex(index)
 
-        # Apply augmentation if training
-        if self.is_train and (self.scan_proj is False):
-            pointcloud = self.augmentor.doAugmentation(pointcloud)
+        # Apply full augmentation pipeline from kpconv
+        labels_are_mapped = False
+        if self.is_train and self.adapted_use_mapped_labels:
+            sem_label = self.dataset.labelMapping(sem_label)
+            labels_are_mapped = True
+
+        if self.is_train:
+            # Mix-based augmentations before basic augmentation
+            if self.instance_cutmix is not None:
+                pointcloud, sem_label = self.instance_cutmix(pointcloud, sem_label, inst_label)
+            if self.polarmix is not None:
+                mix_pc, mix_sem, _ = self._load_mix_sample()
+                if labels_are_mapped:
+                    mix_sem = self.dataset.labelMapping(mix_sem)
+                pointcloud, sem_label = self.polarmix(pointcloud, sem_label, mix_pc, mix_sem)
+
+            # Point sampling
+            pointcloud, sem_label, inst_label = self._maybe_sample_points(pointcloud, sem_label, inst_label)
+
+            # Basic augmentation (rotation, translation, scale)
+            if self.scan_proj is False and self.augmentor is not None:
+                pointcloud = self.augmentor.doAugmentation(pointcloud)  # n, 4
+
+            # ClusterMix and InstanceCopy require a second sample
+            if (self.clustermix is not None) or (self.instance_copy is not None):
+                mix_pc, mix_sem, mix_inst = self._load_mix_sample()
+                if labels_are_mapped:
+                    mix_sem = self.dataset.labelMapping(mix_sem)
+                mix_pc, mix_sem, mix_inst = self._maybe_sample_points(mix_pc, mix_sem, mix_inst)
+                if self.scan_proj is False and self.augmentor is not None:
+                    mix_pc = self.augmentor.doAugmentation(mix_pc)
+                if self.clustermix is not None:
+                    pointcloud, sem_label = self.clustermix(pointcloud, sem_label, mix_pc, mix_sem)
+                if self.instance_copy is not None:
+                    pointcloud, sem_label = self.instance_copy(
+                        pointcloud, sem_label, mix_pc, mix_sem, mix_inst)
 
         # Perform projection
         proj_pointcloud, proj_range, proj_idx, proj_mask = self.projection.doProjection(pointcloud)
@@ -290,14 +323,17 @@ class RangeViewLoader(Dataset):
         uproj_y = self.projection.cached_data['uproj_y_idx'].copy()  # (N,) discrete y
         depth = self.projection.cached_data['uproj_depth'].copy()  # (N,) range/depth
 
-        # Map semantic labels
-        sem_label_mapped = self.dataset.labelMapping(sem_label)
-
         # Create projected tensors
         proj_mask_tensor = torch.from_numpy(proj_mask)
         mask = proj_idx > 0
         proj_sem_label = np.zeros((proj_mask.shape[0], proj_mask.shape[1]), dtype=np.float32)
-        proj_sem_label[mask] = sem_label_mapped[proj_idx[mask]]
+        # Handle label mapping based on whether labels were already mapped during augmentation
+        if labels_are_mapped:
+            proj_sem_label[mask] = sem_label[proj_idx[mask]]
+            sem_label_mapped = sem_label
+        else:
+            sem_label_mapped = self.dataset.labelMapping(sem_label)
+            proj_sem_label[mask] = sem_label_mapped[proj_idx[mask]]
         proj_sem_label_tensor = torch.from_numpy(proj_sem_label)
         proj_sem_label_tensor = proj_sem_label_tensor * proj_mask_tensor.float()
 
