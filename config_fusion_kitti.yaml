@@ -67,28 +67,28 @@ pretrained_model: '../pretrained_model/vit_small_p16_384.pth'
 reuse_pos_emb: true
 reuse_patch_emb: false
 
-# Data augmentation (same as original)
+# Data augmentation - Conservative settings for stable training
 augmentation:
   p_flipx: 0.
-  p_flipy: 0.5
+  p_flipy: 0.5  # Keep horizontal flip
   p_transx: 0.5
-  trans_xmin: -5
-  trans_xmax: 5
+  trans_xmin: -2  # Reduced from -5 for more conservative augmentation
+  trans_xmax: 2   # Reduced from 5
   p_transy: 0.5
-  trans_ymin: -3
-  trans_ymax: 3
+  trans_ymin: -2  # Reduced from -3
+  trans_ymax: 2   # Reduced from 3
   p_transz: 0.5
-  trans_zmin: -1
-  trans_zmax: 0.
+  trans_zmin: -0.5  # Reduced from -1
+  trans_zmax: 0.    # Keep at 0
   p_rot_roll: 0.5
-  rot_rollmin: -5
-  rot_rollmax: 5
+  rot_rollmin: -3   # Reduced from -5 degrees
+  rot_rollmax: 3    # Reduced from 5 degrees
   p_rot_pitch: 0.5
-  rot_pitchmin: -5
-  rot_pitchmax: 5
+  rot_pitchmin: -3  # Reduced from -5 degrees
+  rot_pitchmax: 3   # Reduced from 5 degrees
   p_rot_yaw: 0.5
-  rot_yawmin: 5
-  rot_yawmax: -5
+  rot_yawmin: -3    # Fixed: was 5, should be negative
+  rot_yawmax: 3     # Fixed: was -5, should be positive
 
 adapted_augmentation:
   # SemanticKITTI mapped class ids:
@@ -102,26 +102,26 @@ adapted_augmentation:
     num_points: 120000
     replace: false
   polarmix:
-    enable: true
+    enable: false  # Disabled - HARP-NeXt doesn't use this, too aggressive for fusion
     prob: 0.5
-    classes: [2, 3, 4, 5, 6, 7, 8] # bicycle, motorcycle, truck, other-vehicle, person, bicyclist, motorcyclist
+    classes: [2, 3, 4, 5, 6, 7, 8]
   instance_cutmix:
-    enable: true
+    enable: false  # Disabled - HARP-NeXt disables this, creates unstable distributions
     prob: 1.0
     instance_bank_root: "cache/instance_bank"
-    classes: [2, 3, 4, 5, 6, 7, 8] # bicycle, motorcycle, truck, other-vehicle, person, bicyclist, motorcyclist
+    classes: [2, 3, 4, 5, 6, 7, 8]
     min_points: 20
     num_to_add: [0, 2]
   clustermix:
-    enable: true
-    prob: 0.5
+    enable: true  # Keep - HARP-NeXt uses FrustumMix (similar concept)
+    prob: 0.8  # Increased from 0.5 to add more variation
     vertical_prob: 0.5
     sector_width: 1.570796
     height_ratio: 0.5
   instance_copy:
-    enable: true
-    prob: 0.5
-    classes: [2, 3, 4, 5, 6, 7, 8] # bicycle, motorcycle, truck, other-vehicle, person, bicyclist, motorcyclist
+    enable: true  # Keep - HARP-NeXt uses this
+    prob: 0.8  # Increased from 0.5 to compensate for disabled augmentations
+    classes: [2, 3, 4, 5, 6, 7, 8]
     max_instances_per_class: 1
 
 # Sensor config (SemanticKITTI specific)
