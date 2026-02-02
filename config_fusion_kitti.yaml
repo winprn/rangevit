@@ -32,7 +32,7 @@ train_result_frequency: 100
 
 # Model config
 model_type: 'fusion'  # 'fusion' or 'original'
-vit_backbone: 'vit_base_patch16_384'
+vit_backbone: 'vit_small_patch16_384'
 in_channels: 5
 patch_size: [2, 8]
 patch_stride: [2, 8]
@@ -61,7 +61,7 @@ use_kpconv: false
 
 # Checkpoint
 checkpoint: null
-pretrained_model: 'timmImageNet21k'
+pretrained_model: '../pretrained_model/vit_small_p16_384.pth'
 
 # Pre-trained embeddings
 reuse_pos_emb: true
