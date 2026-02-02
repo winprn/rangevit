@@ -171,6 +171,15 @@ class RangeViewLoader(Dataset):
             labels_are_mapped = True
 
         if self.is_train:
+            # Step 1: Point sampling (reduces point count first)
+            pointcloud, sem_label, inst_label = self._maybe_sample_points(pointcloud, sem_label, inst_label)
+
+            # Step 2: Basic augmentation (rotation, translation, scale, flip)
+            # Note: Skipped when scan_proj=True since scan projection is order-dependent
+            if self.scan_proj is False and self.augmentor is not None:
+                pointcloud = self.augmentor.doAugmentation(pointcloud)  # n, 4
+
+            # Step 3: Mix-based augmentations (InstanceCutMix, PolarMix)
             if self.instance_cutmix is not None:
                 pointcloud, sem_label = self.instance_cutmix(pointcloud, sem_label, inst_label)
                 inst_label = None  # inst_label is invalid after cutmix changes point count
@@ -180,10 +189,8 @@ class RangeViewLoader(Dataset):
                     mix_sem = self.dataset.labelMapping(mix_sem)
                 pointcloud, sem_label = self.polarmix(pointcloud, sem_label, mix_pc, mix_sem)
                 inst_label = None  # inst_label is invalid after polarmix changes point count
-            pointcloud, sem_label, inst_label = self._maybe_sample_points(pointcloud, sem_label, inst_label)
-            if self.scan_proj is False and self.augmentor is not None:
-                pointcloud = self.augmentor.doAugmentation(pointcloud)  # n, 4
 
+            # Step 4: ClusterMix and InstanceCopy (require a second sample)
             if (self.clustermix is not None) or (self.instance_copy is not None):
                 mix_pc, mix_sem, mix_inst = self._load_mix_sample()
                 if labels_are_mapped:
@@ -279,14 +286,22 @@ class RangeViewLoader(Dataset):
         '''
         pointcloud, sem_label, inst_label = self.dataset.loadDataByIndex(index)
 
-        # Apply full augmentation pipeline from kpconv
+        # Apply augmentation pipeline matching HARP-NeXt order
         labels_are_mapped = False
         if self.is_train and self.adapted_use_mapped_labels:
             sem_label = self.dataset.labelMapping(sem_label)
             labels_are_mapped = True
 
         if self.is_train:
-            # Mix-based augmentations before basic augmentation
+            # Step 1: Point sampling (reduces point count first)
+            pointcloud, sem_label, inst_label = self._maybe_sample_points(pointcloud, sem_label, inst_label)
+
+            # Step 2: Basic augmentation (rotation, translation, scale, flip)
+            # Note: Skipped when scan_proj=True since scan projection is order-dependent
+            if self.scan_proj is False and self.augmentor is not None:
+                pointcloud = self.augmentor.doAugmentation(pointcloud)  # n, 4
+
+            # Step 3: Mix-based augmentations (InstanceCutMix, PolarMix)
             if self.instance_cutmix is not None:
                 pointcloud, sem_label = self.instance_cutmix(pointcloud, sem_label, inst_label)
                 inst_label = None  # inst_label is invalid after cutmix changes point count
@@ -297,14 +312,7 @@ class RangeViewLoader(Dataset):
                 pointcloud, sem_label = self.polarmix(pointcloud, sem_label, mix_pc, mix_sem)
                 inst_label = None  # inst_label is invalid after polarmix changes point count
 
-            # Point sampling
-            pointcloud, sem_label, inst_label = self._maybe_sample_points(pointcloud, sem_label, inst_label)
-
-            # Basic augmentation (rotation, translation, scale)
-            if self.scan_proj is False and self.augmentor is not None:
-                pointcloud = self.augmentor.doAugmentation(pointcloud)  # n, 4
-
-            # ClusterMix and InstanceCopy require a second sample
+            # Step 4: ClusterMix and InstanceCopy (require a second sample)
             if (self.clustermix is not None) or (self.instance_copy is not None):
                 mix_pc, mix_sem, mix_inst = self._load_mix_sample()
                 if labels_are_mapped:
@@ -518,14 +526,32 @@ def crop_inputs(proj_tensor, px, py, points_xyz, labels, crop_size, center_crop=
         assert h == crop_size[0] and w == crop_size[1]
         offset_y, offset_x = 0, 0
     else:
-        MIN_NUM_POINTS = 1
-        NUM_ITERS = 10
-        for _ in range(NUM_ITERS):
+        MIN_NUM_POINTS = 100  # Increased from 1 to ensure meaningful crops
+        NUM_ITERS = 50  # Increased from 10 for more attempts
+        best_crop = None
+        best_num_points = 0
+
+        for iter_idx in range(NUM_ITERS):
             offset_y, offset_x, h, w = T.RandomCrop.get_params(proj_tensor, crop_size)
             num_valid_points = count_num_of_valid_points(py, px, offset_y, offset_x, h, w)
+
+            # Keep track of best crop found
+            if num_valid_points > best_num_points:
+                best_num_points = num_valid_points
+                best_crop = (offset_y, offset_x, h, w)
+
             if num_valid_points > MIN_NUM_POINTS:
                 break
-            print(f'num_valid_points = {num_valid_points}')
+
+            # Only print warning occasionally to avoid spam
+            if iter_idx % 10 == 9:
+                print(f'Warning: After {iter_idx+1} attempts, best crop has {best_num_points} points (target: >{MIN_NUM_POINTS})')
+
+        # Use best crop found if we didn't meet threshold
+        if best_num_points < MIN_NUM_POINTS and best_crop is not None:
+            offset_y, offset_x, h, w = best_crop
+            print(f'Warning: Using crop with only {best_num_points} points (target: >{MIN_NUM_POINTS})')
+
         assert h == crop_size[0] and w == crop_size[1]
     proj_tensor = TF.crop(proj_tensor, offset_y, offset_x, h, w)
 
@@ -575,14 +601,32 @@ def crop_inputs_for_fusion(proj_tensor, px, py, pointcloud, labels, depth, crop_
         assert h == crop_size[0] and w == crop_size[1]
         offset_y, offset_x = 0, 0
     else:
-        MIN_NUM_POINTS = 1
-        NUM_ITERS = 10
-        for _ in range(NUM_ITERS):
+        MIN_NUM_POINTS = 100  # Increased from 1 to ensure meaningful crops
+        NUM_ITERS = 50  # Increased from 10 for more attempts
+        best_crop = None
+        best_num_points = 0
+
+        for iter_idx in range(NUM_ITERS):
             offset_y, offset_x, h, w = T.RandomCrop.get_params(proj_tensor, crop_size)
             num_valid_points = count_num_of_valid_points(py, px, offset_y, offset_x, h, w)
+
+            # Keep track of best crop found
+            if num_valid_points > best_num_points:
+                best_num_points = num_valid_points
+                best_crop = (offset_y, offset_x, h, w)
+
             if num_valid_points > MIN_NUM_POINTS:
                 break
-            print(f'num_valid_points = {num_valid_points}')
+
+            # Only print warning occasionally to avoid spam
+            if iter_idx % 10 == 9:
+                print(f'Warning: After {iter_idx+1} attempts, best crop has {best_num_points} points (target: >{MIN_NUM_POINTS})')
+
+        # Use best crop found if we didn't meet threshold
+        if best_num_points < MIN_NUM_POINTS and best_crop is not None:
+            offset_y, offset_x, h, w = best_crop
+            print(f'Warning: Using crop with only {best_num_points} points (target: >{MIN_NUM_POINTS})')
+
         assert h == crop_size[0] and w == crop_size[1]
 
     proj_tensor = TF.crop(proj_tensor, offset_y, offset_x, h, w)
