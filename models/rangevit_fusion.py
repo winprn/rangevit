@@ -422,6 +422,32 @@ class RangeViTFusion(nn.Module):
             'aux_loss': aux_loss,
         }
 
+    def forward_2d_features(self, images: torch.Tensor) -> torch.Tensor:
+        """
+        Forward pass for image-only processing (no point fusion).
+        Used during sliding window inference. Returns full-resolution features.
+
+        Args:
+            images: (B, C, H, W) input range images
+
+        Returns:
+            full_res_feats: (B, d_decoder, H, W) full-resolution pixel features
+        """
+        H, W = images.shape[2], images.shape[3]
+
+        # Process through ViT encoder without point fusion
+        pixel_feats, _, _, skip = self.vit_fusion(images, point_feats=None, coords=None)
+        # pixel_feats: (B, d_model, grid_H, grid_W)
+        # skip: (B, D_h, H, W) or None
+
+        # Upsample to full resolution using decoder with skip connections
+        grid_h, grid_w = pixel_feats.shape[2], pixel_feats.shape[3]
+        pixel_tokens = pixel_feats.flatten(2).transpose(1, 2)  # (B, grid_H*grid_W, d_model)
+        full_res_feats = self.decoder(pixel_tokens, (H, W), skip=skip, return_features=True)
+        # full_res_feats: (B, d_decoder, H, W)
+
+        return full_res_feats
+
     def forward(
         self,
         images: torch.Tensor,

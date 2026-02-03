@@ -91,7 +91,7 @@ def inference(
         flip = im_metas['flip']
         windows = sliding_window(im, flip, window_size, window_stride)
         crops = torch.stack(windows.pop('crop'))[:, 0] # shape = [n_windows, in_channels, wsize_h, wsize_w]
-        
+
         with torch.no_grad():
             if use_kpconv:
                 seg_maps = model.forward_2d_features(crops) # shape = [n_windows, d_decoder, wsize_h, wsize_w]
@@ -106,3 +106,58 @@ def inference(
             seg_map += im_seg_map
     seg_map /= len(ims)
     return seg_map
+
+
+def inference_fusion(
+    model,
+    ims,
+    ims_metas,
+    ori_shape,
+    window_size,
+    window_stride,
+    batch_size):
+    """
+    Sliding window inference for fusion models.
+
+    Processes image crops through the encoder and decoder without point fusion,
+    merges the full-resolution features, and returns them for point processing.
+
+    Args:
+        model: RangeViTFusion model
+        ims: List of input images (typically just one)
+        ims_metas: List of image metadata dicts (flip info)
+        ori_shape: Original image shape (H, W) to return features at
+        window_size: (H, W) size of sliding window crops
+        window_stride: (H, W) stride between windows
+        batch_size: Batch size (kept for API compatibility)
+
+    Returns:
+        feat_map: (d_decoder, H, W) merged full-resolution pixel features
+    """
+    # window_size and window_stride have to be tuples or lists with two elements
+    assert len(window_size) == len(window_stride) == 2
+
+    wsize_h, wsize_w = window_size
+    smaller_size = wsize_h if wsize_h < wsize_w else wsize_w
+
+    feat_map = None
+    for im, im_metas in zip(ims, ims_metas):
+        im = resize(im, smaller_size)
+        flip = im_metas['flip']
+        windows = sliding_window(im, flip, window_size, window_stride)
+        crops = torch.stack(windows.pop('crop'))[:, 0]  # shape = [n_windows, in_channels, wsize_h, wsize_w]
+
+        with torch.no_grad():
+            # Process each crop to get full-resolution features
+            feat_maps = model.forward_2d_features(crops)  # shape = [n_windows, d_decoder, wsize_h, wsize_w]
+
+        windows['seg_maps'] = feat_maps
+        im_feat_map = merge_windows(windows, window_size, ori_shape)  # shape = [d_decoder, ori_shape[0], ori_shape[1]]
+
+        if feat_map is None:
+            feat_map = im_feat_map
+        else:
+            feat_map += im_feat_map
+
+    feat_map /= len(ims)
+    return feat_map
