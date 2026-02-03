@@ -29,7 +29,7 @@ import utils
 import utils.tools as tools
 from utils.metrics.eval_results import eval_results
 from utils.metrics.tensorboard_logger import tensorboard_logger
-from utils.inference.inference_utils import inference, inference_fusion
+from utils.inference.inference_utils import inference, inference_fusion, inference_fusion_with_points
 from utils.tools import Recorder
 
 
@@ -812,43 +812,20 @@ class Trainer(object):
                     assert proj_images.shape[0] == 1  # validation batch size must be 1
 
                     with torch.cuda.amp.autocast(self.fp16_scaler is not None):
-                        # Sliding window inference to process full range image
-                        im_meta = dict(flip=False)
-                        full_res_pixel_feats = inference_fusion(
+                        # Sliding window inference with per-window point fusion
+                        # This matches training: each window is processed with its points
+                        inference_results = inference_fusion_with_points(
                             model_without_ddp,
-                            [proj_images],
-                            [im_meta],
-                            ori_shape=proj_images.shape[2:4],
+                            proj_images,
+                            point_attrs,
+                            point_coords,
+                            point_labels,
                             window_size=self.settings.window_size,
                             window_stride=self.settings.window_stride,
-                            batch_size=proj_images.shape[0])
-                        # full_res_pixel_feats: (d_decoder, H, W)
-
-                        full_res_pixel_feats = full_res_pixel_feats.unsqueeze(0)  # (1, d_decoder, H, W)
-
-                        # Encode point attributes
-                        point_feats = model_without_ddp.features_encoder(point_attrs)  # (N, d_model)
-
-                        # Map full resolution pixel features to point locations
-                        from models.fusion_modules import EfficientTransformationPipeline
-                        H, W = full_res_pixel_feats.shape[2], full_res_pixel_feats.shape[3]
-                        etp = EfficientTransformationPipeline(H, W)
-                        mapped_pixel_feats = etp.pixel2point(full_res_pixel_feats, point_coords)  # (N, d_decoder)
-
-                        # Fuse pixel and point features
-                        point_in_dec = model_without_ddp.point_to_dec(point_feats)
-                        fused_feats = mapped_pixel_feats + model_without_ddp.fuse_alpha * point_in_dec
-
-                        # Predict per-point logits
-                        point_logits = model_without_ddp.fusion_head(fused_feats, point_feats)  # (N, n_classes)
-
-                        # Compute losses
-                        losses = model_without_ddp._compute_loss(
-                            point_logits=point_logits,
-                            labels=point_labels,
-                            aux_outputs=[],  # No auxiliary outputs during inference
-                            pixel_pseudo_labels=None,
                         )
+
+                        point_logits = inference_results['point_logits']  # (N, n_classes)
+                        losses = inference_results['losses']
 
                         total_loss = losses['loss']
                         loss_focal = losses.get('focal_loss', torch.tensor(0.0))

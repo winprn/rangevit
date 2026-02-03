@@ -161,3 +161,122 @@ def inference_fusion(
 
     feat_map /= len(ims)
     return feat_map
+
+
+def inference_fusion_with_points(
+    model,
+    image,
+    point_attrs,
+    point_coords,
+    point_labels,
+    window_size,
+    window_stride,
+):
+    """
+    Sliding window inference for fusion models with per-window point fusion.
+
+    This function properly matches the training behavior by processing each sliding
+    window with its corresponding subset of points, enabling bidirectional fusion
+    at intermediate layers (blocks 4, 8, 12).
+
+    Args:
+        model: RangeViTFusion model
+        image: (1, C, H, W) full range image
+        point_attrs: (N, 5) point attributes [x, y, z, intensity, range]
+        point_coords: (N, 2) point coordinates [y, x] in full image space
+        point_labels: (N,) per-point semantic labels
+        window_size: (h, w) size of sliding window crops, e.g., (64, 768)
+        window_stride: (h_s, w_s) stride between windows, e.g., (64, 256)
+
+    Returns:
+        dict containing:
+            'point_logits': (N, n_classes) aggregated per-point predictions
+            'losses': dict with loss terms
+    """
+    assert len(window_size) == len(window_stride) == 2
+    assert image.shape[0] == 1, "Batch size must be 1 for validation"
+
+    device = image.device
+    B, C, H, W = image.shape
+    ws_h, ws_w = window_size
+    stride_h, stride_w = window_stride
+
+    # Generate window positions
+    h_anchors = torch.arange(0, H, stride_h)
+    w_anchors = torch.arange(0, W, stride_w)
+    h_anchors = [h.item() for h in h_anchors if h < H - ws_h] + [H - ws_h]
+    w_anchors = [w.item() for w in w_anchors if w < W - ws_w] + [W - ws_w]
+
+    # Dictionary to accumulate logits per point
+    # point_logits_accum[point_idx] = list of logit tensors from different windows
+    point_logits_accum = {}
+
+    # Process each window
+    for offset_y in h_anchors:
+        for offset_x in w_anchors:
+            # 1. Find points within this window
+            x_in_window = (point_coords[:, 1] >= offset_x) & (point_coords[:, 1] < offset_x + ws_w)
+            y_in_window = (point_coords[:, 0] >= offset_y) & (point_coords[:, 0] < offset_y + ws_h)
+            point_mask = x_in_window & y_in_window
+
+            # Skip empty windows
+            if not point_mask.any():
+                continue
+
+            # Get indices of points in this window
+            point_indices = torch.where(point_mask)[0]
+
+            # 2. Adjust coordinates to window-relative
+            window_coords = point_coords[point_mask].clone()
+            window_coords[:, 0] -= offset_y  # adjust y
+            window_coords[:, 1] -= offset_x  # adjust x
+
+            # 3. Add batch index (always 0 for single sample)
+            batch_indices = torch.zeros((window_coords.shape[0], 1), device=device, dtype=window_coords.dtype)
+            window_coords_with_batch = torch.cat([batch_indices, window_coords], dim=1)  # (N_window, 3) [batch_idx, y, x]
+
+            # 4. Crop image to window
+            image_crop = image[:, :, offset_y:offset_y + ws_h, offset_x:offset_x + ws_w]
+
+            # 5. Forward pass through full fusion model
+            window_point_attrs = point_attrs[point_mask]
+            window_point_labels = point_labels[point_mask]
+
+            with torch.no_grad():
+                model_outputs = model(
+                    image_crop,
+                    window_point_attrs,
+                    window_coords_with_batch,
+                    window_point_labels
+                )
+                window_point_logits = model_outputs['point_logits']  # (N_window, n_classes)
+
+            # 6. Accumulate logits for each point
+            for i, global_idx in enumerate(point_indices):
+                global_idx_item = global_idx.item()
+                if global_idx_item not in point_logits_accum:
+                    point_logits_accum[global_idx_item] = []
+                point_logits_accum[global_idx_item].append(window_point_logits[i])
+
+    # 7. Aggregate predictions by averaging logits
+    N = point_coords.shape[0]
+    n_classes = model.n_cls
+    final_logits = torch.zeros((N, n_classes), device=device)
+
+    for point_idx, logits_list in point_logits_accum.items():
+        # Average all logits for this point
+        avg_logits = torch.stack(logits_list).mean(dim=0)
+        final_logits[point_idx] = avg_logits
+
+    # 8. Compute losses on aggregated predictions
+    losses = model._compute_loss(
+        point_logits=final_logits,
+        labels=point_labels,
+        aux_outputs=[],  # No auxiliary outputs during inference
+        pixel_pseudo_labels=None,
+    )
+
+    return {
+        'point_logits': final_logits,
+        'losses': losses,
+    }
