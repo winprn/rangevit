@@ -8,7 +8,6 @@ id: 'exp_nusc_swin'
 # Data config
 dataset: 'nuScenes'
 n_classes: 17 # 16 + 1(ignored)
-use_rangeinterpolation: false
 
 # Train config
 has_label: true

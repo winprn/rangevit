@@ -30,7 +30,6 @@ class RangeViewLoader(Dataset):
         self.data_len = data_len
         self.return_uproj = return_uproj
         self.use_kpconv = use_kpconv
-        self.use_rangeinterpolation = self.config.get('use_rangeinterpolation', False)
 
         augment_params = augmentor.AugmentParams()
         augment_config = self.config['augmentation']
@@ -130,15 +129,6 @@ class RangeViewLoader(Dataset):
                 fov_left=projection_config['fov_left'], fov_right=projection_config['fov_right'],
                 proj_h=projection_config['proj_h'], proj_w=projection_config['proj_w'],
             )
-        self.range_interpolation = None
-        if self.use_rangeinterpolation:
-            self.range_interpolation = projection.RangeInterpolation(
-                H=projection_config['proj_h'],
-                W=projection_config['proj_w'],
-                fov_up=projection_config['fov_up'],
-                fov_down=projection_config['fov_down'],
-                scan_proj=self.scan_proj,
-            )
         self.train_full_image = self.config.get('train_full_image', False)
         self.proj_img_mean = torch.tensor(self.config['sensor']['img_mean'], dtype=torch.float)
         self.proj_img_stds = torch.tensor(self.config['sensor']['img_stds'], dtype=torch.float)
@@ -211,8 +201,6 @@ class RangeViewLoader(Dataset):
                 if self.instance_copy is not None:
                     pointcloud, sem_label = self.instance_copy(
                         pointcloud, sem_label, mix_pc, mix_sem, mix_inst)
-        if self.use_rangeinterpolation:
-            pointcloud, sem_label = self.range_interpolation(pointcloud, sem_label)
         proj_pointcloud, proj_range, proj_idx, proj_mask = self.projection.doProjection(pointcloud)
         px, py = self.projection.cached_data['px'], self.projection.cached_data['py']
 
@@ -317,8 +305,6 @@ class RangeViewLoader(Dataset):
                 if self.instance_copy is not None:
                     pointcloud, sem_label = self.instance_copy(
                         pointcloud, sem_label, mix_pc, mix_sem, mix_inst)
-        if self.use_rangeinterpolation:
-            pointcloud, sem_label = self.range_interpolation(pointcloud, sem_label)
         proj_pointcloud, proj_range, proj_idx, proj_mask = self.projection.doProjection(pointcloud)
 
         proj_mask_tensor = torch.from_numpy(proj_mask)
