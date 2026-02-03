@@ -9,6 +9,10 @@ id: 'exp_nusc_swin'
 dataset: 'nuScenes'
 n_classes: 17 # 16 + 1(ignored)
 
+knni:
+  enable: false
+  window_size: 5
+
 # Train config
 has_label: true
 val_frequency: 10

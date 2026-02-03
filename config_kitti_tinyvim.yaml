@@ -19,6 +19,10 @@ dataset: "SemanticKitti"
 n_classes: 20 # 19 + 1(ignored)
 use_trainval: false # set to true if you want to train on train-val of SemanticKITTI.
 
+knni:
+  enable: true
+  window_size: 5
+
 # Train config
 has_label: true
 val_frequency: 1

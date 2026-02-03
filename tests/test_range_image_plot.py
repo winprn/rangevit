@@ -1,3 +1,4 @@
+# running script: python3 tests/test_range_image_plot.py --config config_kitti_tinyvim.yaml --seq 08 --frame 0 --knni --knni_fill_labels
 import argparse
 import os
 import sys
@@ -74,6 +75,16 @@ def parse_args():
         type=str,
         required=True,
         help="Frame id (e.g., 0 or 000123).",
+    )
+    parser.add_argument(
+        "--knni",
+        action="store_true",
+        help="Enable KNNI hole filling regardless of config.",
+    )
+    parser.add_argument(
+        "--knni_fill_labels",
+        action="store_true",
+        help="Fill labels for KNNI-filled pixels (visualization only).",
     )
     return parser.parse_args()
 
@@ -193,6 +204,39 @@ def build_collision_count_map(uproj_x: np.ndarray, uproj_y: np.ndarray, height: 
     return count_map
 
 
+def fill_knni_labels(base_labels: np.ndarray, base_mask: np.ndarray, base_range: np.ndarray,
+                     filled_mask: np.ndarray, window_size: int) -> np.ndarray:
+    if window_size < 3 or (window_size % 2) == 0:
+        raise ValueError("window_size must be an odd integer >= 3")
+    h, w = base_range.shape
+    half = window_size // 2
+    out_labels = base_labels.copy()
+
+    for v in range(h):
+        for u in range(w):
+            if not filled_mask[v, u]:
+                continue
+            best_u = None
+            best_range = None
+            for s in range(-half, half + 1):
+                if s == 0:
+                    continue
+                uu = u + s
+                if uu < 0 or uu >= w:
+                    continue
+                if not base_mask[v, uu]:
+                    continue
+                cand_range = base_range[v, uu]
+                if cand_range <= 0:
+                    continue
+                if best_range is None or cand_range < best_range:
+                    best_range = cand_range
+                    best_u = uu
+            if best_u is not None:
+                out_labels[v, u] = base_labels[v, best_u]
+    return out_labels
+
+
 def save_collision_image(count_map: np.ndarray, path: Path):
     # Log scale to make low-count collisions visible; 0 stays black.
     log_map = np.log1p(count_map).astype(np.float32)
@@ -251,6 +295,10 @@ def main():
     config_path = Path(args.config).resolve()
     config_dir = config_path.parent
     config = yaml.safe_load(open(config_path, "r"))
+    if args.knni:
+        knni_cfg = dict(config.get("knni", {}))
+        knni_cfg["enable"] = True
+        config["knni"] = knni_cfg
 
     data_root = resolve_path(config_dir, config["data_root"])
     dataset_cfg = yaml.safe_load(open(DATA_CONFIG_PATH, "r"))
@@ -283,6 +331,47 @@ def main():
         _uproj_depth,
         _sem_label_points,
     ) = loader[frame_idx]
+
+    if args.knni and args.knni_fill_labels:
+        base_config = dict(config)
+        base_knni_cfg = dict(base_config.get("knni", {}))
+        base_knni_cfg["enable"] = False
+        base_config["knni"] = base_knni_cfg
+        base_loader = RangeViewLoader(
+            dataset=semkitti_ds,
+            config=base_config,
+            is_train=False,
+            return_uproj=True,
+            use_kpconv=False,
+        )
+        (
+            _base_feat,
+            base_sem_label_tensor,
+            base_mask_tensor,
+            base_range,
+            _bx,
+            _by,
+            _bd,
+            _bl,
+        ) = base_loader[frame_idx]
+
+        window_size = int(config.get("knni", {}).get("window_size", 5))
+        base_labels = base_sem_label_tensor.numpy().astype(np.int32)
+        base_mask = base_mask_tensor.numpy().astype(bool)
+        base_range = base_range.numpy().astype(np.float32)
+        mask_after = proj_mask_tensor.numpy().astype(bool)
+        filled_mask = mask_after & (~base_mask)
+
+        filled_labels = fill_knni_labels(
+            base_labels=base_labels,
+            base_mask=base_mask,
+            base_range=base_range,
+            filled_mask=filled_mask,
+            window_size=window_size,
+        )
+        proj_sem_label_tensor = torch.from_numpy(filled_labels).type_as(proj_sem_label_tensor)
+        filled_count = int(filled_mask.sum())
+        print(f"KNNI filled pixels: {filled_count}")
 
     height, width = proj_feature_tensor.shape[1], proj_feature_tensor.shape[2]
 

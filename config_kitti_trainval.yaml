@@ -7,6 +7,10 @@ dataset: 'SemanticKitti'
 n_classes: 20 # 19 + 1(ignored)
 use_trainval: true 
 
+knni:
+  enable: false
+  window_size: 5
+
 # Train config
 has_label: true
 val_frequency: 1

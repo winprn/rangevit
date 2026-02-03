@@ -19,7 +19,7 @@ import torchvision.transforms as T
 import torchvision.transforms.functional as TF
 from scipy.spatial.ckdtree import cKDTree as kdtree
 
-from .preprocess import augmentor, projection, ClusterMix, InstanceCopy, PolarMix, InstanceCutMix
+from .preprocess import augmentor, projection, ClusterMix, InstanceCopy, PolarMix, InstanceCutMix, KNNI
 
 
 class RangeViewLoader(Dataset):
@@ -133,6 +133,13 @@ class RangeViewLoader(Dataset):
         self.proj_img_mean = torch.tensor(self.config['sensor']['img_mean'], dtype=torch.float)
         self.proj_img_stds = torch.tensor(self.config['sensor']['img_stds'], dtype=torch.float)
 
+        knni_cfg = self.config.get('knni', {})
+        self.knni_enable = bool(knni_cfg.get('enable', False))
+        self.knni = None
+        if self.knni_enable:
+            window_size = knni_cfg.get('window_size', 5)
+            self.knni = KNNI(window_size=window_size, invalid_value=-1.0)
+
         # Image augmentations
         if self.is_train:
             if self.train_full_image:
@@ -202,6 +209,10 @@ class RangeViewLoader(Dataset):
                     pointcloud, sem_label = self.instance_copy(
                         pointcloud, sem_label, mix_pc, mix_sem, mix_inst)
         proj_pointcloud, proj_range, proj_idx, proj_mask = self.projection.doProjection(pointcloud)
+        if self.knni_enable and self.knni is not None:
+            proj_pointcloud, proj_range, proj_mask = self.knni(
+                proj_pointcloud, proj_range, proj_mask
+            )
         px, py = self.projection.cached_data['px'], self.projection.cached_data['py']
 
         proj_mask_tensor = torch.from_numpy(proj_mask)
@@ -306,6 +317,10 @@ class RangeViewLoader(Dataset):
                     pointcloud, sem_label = self.instance_copy(
                         pointcloud, sem_label, mix_pc, mix_sem, mix_inst)
         proj_pointcloud, proj_range, proj_idx, proj_mask = self.projection.doProjection(pointcloud)
+        if self.knni_enable and self.knni is not None:
+            proj_pointcloud, proj_range, proj_mask = self.knni(
+                proj_pointcloud, proj_range, proj_mask
+            )
 
         proj_mask_tensor = torch.from_numpy(proj_mask)
         mask = proj_idx >= 0
