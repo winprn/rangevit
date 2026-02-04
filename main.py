@@ -370,6 +370,15 @@ class Experiment(object):
 
 
 if __name__ == '__main__':
+    # Redirect multiprocessing temp files to project-local tmp/ if not already set.
+    # This avoids /tmp running out of space during many parallel trainings.
+    if not (os.environ.get('TMPDIR') or os.environ.get('TEMP') or os.environ.get('TMP')):
+        project_tmp = os.path.join(os.getcwd(), 'tmp')
+        os.makedirs(project_tmp, exist_ok=True)
+        os.environ['TMPDIR'] = project_tmp
+        os.environ['TEMP'] = project_tmp
+        os.environ['TMP'] = project_tmp
+
     parser = argparse.ArgumentParser(description='Experiment Options')
     parser.add_argument('config_path', type=str, metavar='config_path',
                         help='path of config file, type: string')
