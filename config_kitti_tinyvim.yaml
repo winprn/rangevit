@@ -1,5 +1,5 @@
 # General config
-num_workers: 4
+num_workers: 6
 id: "exp_kitti_tinyvim_crop64x1024"
 data_root: "../dataset/SemanticKitti/data_odometry_velodyne/dataset/sequences"
 save_path: "save_rangevim_crop64x1024"
@@ -22,6 +22,10 @@ use_trainval: false # set to true if you want to train on train-val of SemanticK
 knni:
   enable: true
   window_size: 5
+  cache: true
+  cache_train: false
+  cache_dir: "cache/knni"
+  cache_version: "v1"
 
 # Train config
 has_label: true

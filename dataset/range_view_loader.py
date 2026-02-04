@@ -12,6 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import hashlib
+import os
+import tempfile
 import numpy as np
 import torch
 from torch.utils.data import Dataset
@@ -139,6 +142,15 @@ class RangeViewLoader(Dataset):
         if self.knni_enable:
             window_size = knni_cfg.get('window_size', 5)
             self.knni = KNNI(window_size=window_size, invalid_value=-1.0)
+        self.knni_cache = bool(knni_cfg.get('cache', False))
+        self.knni_cache_train = bool(knni_cfg.get('cache_train', False))
+        self.knni_cache_version = str(knni_cfg.get('cache_version', 'v1'))
+        self.knni_cache_dir = knni_cfg.get('cache_dir', 'cache/knni')
+        if self.knni_cache:
+            self.knni_cache_dir = os.path.abspath(self.knni_cache_dir)
+            os.makedirs(self.knni_cache_dir, exist_ok=True)
+            if self.is_train and not self.knni_cache_train:
+                print('kNNI cache enabled but disabled for training by default (cache_train=false).')
 
         # Image augmentations
         if self.is_train:
@@ -166,6 +178,70 @@ class RangeViewLoader(Dataset):
         if self.point_sampler is None:
             return pointcloud, sem_label, inst_label
         return self.point_sampler(pointcloud, sem_label, inst_label)
+
+    def _get_sample_id(self, index):
+        if hasattr(self.dataset, 'pointcloud_files'):
+            return self.dataset.pointcloud_files[index]
+        if hasattr(self.dataset, 'lidar_filenames'):
+            return self.dataset.lidar_filenames[index]
+        return str(index)
+
+    def _knni_cache_path(self, index):
+        projection_config = self.config.get('sensor', {})
+        cache_key = '|'.join([
+            self.knni_cache_version,
+            str(self._get_sample_id(index)),
+            str(self.knni.window_size if self.knni is not None else ''),
+            str(projection_config.get('scan_proj', False)),
+            str(projection_config.get('proj_h', '')),
+            str(projection_config.get('proj_w', '')),
+            str(projection_config.get('fov_up', '')),
+            str(projection_config.get('fov_down', '')),
+            str(projection_config.get('fov_left', '')),
+            str(projection_config.get('fov_right', '')),
+        ])
+        digest = hashlib.sha1(cache_key.encode('utf-8')).hexdigest()
+        return os.path.join(self.knni_cache_dir, f'{digest}.npz')
+
+    def _apply_knni(self, proj_pointcloud, proj_range, proj_mask, index):
+        if not self.knni_enable or self.knni is None:
+            return proj_pointcloud, proj_range, proj_mask
+
+        use_cache = self.knni_cache and (not self.is_train or self.knni_cache_train)
+        if use_cache:
+            cache_path = self._knni_cache_path(index)
+            if os.path.exists(cache_path):
+                try:
+                    cached = np.load(cache_path)
+                    return cached['proj_pointcloud'], cached['proj_range'], cached['proj_mask']
+                except Exception:
+                    pass
+
+        out_pointcloud, out_range, out_mask = self.knni(
+            proj_pointcloud, proj_range, proj_mask
+        )
+
+        if use_cache:
+            cache_path = self._knni_cache_path(index)
+            tmp_dir = os.path.dirname(cache_path)
+            fd, tmp_path = tempfile.mkstemp(dir=tmp_dir, prefix='knni_', suffix='.npz')
+            os.close(fd)
+            try:
+                np.savez_compressed(
+                    tmp_path,
+                    proj_pointcloud=out_pointcloud,
+                    proj_range=out_range,
+                    proj_mask=out_mask,
+                )
+                os.replace(tmp_path, cache_path)
+            except Exception:
+                try:
+                    if os.path.exists(tmp_path):
+                        os.remove(tmp_path)
+                finally:
+                    pass
+
+        return out_pointcloud, out_range, out_mask
 
     def _load_mix_sample(self):
         mix_index = np.random.randint(0, len(self.dataset))
@@ -209,10 +285,9 @@ class RangeViewLoader(Dataset):
                     pointcloud, sem_label = self.instance_copy(
                         pointcloud, sem_label, mix_pc, mix_sem, mix_inst)
         proj_pointcloud, proj_range, proj_idx, proj_mask = self.projection.doProjection(pointcloud)
-        if self.knni_enable and self.knni is not None:
-            proj_pointcloud, proj_range, proj_mask = self.knni(
-                proj_pointcloud, proj_range, proj_mask
-            )
+        proj_pointcloud, proj_range, proj_mask = self._apply_knni(
+            proj_pointcloud, proj_range, proj_mask, index
+        )
         px, py = self.projection.cached_data['px'], self.projection.cached_data['py']
 
         proj_mask_tensor = torch.from_numpy(proj_mask)
@@ -317,10 +392,9 @@ class RangeViewLoader(Dataset):
                     pointcloud, sem_label = self.instance_copy(
                         pointcloud, sem_label, mix_pc, mix_sem, mix_inst)
         proj_pointcloud, proj_range, proj_idx, proj_mask = self.projection.doProjection(pointcloud)
-        if self.knni_enable and self.knni is not None:
-            proj_pointcloud, proj_range, proj_mask = self.knni(
-                proj_pointcloud, proj_range, proj_mask
-            )
+        proj_pointcloud, proj_range, proj_mask = self._apply_knni(
+            proj_pointcloud, proj_range, proj_mask, index
+        )
 
         proj_mask_tensor = torch.from_numpy(proj_mask)
         mask = proj_idx >= 0
