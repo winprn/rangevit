@@ -248,13 +248,17 @@ class RangeViT_noKPConv(nn.Module):
         im = padding(im, self.patch_size)
         H, W = im.size(2), im.size(3)
 
-        x, skip = self.encoder(im, return_features=True) # x.shape = [16, 577, 384]
+        x, skip = self.encoder(im, return_features=True)
 
-        # remove CLS tokens for decoding
-        num_extra_tokens = 1
-        x = x[:, num_extra_tokens:] # x.shape = [16, 576, 384]
-
-        feats = self.decoder(x, (H, W), skip) # feats.shape = [16, 17, 24, 24]
+        if isinstance(self.encoder, TinyViMAdapter):
+            # TinyViM returns spatial feature maps; FPN consumes them via skip.
+            stage_features = x if isinstance(x, (list, tuple)) else skip
+            feats = self.decoder(None, (H, W), stage_features)
+        else:
+            # remove CLS tokens for decoding
+            num_extra_tokens = 1
+            x = x[:, num_extra_tokens:]
+            feats = self.decoder(x, (H, W), skip)
         feats = F.interpolate(feats, size=(H, W), mode='bilinear')
         feats = unpadding(feats, (H_ori, W_ori)) # feats.shape = [16, 17, 384, 384]
 

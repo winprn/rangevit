@@ -51,6 +51,9 @@ def dist_barrier():
 
 
 def init_distributed_mode(args):
+    if hasattr(args, 'distributed') and not args.distributed:
+        print('Distributed mode disabled by config')
+        return
     if 'RANK' in os.environ and 'WORLD_SIZE' in os.environ:
         args.rank = int(os.environ['RANK'])
         args.world_size = int(os.environ['WORLD_SIZE'])
@@ -64,6 +67,14 @@ def init_distributed_mode(args):
         print('Not using distributed mode')
         args.distributed = False
         return
+
+    if args.gpu is None:
+        if torch.cuda.is_available():
+            args.gpu = 0
+        else:
+            print('CUDA not available; running on CPU')
+            args.distributed = False
+            return
 
     torch.cuda.set_device(args.gpu)
     args.distributed = True

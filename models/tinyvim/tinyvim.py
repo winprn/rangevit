@@ -168,9 +168,11 @@ class TinyViM(nn.Module):
             if i >= len(layers) - 1:
                 break
             if downsamples[i] or embed_dims[i] != embed_dims[i + 1]:
+                # Only downsample height once: between Stage2 and Stage3 (i == 1).
+                stride = (2, 2) if i == 1 else down_stride
                 network.append(
                     Embedding(
-                        patch_size=down_patch_size, stride=down_stride,
+                        patch_size=down_patch_size, stride=stride,
                         padding=down_pad,
                         in_chans=embed_dims[i], embed_dim=embed_dims[i + 1]
                     )

@@ -29,7 +29,7 @@ class Option(object):
         self.gpu = None
         self.rank = 0  # rank of distributed thread
         self.world_size = 1
-        self.distributed = False
+        self.distributed = self.config.get('distributed', False)
         self.dist_backend = 'nccl'
         self.dist_url = 'env://'
         self.num_workers = 4 # number of threads used for data loading

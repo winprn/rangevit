@@ -3,13 +3,14 @@ num_workers: 6
 id: "exp_kitti_tinyvim_crop64x1024"
 data_root: "../dataset/SemanticKitti/data_odometry_velodyne/dataset/sequences"
 save_path: "save_rangevim_crop64x1024"
+distributed: false
 
 # MLflow config
 mlflow:
   enable: true
   tracking_uri: "http://140.245.117.232:5000" # e.g. 'file:./mlruns' or an HTTP URL
   experiment_name: "rangevim"
-  run_name: "[train] rangevim_base_crop64x1024" # defaults to the CLI-provided id when null
+  run_name: "[train] base_crop1024_aug_v3" # defaults to the CLI-provided id when null
   nested: false
   log_checkpoints: false
   log_code_snapshot: false
@@ -31,10 +32,10 @@ knni:
 has_label: true
 val_frequency: 1
 n_epochs: 60
-warmup_epochs: 4
-batch_size: 4
+warmup_epochs: 3
+batch_size: 8
 batch_size_val: 1
-lr: 0.0003
+lr: 0.0004
 use_fp16: true
 train_result_frequency: 100 # printing frequency of the train results
 boundary_loss_weight: 0.2 # Weight for boundary mIoU loss (only applied when use_kpconv is False)
@@ -120,18 +121,18 @@ adapted_augmentation:
   # 17=terrain, 18=pole, 19=traffic-sign
   use_mapped_labels: true
   pointsample:
-    enable: true
+    enable: false
     num_points: 120000
     replace: false
   polarmix:
     enable: true
     prob: 0.5
-    classes: [2, 3, 4, 5, 6, 7, 8] # bicycle, motorcycle, truck, other-vehicle, person, bicyclist, motorcyclist
+    classes: [2, 3, 4, 5, 6, 7, 8, 10] # bicycle, motorcycle, truck, other-vehicle, person, bicyclist, motorcyclist
   instance_cutmix:
     enable: true
     prob: 1.0
     instance_bank_root: "cache/instance_bank"
-    classes: [2, 3, 4, 5, 6, 7, 8] # bicycle, motorcycle, truck, other-vehicle, person, bicyclist, motorcyclist
+    classes: [2, 3, 4, 5, 6, 7, 8, 10] # bicycle, motorcycle, truck, other-vehicle, person, bicyclist, motorcyclist
     min_points: 20
     num_to_add: [0, 3]
   clustermix:
@@ -143,7 +144,7 @@ adapted_augmentation:
   instance_copy:
     enable: true
     prob: 0.5
-    classes: [2, 3, 4, 5, 6, 7, 8] # bicycle, motorcycle, truck, other-vehicle, person, bicyclist, motorcyclist
+    classes: [2, 3, 4, 5, 6, 7, 8, 10] # bicycle, motorcycle, truck, other-vehicle, person, bicyclist, motorcyclist
     max_instances_per_class: 1
 
 sensor:

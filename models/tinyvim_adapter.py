@@ -104,19 +104,15 @@ class TinyViMAdapter(nn.Module):
         # 2: Conv2d_BN (stride 2)
         # 3: GELU
         
-        # RangeViT expects skip from STEM.
-        # Usually stem output is the "skip". 
-        # In RangeViT/models/rangevit.py: x, skip = self.encoder(im, return_features=True)
-        # In ConvStem (rangevit/models/stems.py): returns x (flattened), x_base (skip)
-        # x_base is output of "conv_block" before "proj_block".
+        # RangeViT expects spatial features for FPN.
             
         # Let's look at TinyViM stem execution
         x_stem = x
         for i, layer in enumerate(self.model.patch_embed):
             x_stem = layer(x_stem)
             
-        # x_stem is now [B, embed_dims[0], H/4, W/4]
-        skip = x_stem
+        # x_stem is now [B, embed_dims[0], H/stride_h, W/stride_w]
+        # Keep stem output as the first spatial feature.
         
         # Forward tokens through stages
         tokens = x_stem
@@ -129,37 +125,11 @@ class TinyViMAdapter(nn.Module):
                 stage_features.append(tokens)
         
         # tokens is now [B, embed_dims[-1], H/32, W/32] usually (stride 32 total)
-        
+
         if return_features:
-            # RangeViT Decoder expects:
-            # x: [B, N, D] (flattened tokens)
-            # BUT: 
-            # In rangevit.py: 
-            #   x, skip = self.encoder(im, return_features=True) # x.shape = [16, 577, 384]
-            #   x = x[:, num_extra_tokens:] (removes CLS)
-            #   feats = self.decoder(x, (H, W), skip)
-            
-            # The standard ViT returns [B, N+1, D] (CLS + tokens).
-            # TinyViM does NOT have CLS token.
-            # So we should return [B, N, D] or [B, 1+N, D] with dummy CLS?
-            # RangeViT explicitly effectively ignores tokens it calls "extra_tokens".
-            # num_extra_tokens = 1.
-            # If we return [B, N, D], RangeViT will slice [:, 1:], losing the first real token!
-            # So we MUST prepend a dummy CLS token.
-            
-            B, C, H_out, W_out = tokens.shape
-            # Flatten
-            tokens_flat = tokens.flatten(2).transpose(1, 2) # [B, N, C]
-            
-            # Add dummy CLS token
-            # RangeViT encoder.cls_token is [1, 1, D]
-            dummy_cls = torch.zeros((B, 1, C), device=tokens.device, dtype=tokens.dtype)
-            
-            # Concatenate
-            out_tokens = torch.cat((dummy_cls, tokens_flat), dim=1)
-            
+            # Return spatial features only (no CLS tokens).
             if self.use_fpn_decoder:
-                return out_tokens, stage_features
-            return out_tokens, skip
-            
+                return stage_features, None
+            return tokens, None
+
         return tokens

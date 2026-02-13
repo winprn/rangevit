@@ -24,14 +24,25 @@ class TinyViMFPNDecoder(nn.Module):
         self.lateral_convs = nn.ModuleList([
             nn.Conv2d(ch, out_channels, kernel_size=1) for ch in in_channels
         ])
+        # Use horizontal kernels for deeper stages (Stage3/Stage4) to emphasize azimuth context.
         self.fpn_convs = nn.ModuleList([
-            nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1)
-            for _ in in_channels
+            nn.Conv2d(
+                out_channels,
+                out_channels,
+                kernel_size=(1, 5) if i >= 2 else 3,
+                padding=(0, 2) if i >= 2 else 1,
+            )
+            for i, _ in enumerate(in_channels)
         ])
 
         self.head_convs = nn.ModuleList([
-            nn.Conv2d(out_channels, head_channels, kernel_size=3, padding=1)
-            for _ in in_channels
+            nn.Conv2d(
+                out_channels,
+                head_channels,
+                kernel_size=(1, 5) if i >= 2 else 3,
+                padding=(0, 2) if i >= 2 else 1,
+            )
+            for i, _ in enumerate(in_channels)
         ])
         self.fuse_conv = nn.Conv2d(head_channels, head_channels, kernel_size=3, padding=1)
         self.dropout = nn.Dropout2d(p=dropout_ratio) if dropout_ratio > 0 else nn.Identity()
