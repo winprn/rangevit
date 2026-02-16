@@ -36,15 +36,15 @@ warmup_epochs: 3
 batch_size: 8
 batch_size_val: 1
 lr: 0.0004
-use_fp16: true
+use_fp16: false
 train_result_frequency: 100 # printing frequency of the train results
-boundary_loss_weight: 0.2 # Weight for boundary mIoU loss (only applied when use_kpconv is False)
-save_epochs_at: [30, 33, 35, 37, 39, 40, 41, 43, 45, 47, 50, 55, 57] # 1-based epochs to save checkpoints; must be < n_epochs. Leave empty to save every epoch.
+boundary_loss_weight: 0.0 # Weight for boundary mIoU loss (only applied when use_kpconv is False)
+save_epochs_at: [] # 1-based epochs to save checkpoints; must be < n_epochs. Leave empty to save every epoch.
 
 # Model config
 vit_backbone: "tinyvim_base"
 in_channels: 5
-patch_size: [2, 2] # TinyViM stem now uses stride 2 (overall stage strides: /2, /2, /4, /4)
+patch_size: [2, 2] # Kept for RangeViT compatibility; TinyViM stage downsampling is controlled in TinyViMAdapter defaults.
 patch_stride: [2, 2]
 image_size: [64, 1024]         # train-time crop size
 window_size: [64, 1024]        # sliding window size for validation
@@ -126,7 +126,7 @@ adapted_augmentation:
     replace: false
   polarmix:
     enable: true
-    prob: 0.5
+    prob: 0.6
     classes: [2, 3, 4, 5, 6, 7, 8, 10] # bicycle, motorcycle, truck, other-vehicle, person, bicyclist, motorcyclist
   instance_cutmix:
     enable: true
@@ -137,15 +137,15 @@ adapted_augmentation:
     num_to_add: [0, 3]
   clustermix:
     enable: true
-    prob: 0.5
+    prob: 0.6
     vertical_prob: 0.5
     sector_width: 1.570796
     height_ratio: 0.5
   instance_copy:
     enable: true
-    prob: 0.5
+    prob: 0.6
     classes: [2, 3, 4, 5, 6, 7, 8, 10] # bicycle, motorcycle, truck, other-vehicle, person, bicyclist, motorcyclist
-    max_instances_per_class: 1
+    max_instances_per_class: 2
 
 sensor:
   name: "HDL64"

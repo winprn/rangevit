@@ -30,25 +30,23 @@ def stem(in_chs, out_chs, stride=4):
     Stem Layer with two convs. Supports asymmetric stride to keep height while shrinking width.
     Output: [B, C, H/stride_h, W/stride_w]
     """
+    def _factorize_axis(s):
+        if s == 1:
+            return 1, 1
+        if s == 2:
+            return 2, 1
+        if s == 4:
+            return 2, 2
+        raise ValueError(f"Unsupported axis stride: {s}. Only 1, 2 or 4 are supported.")
+
     if isinstance(stride, (tuple, list)):
         stride_h, stride_w = stride
-        if stride_h != 1:
-            raise ValueError(f"Unsupported stem stride: {stride}. Height stride must stay 1 to preserve H.")
-        if stride_w == 1:
-            stride1, stride2 = (1, 1), (1, 1)  # no downsampling in stem
-        elif stride_w == 2:
-            stride1, stride2 = (1, 2), (1, 1)
-        elif stride_w == 4:
-            stride1, stride2 = (1, 2), (1, 2)
-        else:
-            raise ValueError(f"Unsupported stem width stride: {stride_w}. Only 1, 2 or 4 are supported.")
+        s1h, s2h = _factorize_axis(stride_h)
+        s1w, s2w = _factorize_axis(stride_w)
+        stride1, stride2 = (s1h, s1w), (s2h, s2w)
     else:
-        if stride == 4:
-            stride1, stride2 = (2, 2), (2, 2)
-        elif stride == 2:
-            stride1, stride2 = (2, 2), (1, 1)
-        else:
-            raise ValueError(f"Unsupported stem stride: {stride}. Only 2 or 4 are supported.")
+        s1, s2 = _factorize_axis(stride)
+        stride1, stride2 = (s1, s1), (s2, s2)
     return nn.Sequential(
         Conv2d_BN(in_chs, out_chs // 2, 3, stride1, 1), 
         nn.GELU(),
@@ -142,6 +140,7 @@ class TinyViM(nn.Module):
                  mlp_ratios=4, downsamples=None,
                  num_classes=1000,
                  down_patch_size=3, down_stride=(1, 2), down_pad=1,
+                 height_downsample_stage=1,
                  use_layer_scale=True, layer_scale_init_value=1e-5,
                  fork_feat=False,
                  init_cfg=None,
@@ -168,8 +167,8 @@ class TinyViM(nn.Module):
             if i >= len(layers) - 1:
                 break
             if downsamples[i] or embed_dims[i] != embed_dims[i + 1]:
-                # Only downsample height once: between Stage2 and Stage3 (i == 1).
-                stride = (2, 2) if i == 1 else down_stride
+                # Optionally downsample height at one selected transition.
+                stride = (2, 2) if height_downsample_stage is not None and i == height_downsample_stage else down_stride
                 network.append(
                     Embedding(
                         patch_size=down_patch_size, stride=stride,

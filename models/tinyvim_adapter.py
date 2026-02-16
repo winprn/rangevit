@@ -40,9 +40,10 @@ class TinyViMAdapter(nn.Module):
         else:
             raise ValueError(f"Unknown backbone capacity in {backbone_name}")
 
-        # Default to no downsampling in the stem (stride 1x1)
-        stem_stride = kwargs.pop('stem_stride', (1, 1))  # keep height/width
+        # Default: downsample height once in stem, keep width for stage-wise downsampling.
+        stem_stride = kwargs.pop('stem_stride', (2, 1))
         down_stride = kwargs.pop('down_stride', (1, 2))
+        height_downsample_stage = kwargs.pop('height_downsample_stage', None)
         self.patch_size = tuple(stem_stride) if isinstance(stem_stride, (list, tuple)) else (stem_stride, stem_stride)
         self.patch_stride = self.patch_size
         self.embed_dims = embed_dims
@@ -60,6 +61,7 @@ class TinyViMAdapter(nn.Module):
             fork_feat=False, # We handle feature extraction manually or change this
             stem_stride=stem_stride,
             down_stride=down_stride,
+            height_downsample_stage=height_downsample_stage,
         )
         
         self.d_model = embed_dims[-1]
