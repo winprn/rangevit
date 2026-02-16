@@ -370,10 +370,10 @@ class Experiment(object):
 
 
 if __name__ == '__main__':
-    # Redirect multiprocessing temp files to project-local tmp/ if not already set.
-    # This avoids /tmp running out of space during many parallel trainings.
-    if not (os.environ.get('TMPDIR') or os.environ.get('TEMP') or os.environ.get('TMP')):
-        project_tmp = os.path.join(os.getcwd(), 'tmp')
+    # Redirect multiprocessing temp files to project-local tmp/ by default.
+    # Set RANGEVIT_KEEP_SYSTEM_TMP=1 to opt out and keep existing temp env vars.
+    if os.environ.get('RANGEVIT_KEEP_SYSTEM_TMP', '0') != '1':
+        project_tmp = os.path.abspath(os.path.join(os.getcwd(), 'tmp'))
         os.makedirs(project_tmp, exist_ok=True)
         os.environ['TMPDIR'] = project_tmp
         os.environ['TEMP'] = project_tmp
