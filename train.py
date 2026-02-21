@@ -287,7 +287,20 @@ class Trainer(object):
         iou = intersection / union
         return 1.0 - iou.mean()
 
-    def compute_losses(self, output, output_softmax, label, mask):
+    def _split_main_and_aux_output(self, output):
+        if isinstance(output, (tuple, list)):
+            main = output[0]
+            aux_outputs = []
+            if len(output) > 1:
+                aux_item = output[1]
+                if isinstance(aux_item, (tuple, list)):
+                    aux_outputs = [a for a in aux_item if torch.is_tensor(a)]
+                elif torch.is_tensor(aux_item):
+                    aux_outputs = [aux_item]
+            return main, aux_outputs
+        return output, []
+
+    def compute_losses(self, output, output_softmax, label, mask, aux_outputs=None, aux_loss_weight=0.0):
         loss_lovasz = self.criterion['lovasz'](output_softmax, label)
         loss_focal = self.criterion['focal_loss'](output_softmax, label, mask=mask)
         total_loss = loss_focal + loss_lovasz
@@ -297,7 +310,22 @@ class Trainer(object):
             loss_boundary = self.boundary_loss(output_softmax, label, mask)
             total_loss = total_loss + self.boundary_loss_weight * loss_boundary
 
-        return total_loss, loss_lovasz, loss_focal, loss_boundary
+        loss_aux = torch.zeros([], device=output.device, dtype=output.dtype)
+        if aux_outputs and aux_loss_weight > 0:
+            aux_total = torch.zeros([], device=output.device, dtype=output.dtype)
+            for aux_out in aux_outputs:
+                aux_softmax = F.softmax(aux_out, dim=1)
+                aux_lovasz = self.criterion['lovasz'](aux_softmax, label)
+                aux_focal = self.criterion['focal_loss'](aux_softmax, label, mask=mask)
+                aux_loss = aux_lovasz + aux_focal
+                if self.boundary_loss_weight > 0:
+                    aux_boundary = self.boundary_loss(aux_softmax, label, mask)
+                    aux_loss = aux_loss + self.boundary_loss_weight * aux_boundary
+                aux_total = aux_total + aux_loss
+            loss_aux = aux_total
+            total_loss = total_loss + aux_loss_weight * loss_aux
+
+        return total_loss, loss_lovasz, loss_focal, loss_boundary, loss_aux
 
 
     def run(self, epoch, mode='Train', print_results=False, save_results_path=None):
@@ -369,11 +397,14 @@ class Trainer(object):
             if mode == 'Train':
                 with torch.cuda.amp.autocast(self.fp16_scaler is not None):
                     output = self.model(input_feature)
+                    output, aux_outputs = self._split_main_and_aux_output(output)
                     output_softmax = F.softmax(output, dim=1)
 
                     # Loss calculation
-                    total_loss, loss_lovasz, loss_focal, loss_boundary = self.compute_losses(
-                        output, output_softmax, input_label, input_mask)
+                    total_loss, loss_lovasz, loss_focal, loss_boundary, loss_aux = self.compute_losses(
+                        output, output_softmax, input_label, input_mask,
+                        aux_outputs=aux_outputs,
+                        aux_loss_weight=self.settings.aux_loss_weight)
 
                 # Backward
                 self.optimizer.zero_grad()
@@ -419,11 +450,11 @@ class Trainer(object):
 
                     # Loss calculation
                     if self.settings.has_label:
-                        total_loss, loss_lovasz, loss_focal, loss_boundary = self.compute_losses(
+                        total_loss, loss_lovasz, loss_focal, loss_boundary, loss_aux = self.compute_losses(
                             output, output_softmax, input_label, input_mask)
                     else:
                         zero = torch.tensor(0.0, device=output.device)
-                        total_loss = loss_lovasz = loss_focal = loss_boundary = zero
+                        total_loss = loss_lovasz = loss_focal = loss_boundary = loss_aux = zero
 
             current_lr = self.optimizer.param_groups[0]['lr']
 
@@ -566,6 +597,7 @@ class Trainer(object):
                 'loss_focal': loss_focal,
                 'loss_lovasz': loss_lovasz,
                 'loss_boundary': loss_boundary if 'loss_boundary' in locals() else torch.tensor(0.0),
+                'loss_aux': loss_aux if 'loss_aux' in locals() else torch.tensor(0.0),
             }
 
         epoch_lr = self.optimizer.param_groups[0]['lr']
@@ -730,7 +762,7 @@ class Trainer(object):
                     output3d_softmax = F.softmax(output3d, dim=1)
 
                     # Loss calculation
-                    total_loss, loss_lovasz, loss_focal, loss_boundary = self.compute_losses(
+                    total_loss, loss_lovasz, loss_focal, loss_boundary, loss_aux = self.compute_losses(
                         output3d, output3d_softmax, labels3d, mask_3d)
 
                 # Backward
@@ -772,7 +804,7 @@ class Trainer(object):
                     output3d_softmax = F.softmax(output3d, dim=1)
 
                     # Loss calculation
-                    total_loss, loss_lovasz, loss_focal, loss_boundary = self.compute_losses(
+                    total_loss, loss_lovasz, loss_focal, loss_boundary, loss_aux = self.compute_losses(
                         output3d, output3d_softmax, labels3d, mask_3d)
 
             current_lr = self.optimizer.param_groups[0]['lr']
@@ -883,6 +915,7 @@ class Trainer(object):
                 'loss_meter_avg': loss_meter.avg,
                 'loss_focal': loss_focal,
                 'loss_lovasz': loss_lovasz,
+                'loss_aux': loss_aux if 'loss_aux' in locals() else torch.tensor(0.0),
             }
 
         epoch_lr = self.optimizer.param_groups[0]['lr']

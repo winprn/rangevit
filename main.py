@@ -50,6 +50,10 @@ def build_rangevit_model(settings, pretrained_path=None):
         decoder=settings.decoder,
         up_conv_d_decoder=settings.D_h,
         up_conv_scale_factor=settings.patch_stride,
+        fuse_proj_channels=settings.fuse_proj_channels,
+        fuse_mid_channels=settings.fuse_mid_channels,
+        fuse_out_channels=settings.fuse_out_channels,
+        aux_enable=settings.aux_enable,
         use_kpconv=settings.use_kpconv)
     return model
 

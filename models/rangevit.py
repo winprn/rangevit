@@ -27,6 +27,7 @@ from .rangevit_kpconv import RangeViT_KPConv, KPClassifier
 from .swin_transformer_v2 import SwinTransformerV2, create_swin_v2
 from .tinyvim_adapter import TinyViMAdapter
 from .tinyvim.fpn_decoder import TinyViMFPNDecoder
+from .tinyvim.fuse_aux_decoder import TinyViMFuseAuxDecoder
 
 
 class VisionTransformer(nn.Module):
@@ -179,6 +180,17 @@ def create_decoder(encoder, decoder_cfg):
             head_channels=decoder_cfg.get('fpn_head_channels', 128),
             dropout_ratio=decoder_cfg.get('fpn_dropout', 0.1),
         )
+    elif name == 'tinyvim_fuse_aux':
+        if not isinstance(encoder, TinyViMAdapter):
+            raise ValueError('tinyvim_fuse_aux decoder is only supported for TinyViM backbones.')
+        decoder = TinyViMFuseAuxDecoder(
+            in_channels=encoder.embed_dims,
+            n_cls=decoder_cfg['n_cls'],
+            proj_channels=decoder_cfg.get('fuse_proj_channels', 128),
+            mid_channels=decoder_cfg.get('fuse_mid_channels', 256),
+            out_channels=decoder_cfg.get('fuse_out_channels', 128),
+            use_aux=decoder_cfg.get('aux_enable', True),
+        )
     else:
         raise ValueError(f'Unknown decoder: {name}')
     return decoder
@@ -197,7 +209,7 @@ def create_rangevit(model_cfg, use_kpconv=False):
         # For TinyViM, we pass the full config or specific args
         # Since TinyViMAdapter expects 'backbone_name' and handles capacity internally
         model_cfg['backbone_name'] = backbone
-        if decoder_cfg.get('name') == 'fpn':
+        if decoder_cfg.get('name') in ('fpn', 'tinyvim_fuse_aux'):
             model_cfg['use_fpn_decoder'] = True
         # Tell adapter whether we're loading pretrained stem weights
         model_cfg['load_pretrained_stem'] = (model_cfg.get('pretrained_path') is not None)
@@ -253,14 +265,31 @@ class RangeViT_noKPConv(nn.Module):
         if isinstance(self.encoder, TinyViMAdapter):
             # TinyViM returns spatial feature maps; FPN consumes them via skip.
             stage_features = x if isinstance(x, (list, tuple)) else skip
-            feats = self.decoder(None, (H, W), stage_features)
+            if getattr(self.decoder, 'supports_aux', False) and self.training:
+                dec_out = self.decoder(None, (H, W), stage_features, return_aux=True)
+                if isinstance(dec_out, (tuple, list)) and len(dec_out) == 2:
+                    feats, aux_feats = dec_out
+                else:
+                    feats, aux_feats = dec_out, []
+            else:
+                feats = self.decoder(None, (H, W), stage_features)
+                aux_feats = []
         else:
             # remove CLS tokens for decoding
             num_extra_tokens = 1
             x = x[:, num_extra_tokens:]
             feats = self.decoder(x, (H, W), skip)
+            aux_feats = []
         feats = F.interpolate(feats, size=(H, W), mode='bilinear')
         feats = unpadding(feats, (H_ori, W_ori)) # feats.shape = [16, 17, 384, 384]
+
+        if aux_feats:
+            aux_unpadded = []
+            for aux in aux_feats:
+                aux = F.interpolate(aux, size=(H, W), mode='bilinear', align_corners=False)
+                aux = unpadding(aux, (H_ori, W_ori))
+                aux_unpadded.append(aux)
+            return feats, aux_unpadded
 
         return feats
 
@@ -288,6 +317,10 @@ class RangeViT(nn.Module):
         fpn_out_channels=256,
         fpn_head_channels=128,
         fpn_dropout=0.1,
+        fuse_proj_channels=128,
+        fuse_mid_channels=256,
+        fuse_out_channels=128,
+        aux_enable=True,
         use_kpconv=False,
         ):
         super(RangeViT, self).__init__()
@@ -377,6 +410,16 @@ class RangeViT(nn.Module):
                 'fpn_dropout': fpn_dropout,
                 # Needed for KPConv head channel size; FPN returns head_channels when return_features=True.
                 'd_decoder': fpn_head_channels,
+            }
+        elif decoder == 'tinyvim_fuse_aux':
+            decoder_cfg = {
+                'n_cls': n_cls, 'name': 'tinyvim_fuse_aux',
+                'fuse_proj_channels': fuse_proj_channels,
+                'fuse_mid_channels': fuse_mid_channels,
+                'fuse_out_channels': fuse_out_channels,
+                'aux_enable': aux_enable,
+                # Needed for KPConv head channel size if reused elsewhere.
+                'd_decoder': fuse_out_channels,
             }
 
         # ViT encoder and stem config

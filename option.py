@@ -100,6 +100,11 @@ class Option(object):
         # Decoder
         self.decoder = self.config.get('decoder', 'up_conv')
         self.skip_filters = self.config.get('skip_filters', 0)
+        self.fuse_proj_channels = int(self.config.get('fuse_proj_channels', 128))
+        self.fuse_mid_channels = int(self.config.get('fuse_mid_channels', 256))
+        self.fuse_out_channels = int(self.config.get('fuse_out_channels', 128))
+        self.aux_enable = bool(self.config.get('aux_enable', True))
+        self.aux_loss_weight = float(self.config.get('aux_loss_weight', 0.3))
 
         # 3D refiner / post-processing
         self.use_kpconv = False
@@ -181,6 +186,11 @@ class Option(object):
         # When using the KPConv layer, the decoder has to be up_conv.
         if self.use_kpconv:
             assert self.decoder in ('up_conv', 'fpn'), 'KPConv supported only with up_conv or fpn decoders'
+        if self.decoder == 'tinyvim_fuse_aux':
+            assert self.vit_backbone.startswith('tinyvim'), 'tinyvim_fuse_aux decoder requires a TinyViM backbone'
+            assert self.use_kpconv is False, 'tinyvim_fuse_aux decoder does not support KPConv'
+            assert self.skip_filters == 0, 'tinyvim_fuse_aux decoder does not use skip_filters'
+            assert self.aux_loss_weight >= 0.0, 'aux_loss_weight must be >= 0'
         if self.use_kpconv and self.use_knn:
             raise AssertionError('use_kpconv and use_knn cannot both be True')
 

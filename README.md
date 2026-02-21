@@ -56,6 +56,38 @@ Finally, install the requirements with
 pip install -r requirements.txt
 ```  
 
+## **Model Input and Stem**
+
+The model consumes a range-view tensor with shape `B x C x H x W`.
+
+1. Input channels (`C=5`) are built as:
+`[range, x, y, z, intensity]`
+Source: `dataset/range_view_loader.py`.
+
+2. Input preprocessing:
+The 5 channels are normalized with `sensor.img_mean` and `sensor.img_stds`, then multiplied by the valid projection mask (invalid pixels are zeroed).
+Source: `dataset/range_view_loader.py`.
+
+3. Spatial size:
+`H, W` come from crop/full-image settings in config.
+For example, `config_kitti_tinyvim.yaml` uses train crop `image_size: [64, 1024]` and full projection width `original_image_size: [64, 2048]`.
+
+4. Forward signatures:
+Non-KPConv path uses only the 2D input tensor: `model(input_feature)`.
+KPConv path uses extra point-wise tensors: `model(input2d, px, py, points_xyz, knns, num_points)`.
+Source: `train.py`, `models/rangevit_kpconv.py`.
+
+5. Stem for TinyViM backbones:
+When `vit_backbone` starts with `tinyvim`, the encoder is `TinyViMAdapter`, which uses TinyViM's own stem (not `ConvStem` from `models/stems.py`).
+The TinyViM stem is:
+`Conv2d_BN -> GELU -> Conv2d_BN -> GELU`
+Source: `models/tinyvim/tinyvim.py`, `models/tinyvim_adapter.py`.
+
+6. Current TinyViM stem downsampling:
+Current adapter default is `stem_stride=(1, 1)`, so there is no stem downsample in height or width.
+Then stage embedding transitions use `down_stride=(1, 2)`, so width is downsampled across stages while height is preserved.
+Source: `models/tinyvim_adapter.py`, `models/tinyvim/tinyvim.py`.
+
 ## **Training**
 
 To train on nuScenes or on SemanticKITTI, use (and modify if needed) the config file `config_nusc.yaml` or `config_kitti.yaml`, respectively. For instance, to train on nuScenes, run the following command: 
