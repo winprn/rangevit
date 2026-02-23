@@ -190,6 +190,7 @@ def create_decoder(encoder, decoder_cfg):
             mid_channels=decoder_cfg.get('fuse_mid_channels', 256),
             out_channels=decoder_cfg.get('fuse_out_channels', 128),
             use_aux=decoder_cfg.get('aux_enable', True),
+            use_preproj=decoder_cfg.get('fuse_preproj', True),
         )
     else:
         raise ValueError(f'Unknown decoder: {name}')
@@ -320,6 +321,7 @@ class RangeViT(nn.Module):
         fuse_proj_channels=128,
         fuse_mid_channels=256,
         fuse_out_channels=128,
+        fuse_preproj=True,
         aux_enable=True,
         use_kpconv=False,
         ):
@@ -417,6 +419,7 @@ class RangeViT(nn.Module):
                 'fuse_proj_channels': fuse_proj_channels,
                 'fuse_mid_channels': fuse_mid_channels,
                 'fuse_out_channels': fuse_out_channels,
+                'fuse_preproj': fuse_preproj,
                 'aux_enable': aux_enable,
                 # Needed for KPConv head channel size if reused elsewhere.
                 'd_decoder': fuse_out_channels,

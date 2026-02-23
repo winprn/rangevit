@@ -84,6 +84,7 @@ class Trainer(object):
         self.scheduler = utils.optim.WarmupCosineLR(
             optimizer=self.optimizer,
             lr=self.settings.lr,
+            min_lr=getattr(self.settings, 'min_lr', 0.0),
             warmup_steps=self.settings.warmup_epochs * len(self.train_loader),
             momentum=0.9,
             max_steps=len(self.train_loader) * (self.settings.n_epochs - self.settings.warmup_epochs))

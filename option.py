@@ -50,6 +50,7 @@ class Option(object):
         self.batch_size = self.config['batch_size']  # mini-batch size
         self.batch_size_val = self.config.get('batch_size_val', 1) # validation batch size
         self.lr = self.config['lr']
+        self.min_lr = float(self.config.get('min_lr', 0.0))
         self.warmup_epochs = self.config.get('warmup_epochs', 10)
         self.boundary_loss_weight = self.config.get('boundary_loss_weight', 0.0)
         self.log_frequency = 100
@@ -70,6 +71,10 @@ class Option(object):
                 raise ValueError(f'save_epochs_at entry {e} must be < total epochs ({self.n_epochs}).')
             save_epochs_cleaned.append(e)
         self.save_epochs_at = sorted(set(save_epochs_cleaned))
+        if self.min_lr < 0.0:
+            raise ValueError('min_lr must be >= 0.')
+        if self.min_lr > self.lr:
+            raise ValueError(f'min_lr ({self.min_lr}) must be <= lr ({self.lr}).')
 
 
         # Model config
@@ -103,6 +108,7 @@ class Option(object):
         self.fuse_proj_channels = int(self.config.get('fuse_proj_channels', 128))
         self.fuse_mid_channels = int(self.config.get('fuse_mid_channels', 256))
         self.fuse_out_channels = int(self.config.get('fuse_out_channels', 128))
+        self.fuse_preproj = bool(self.config.get('fuse_preproj', True))
         self.aux_enable = bool(self.config.get('aux_enable', True))
         self.aux_loss_weight = float(self.config.get('aux_loss_weight', 0.3))
 

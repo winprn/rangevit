@@ -53,6 +53,7 @@ def build_rangevit_model(settings, pretrained_path=None):
         fuse_proj_channels=settings.fuse_proj_channels,
         fuse_mid_channels=settings.fuse_mid_channels,
         fuse_out_channels=settings.fuse_out_channels,
+        fuse_preproj=settings.fuse_preproj,
         aux_enable=settings.aux_enable,
         use_kpconv=settings.use_kpconv)
     return model

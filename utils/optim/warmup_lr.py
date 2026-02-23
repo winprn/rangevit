@@ -18,10 +18,11 @@ class WarmupCosineLR(toptim._LRScheduler):
         LR exponentially.
     '''
 
-    def __init__(self, optimizer, lr, warmup_steps, momentum, max_steps):
+    def __init__(self, optimizer, lr, warmup_steps, momentum, max_steps, min_lr=0.0):
         # cyclic params
         self.optimizer = optimizer
         self.lr = lr
+        self.min_lr = min_lr
         self.warmup_steps = warmup_steps
         self.momentum = momentum
 
@@ -31,7 +32,7 @@ class WarmupCosineLR(toptim._LRScheduler):
 
         # cyclic lr
         self.cosine_scheduler = toptim.CosineAnnealingLR(
-            self.optimizer, T_max=max_steps)
+            self.optimizer, T_max=max_steps, eta_min=self.min_lr)
 
         self.initial_scheduler = toptim.CyclicLR(self.optimizer,
                                                  base_lr=0,
