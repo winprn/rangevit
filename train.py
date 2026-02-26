@@ -243,6 +243,10 @@ class Trainer(object):
         alpha[self.settings.focal_ignore_index] = 0
         if self.recorder is not None:
             self.recorder.logger.info('focal_loss_type: {}'.format(self.settings.focal_loss_type))
+            self.recorder.logger.info('focal_loss_weight: {}'.format(self.settings.focal_loss_weight))
+            self.recorder.logger.info('lovasz_loss_weight: {}'.format(self.settings.lovasz_loss_weight))
+            self.recorder.logger.info('boundary_loss_weight: {}'.format(self.boundary_loss_weight))
+            self.recorder.logger.info('aux_loss_weight: {}'.format(self.settings.aux_loss_weight))
             self.recorder.logger.info('focal_gamma: {}'.format(self.settings.focal_gamma))
             self.recorder.logger.info('focal_ignore_index: {}'.format(self.settings.focal_ignore_index))
             self.recorder.logger.info('focal_loss alpha: {}'.format(alpha))
@@ -277,7 +281,10 @@ class Trainer(object):
     def compute_losses(self, output, output_softmax, label, mask, aux_outputs=None, aux_loss_weight=0.0):
         loss_lovasz = self.criterion['lovasz'](output_softmax, label)
         loss_focal = self.criterion['focal_loss'](output_softmax, label, mask=mask)
-        total_loss = loss_focal + loss_lovasz
+        total_loss = (
+            self.settings.focal_loss_weight * loss_focal +
+            self.settings.lovasz_loss_weight * loss_lovasz
+        )
 
         loss_boundary = torch.zeros([], device=output.device, dtype=output.dtype)
         if self.boundary_loss_weight > 0:
@@ -291,7 +298,10 @@ class Trainer(object):
                 aux_softmax = F.softmax(aux_out, dim=1)
                 aux_lovasz = self.criterion['lovasz'](aux_softmax, label)
                 aux_focal = self.criterion['focal_loss'](aux_softmax, label, mask=mask)
-                aux_loss = aux_lovasz + aux_focal
+                aux_loss = (
+                    self.settings.lovasz_loss_weight * aux_lovasz +
+                    self.settings.focal_loss_weight * aux_focal
+                )
                 if self.boundary_loss_weight > 0:
                     aux_boundary = self.criterion['boundary_loss'](aux_softmax, label, mask)
                     aux_loss = aux_loss + self.boundary_loss_weight * aux_boundary
@@ -342,6 +352,10 @@ class Trainer(object):
 
         # Init metrics
         loss_meter = tools.AverageMeter()
+        loss_focal_meter = tools.AverageMeter()
+        loss_lovasz_meter = tools.AverageMeter()
+        loss_boundary_w_meter = tools.AverageMeter()
+        loss_aux_w_meter = tools.AverageMeter()
         self.metrics.reset()
         if mode == 'Validation' and self.use_knn:
             self.metrics_3d.reset()
@@ -442,6 +456,15 @@ class Trainer(object):
                         self.metrics_3d.addBatch(unproj_argmax, sem_label) # 3D predictions (point metrics)
 
             loss_meter.update(loss.item(), input_feature.size(0))
+            with torch.no_grad():
+                loss_focal_val = float((self.settings.focal_loss_weight * loss_focal).detach())
+                loss_lovasz_val = float((self.settings.lovasz_loss_weight * loss_lovasz).detach())
+                loss_boundary_w_val = float((self.boundary_loss_weight * loss_boundary).detach())
+                loss_aux_w_val = float((self.settings.aux_loss_weight * loss_aux).detach())
+            loss_focal_meter.update(loss_focal_val, input_feature.size(0))
+            loss_lovasz_meter.update(loss_lovasz_val, input_feature.size(0))
+            loss_boundary_w_meter.update(loss_boundary_w_val, input_feature.size(0))
+            loss_aux_w_meter.update(loss_aux_w_val, input_feature.size(0))
 
             with torch.no_grad():
                 if self.settings.has_label:
@@ -468,6 +491,10 @@ class Trainer(object):
                 self.iter_steps[mode] += 1
                 mlflow_metrics = {
                     f'{mode.lower()}_loss': loss.item(),
+                    f'{mode.lower()}_loss_focal': loss_focal_val,
+                    f'{mode.lower()}_loss_lovasz': loss_lovasz_val,
+                    f'{mode.lower()}_loss_boundary_weighted': loss_boundary_w_val,
+                    f'{mode.lower()}_loss_aux_weighted': loss_aux_w_val,
                 }
                 if mode == 'Train':
                     mlflow_metrics[f'{mode.lower()}_lr'] = current_lr
@@ -501,8 +528,9 @@ class Trainer(object):
                 if self.recorder is not None:
                     log_str = '>>> {} E[{:03d}|{:03d}] I[{:04d}|{:04d}] DT[{:.3f}] PT[{:.3f}] '.format(
                         mode, self.settings.n_epochs, epoch+1, total_iter, i+1, data_cost_time, process_cost_time)
-                    log_str += 'LR {} Loss {:0.4f} Acc_pixel {:0.4f} IOU_pixel {:0.4F} '.format(
-                        current_lr, loss.item(), mean_acc_running, mean_iou_running)
+                    log_str += 'LR {} Loss {:0.4f} [foc {:.3f} lov {:.3f} bndW {:.3f} auxW {:.3f}] Acc {:0.4f} IOU {:0.4F} '.format(
+                        current_lr, loss.item(), loss_focal_val, loss_lovasz_val, loss_boundary_w_val, loss_aux_w_val,
+                        mean_acc_running, mean_iou_running)
                     if mode == 'Validation' and self.use_knn:
                         log_str += 'Acc_point {:0.4f} IOU_point {:0.4F} '.format(
                             mean_acc_point_running, mean_iou_point_running)
@@ -557,10 +585,13 @@ class Trainer(object):
 
         loss_dict = {
                 'loss_meter_avg': loss_meter.avg,
-                'loss_focal': loss_focal,
-                'loss_lovasz': loss_lovasz,
-                'loss_boundary': loss_boundary if 'loss_boundary' in locals() else torch.tensor(0.0),
-                'loss_aux': loss_aux if 'loss_aux' in locals() else torch.tensor(0.0),
+                'loss_focal': loss_focal_meter.avg,
+                'loss_lovasz': loss_lovasz_meter.avg,
+                'loss_boundary_weighted': loss_boundary_w_meter.avg,
+                'loss_aux_weighted': loss_aux_w_meter.avg,
+                'loss_component_sum_weighted': (
+                    loss_focal_meter.avg + loss_lovasz_meter.avg + loss_boundary_w_meter.avg + loss_aux_w_meter.avg
+                ),
             }
 
         epoch_lr = self.optimizer.param_groups[0]['lr']
@@ -608,7 +639,7 @@ class Trainer(object):
                                    mapped_cls_name=self.mapped_cls_name)
 
             # Results at the end of the epoch
-            log_str = '>>> {} Loss {:0.4f} Acc_pixel {:0.4f} IOU_pixel {:0.4F} Recall_pixel {:0.4f}'.format(
+            log_str = '>>> {} Loss {:0.4f} Acc {:0.4f} IOU {:0.4F} Recall_pixel {:0.4f}'.format(
                 mode, loss_meter.avg, mean_acc.item(), mean_iou.item(), mean_recall.item())
             if mode == 'Validation' and self.use_knn and metrics_dict_3d is not None:
                 log_str += ' | Acc_point {:0.4f} IOU_point {:0.4F} Recall_point {:0.4f}'.format(
@@ -626,6 +657,10 @@ class Trainer(object):
         if self.mlflow_manager is not None:
             mlflow_metrics = {
                 f'{mode.lower()}_epoch_loss': loss_meter.avg,
+                f'{mode.lower()}_epoch_loss_focal': loss_focal_meter.avg,
+                f'{mode.lower()}_epoch_loss_lovasz': loss_lovasz_meter.avg,
+                f'{mode.lower()}_epoch_loss_boundary_weighted': loss_boundary_w_meter.avg,
+                f'{mode.lower()}_epoch_loss_aux_weighted': loss_aux_w_meter.avg,
                 f'{mode.lower()}_epoch_acc': primary_acc if isinstance(primary_acc, float) else primary_acc.item(),
                 f'{mode.lower()}_epoch_recall': primary_recall if isinstance(primary_recall, float) else primary_recall.item(),
                 f'{mode.lower()}_epoch_iou_pixel': mean_iou.item(),
@@ -689,6 +724,10 @@ class Trainer(object):
 
         # Init metrics
         loss_meter = tools.AverageMeter()
+        loss_focal_meter = tools.AverageMeter()
+        loss_lovasz_meter = tools.AverageMeter()
+        loss_boundary_w_meter = tools.AverageMeter()
+        loss_aux_w_meter = tools.AverageMeter()
         self.metrics.reset()
 
         total_iter = len(dataloader)
@@ -776,6 +815,15 @@ class Trainer(object):
                 self.metrics.addBatch(argmax3d, labels3d) # 3D predictions
 
             loss_meter.update(loss.item(), input_feature.size(0))
+            with torch.no_grad():
+                loss_focal_val = float((self.settings.focal_loss_weight * loss_focal).detach())
+                loss_lovasz_val = float((self.settings.lovasz_loss_weight * loss_lovasz).detach())
+                loss_boundary_w_val = float((self.boundary_loss_weight * loss_boundary).detach())
+                loss_aux_w_val = float((self.settings.aux_loss_weight * loss_aux).detach())
+            loss_focal_meter.update(loss_focal_val, input_feature.size(0))
+            loss_lovasz_meter.update(loss_lovasz_val, input_feature.size(0))
+            loss_boundary_w_meter.update(loss_boundary_w_val, input_feature.size(0))
+            loss_aux_w_meter.update(loss_aux_w_val, input_feature.size(0))
 
             with torch.no_grad():
                 mean_iou_tensor, _, mean_acc_tensor, _ = self.metrics.getIoUnAcc()
@@ -791,6 +839,10 @@ class Trainer(object):
                 self.iter_steps[mode] += 1
                 mlflow_metrics = {
                     f'{mode.lower()}_loss': loss.item(),
+                    f'{mode.lower()}_loss_focal': loss_focal_val,
+                    f'{mode.lower()}_loss_lovasz': loss_lovasz_val,
+                    f'{mode.lower()}_loss_boundary_weighted': loss_boundary_w_val,
+                    f'{mode.lower()}_loss_aux_weighted': loss_aux_w_val,
                 }
                 if mode == 'Train':
                     mlflow_metrics[f'{mode.lower()}_lr'] = current_lr
@@ -843,8 +895,9 @@ class Trainer(object):
                 if self.recorder is not None:
                     log_str = '>>> {} E[{:03d}|{:03d}] I[{:04d}|{:04d}] DT[{:.3f}] PT[{:.3f}] '.format(
                         mode, self.settings.n_epochs, epoch+1, total_iter, i+1, data_cost_time, process_cost_time)
-                    log_str += 'LR {} Loss {:0.4f} Acc_point {:0.4f} IOU_point {:0.4F} '.format(
-                        current_lr, loss.item(), mean_acc_running, mean_iou_running)
+                    log_str += 'LR {} Loss {:0.4f} [foc {:.3f} lov {:.3f} bndW {:.3f} auxW {:.3f}] Acc_point {:0.4f} IOU_point {:0.4F} '.format(
+                        current_lr, loss.item(), loss_focal_val, loss_lovasz_val, loss_boundary_w_val, loss_aux_w_val,
+                        mean_acc_running, mean_iou_running)
                     log_str += 'RT {} '.format(remain_time)
                     log_str += 'RT PER EPOCH {}'.format(remain_time_1epoch)
                     self.recorder.logger.info(log_str)
@@ -866,9 +919,13 @@ class Trainer(object):
 
         loss_dict = {
                 'loss_meter_avg': loss_meter.avg,
-                'loss_focal': loss_focal,
-                'loss_lovasz': loss_lovasz,
-                'loss_aux': loss_aux if 'loss_aux' in locals() else torch.tensor(0.0),
+                'loss_focal': loss_focal_meter.avg,
+                'loss_lovasz': loss_lovasz_meter.avg,
+                'loss_boundary_weighted': loss_boundary_w_meter.avg,
+                'loss_aux_weighted': loss_aux_w_meter.avg,
+                'loss_component_sum_weighted': (
+                    loss_focal_meter.avg + loss_lovasz_meter.avg + loss_boundary_w_meter.avg + loss_aux_w_meter.avg
+                ),
             }
 
         epoch_lr = self.optimizer.param_groups[0]['lr']
@@ -917,6 +974,10 @@ class Trainer(object):
         if self.mlflow_manager is not None:
             mlflow_metrics = {
                 f'{mode.lower()}_epoch_loss': loss_meter.avg,
+                f'{mode.lower()}_epoch_loss_focal': loss_focal_meter.avg,
+                f'{mode.lower()}_epoch_loss_lovasz': loss_lovasz_meter.avg,
+                f'{mode.lower()}_epoch_loss_boundary_weighted': loss_boundary_w_meter.avg,
+                f'{mode.lower()}_epoch_loss_aux_weighted': loss_aux_w_meter.avg,
                 f'{mode.lower()}_epoch_acc': mean_acc.item(),
                 f'{mode.lower()}_epoch_recall': mean_recall.item(),
                 f'{mode.lower()}_epoch_iou_point': mean_iou.item(),

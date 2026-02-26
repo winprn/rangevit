@@ -23,6 +23,9 @@ class Option(object):
     def __init__(self, config_path, args):
         self.config_path = config_path
         self.config = yaml.safe_load(open(config_path, 'r'))
+        data_cfg = self.config.get('data', {})
+        train_cfg = self.config.get('training', {})
+        model_cfg = self.config.get('model', {})
 
         # General options
         self.seed = 1
@@ -35,32 +38,45 @@ class Option(object):
         self.num_workers = 4 # number of threads used for data loading
 
         # Data config
-        self.dataset = self.config['dataset']
-        self.n_classes = self.config['n_classes']
-        self.data_root = self.config.get('data_root', None)
-        self.has_label = self.config['has_label']
+        self.dataset = data_cfg.get('dataset', self.config['dataset'])
+        self.n_classes = data_cfg.get('n_classes', self.config['n_classes'])
+        self.data_root = data_cfg.get('data_root', self.config.get('data_root', None))
+        self.has_label = data_cfg.get('has_label', self.config['has_label'])
         self.use_mini_version = False
-        self.use_trainval = self.config.get('use_trainval', False)
+        self.use_trainval = data_cfg.get('use_trainval', self.config.get('use_trainval', False))
 
         # Train config
         self.val_only = False
-        self.val_frequency = self.config.get('val_frequency', 10)
+        self.val_frequency = train_cfg.get('val_frequency', self.config.get('val_frequency', 10))
         self.test_split = False
-        self.n_epochs = self.config['n_epochs']  # number of total epochs
-        self.batch_size = self.config['batch_size']  # mini-batch size
-        self.batch_size_val = self.config.get('batch_size_val', 1) # validation batch size
-        self.lr = self.config['lr']
-        self.min_lr = float(self.config.get('min_lr', 0.0))
-        self.warmup_epochs = self.config.get('warmup_epochs', 10)
-        self.boundary_loss_weight = self.config.get('boundary_loss_weight', 0.0)
-        self.focal_loss_type = str(self.config.get('focal_loss_type', 'focal')).lower()
-        self.focal_gamma = float(self.config.get('focal_gamma', 2.0))
-        self.focal_ignore_index = int(self.config.get('focal_ignore_index', 0))
-        self.class_weights = self.config.get('class_weights', None)
+        self.n_epochs = train_cfg.get('n_epochs', self.config['n_epochs'])  # number of total epochs
+        self.batch_size = train_cfg.get('batch_size', self.config['batch_size'])  # mini-batch size
+        self.batch_size_val = train_cfg.get('batch_size_val', self.config.get('batch_size_val', 1)) # validation batch size
+        self.lr = train_cfg.get('lr', self.config['lr'])
+        self.min_lr = float(train_cfg.get('min_lr', self.config.get('min_lr', 0.0)))
+        self.warmup_epochs = train_cfg.get('warmup_epochs', self.config.get('warmup_epochs', 10))
+        loss_cfg = train_cfg.get('loss', self.config.get('loss', {}))
+        focal_cfg = loss_cfg.get('focal_loss', {})
+        boundary_cfg = loss_cfg.get('boundary_loss', {})
+        lovasz_cfg = loss_cfg.get('lovasz_loss', {})
+        aux_cfg = loss_cfg.get('aux_loss', {})
+
+        focal_type_raw = str(focal_cfg.get('type', self.config.get('focal_loss_type', 'focal'))).lower()
+        # Accept alias from configs: "class_weight_focal" -> "class_weighted_focal"
+        if focal_type_raw == 'class_weight_focal':
+            focal_type_raw = 'class_weighted_focal'
+        self.focal_loss_type = focal_type_raw
+        self.focal_gamma = float(focal_cfg.get('gamma', self.config.get('focal_gamma', 2.0)))
+        self.focal_ignore_index = int(focal_cfg.get('ignore_index', self.config.get('focal_ignore_index', 0)))
+        self.focal_loss_weight = float(focal_cfg.get('weight', self.config.get('focal_loss_weight', 1.0)))
+        self.lovasz_loss_weight = float(lovasz_cfg.get('weight', self.config.get('lovasz_loss_weight', 1.0)))
+        self.boundary_loss_weight = float(boundary_cfg.get('weight', self.config.get('boundary_loss_weight', 0.0)))
+        self.class_weights = train_cfg.get('class_weights', self.config.get('class_weights', None))
         self.log_frequency = 100
-        self.train_result_frequency = self.config.get('train_result_frequency', 100)
-        self.use_fp16 = self.config.get('use_fp16', False) # for mixed-precision training
-        save_epochs_raw = self.config.get('save_epochs_at', [])
+        self.train_result_frequency = train_cfg.get('train_result_frequency', self.config.get('train_result_frequency', 100))
+        self.use_fp16 = train_cfg.get('use_fp16', self.config.get('use_fp16', False)) # for mixed-precision training
+        self.aux_loss_weight = float(aux_cfg.get('weight', self.config.get('aux_loss_weight', 0.3)))
+        save_epochs_raw = train_cfg.get('save_epochs_at', self.config.get('save_epochs_at', []))
         if save_epochs_raw is None:
             save_epochs_raw = []
         if not isinstance(save_epochs_raw, (list, tuple)):
@@ -83,6 +99,14 @@ class Option(object):
             raise ValueError("focal_loss_type must be one of: 'focal', 'class_weighted_focal'")
         if self.focal_gamma < 0.0:
             raise ValueError('focal_gamma must be >= 0.')
+        if self.focal_loss_weight < 0.0:
+            raise ValueError('focal_loss.weight must be >= 0.')
+        if self.lovasz_loss_weight < 0.0:
+            raise ValueError('lovasz_loss.weight must be >= 0.')
+        if self.boundary_loss_weight < 0.0:
+            raise ValueError('boundary_loss.weight must be >= 0.')
+        if self.aux_loss_weight < 0.0:
+            raise ValueError('aux_loss.weight must be >= 0.')
         if self.focal_ignore_index < 0 or self.focal_ignore_index >= self.n_classes:
             raise ValueError(f'focal_ignore_index must be in [0, n_classes-1], got {self.focal_ignore_index}')
         if self.class_weights is not None:
@@ -94,18 +118,18 @@ class Option(object):
 
 
         # Model config
-        self.vit_backbone = self.config.get('vit_backbone', 'vit_small_patch16_384')
-        self.in_channels = self.config.get('in_channels', 5)
-        self.patch_size = self.config.get('patch_size', [2, 8])
-        self.patch_stride = self.config.get('patch_stride', [2, 8])
-        self.image_size = self.config.get('image_size', [32, 384])
-        self.window_size = self.config.get('window_size', [32, 384])
-        self.window_stride = self.config.get('window_stride', [32, 256])
-        self.original_image_size = self.config.get('original_image_size', [32, 2048])
+        self.vit_backbone = model_cfg.get('vit_backbone', self.config.get('vit_backbone', 'vit_small_patch16_384'))
+        self.in_channels = model_cfg.get('in_channels', self.config.get('in_channels', 5))
+        self.patch_size = model_cfg.get('patch_size', self.config.get('patch_size', [2, 8]))
+        self.patch_stride = model_cfg.get('patch_stride', self.config.get('patch_stride', [2, 8]))
+        self.image_size = model_cfg.get('image_size', self.config.get('image_size', [32, 384]))
+        self.window_size = model_cfg.get('window_size', self.config.get('window_size', [32, 384]))
+        self.window_stride = model_cfg.get('window_stride', self.config.get('window_stride', [32, 256]))
+        self.original_image_size = model_cfg.get('original_image_size', self.config.get('original_image_size', [32, 2048]))
         # Full-image mode: set train_full_image=True to disable training crops,
         # and use_sliding_window=False to run full-frame inference/validation.
-        self.train_full_image = self.config.get('train_full_image', False)
-        self.use_sliding_window = self.config.get('use_sliding_window', True)
+        self.train_full_image = model_cfg.get('train_full_image', self.config.get('train_full_image', False))
+        self.use_sliding_window = model_cfg.get('use_sliding_window', self.config.get('use_sliding_window', True))
 
         # Freeze encoder params
         self.freeze_vit_encoder = self.config.get('freeze_vit_encoder', False)
@@ -126,7 +150,7 @@ class Option(object):
         self.fuse_out_channels = int(self.config.get('fuse_out_channels', 128))
         self.fuse_preproj = bool(self.config.get('fuse_preproj', True))
         self.aux_enable = bool(self.config.get('aux_enable', True))
-        self.aux_loss_weight = float(self.config.get('aux_loss_weight', 0.3))
+        # aux_loss_weight is configured in the Train config via loss.aux_loss.weight.
 
         # 3D refiner / post-processing
         self.use_kpconv = False

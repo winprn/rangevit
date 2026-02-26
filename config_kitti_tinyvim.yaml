@@ -1,13 +1,12 @@
 # General config
 num_workers: 6
 id: "exp_kitti_tinyvim_crop64x1024"
-data_root: "../dataset/SemanticKitti/data_odometry_velodyne/dataset/sequences"
 save_path: "save_rangevim_"
 distributed: false
 
 # MLflow config
 mlflow:
-  enable: true
+  enable: false
   tracking_uri: "http://140.245.117.232:5000" # e.g. 'file:./mlruns' or an HTTP URL
   experiment_name: "rangevim"
   run_name: "[train] base_" # defaults to the CLI-provided id when null
@@ -16,12 +15,15 @@ mlflow:
   log_code_snapshot: false
 
 # Data config
-dataset: "SemanticKitti"
-n_classes: 20 # 19 + 1(ignored)
-use_trainval: false # set to true if you want to train on train-val of SemanticKITTI.
+data:
+  dataset: "SemanticKitti"
+  n_classes: 20 # 19 + 1(ignored)
+  data_root: "../dataset/SemanticKitti/data_odometry_velodyne/dataset/sequences"
+  has_label: true
+  use_trainval: false # set to true if you want to train on train-val of SemanticKITTI.
 
 knni:
-  enable: true
+  enable: false
   window_size: 5
   cache: true
   cache_train: false
@@ -29,34 +31,43 @@ knni:
   cache_version: "v1"
 
 # Train config
-has_label: true
-val_frequency: 1
-n_epochs: 60
-warmup_epochs: 3
-batch_size: 8
-batch_size_val: 1
-lr: 0.0004
-min_lr: 0.000004 # cosine floor (eta_min). Keep > 0 to avoid fully freezing late training; ~1% of lr is a common start.
-use_fp16: false
-train_result_frequency: 100 # printing frequency of the train results
-boundary_loss_weight: 0.5 # Weight for boundary mIoU loss (only applied when use_kpconv is False)
-focal_loss_type: "class_weighted_focal" # "focal" (legacy alpha scaling) or "class_weighted_focal" (L = -w_c(1-p_t)^gamma log(p_t))
-focal_gamma: 2.0
-focal_ignore_index: 0
-# Optional manual class weights (length must equal n_classes). Leave null to use dataset-derived weights.
-# class_weights: [0.0, 1.0, ...]
-save_epochs_at: [] # 1-based epochs to save checkpoints; must be < n_epochs. Leave empty to save every epoch.
+training:
+  val_frequency: 1
+  n_epochs: 60
+  warmup_epochs: 3
+  batch_size: 1
+  batch_size_val: 1
+  lr: 0.0004
+  min_lr: 0.000004 # cosine floor (eta_min). Keep > 0 to avoid fully freezing late training; ~1% of lr is a common start.
+  use_fp16: false
+  train_result_frequency: 100 # printing frequency of the train results
+  loss:
+    focal_loss:
+      type: "class_weighted_focal" # also accepts alias: class_weight_focal
+      weight: 0.1
+      gamma: 1.5
+      ignore_index: 0
+    lovasz_loss:
+      weight: 1.0
+    boundary_loss:
+      weight: 1.0 # only applied when use_kpconv is False
+    aux_loss:
+      weight: 0.1 # global auxiliary loss weight (train only)
+  # Optional manual class weights (length must equal n_classes). Leave null to use dataset-derived weights.
+  # class_weights: [0.0, 1.0, ...]
+  save_epochs_at: [] # 1-based epochs to save checkpoints; must be < n_epochs. Leave empty to save every epoch.
 
 # Model config
-vit_backbone: "tinyvim_base"
-in_channels: 5
-image_size: [64, 1024]         # train-time crop size
-window_size: [64, 1024]        # sliding window size for validation
-window_stride: [64, 512]       # 50% overlap along width; good quality/speed trade-off
-original_image_size: [64, 2048]
-# Full-image switches
-train_full_image: false        # enable random crops during training
-use_sliding_window: true       # sliding-window inference/validation
+model:
+  vit_backbone: "tinyvim_base"
+  in_channels: 5
+  image_size: [64, 1024]         # train-time crop size
+  window_size: [64, 1024]        # sliding window size for validation
+  window_stride: [64, 512]       # 50% overlap along width; good quality/speed trade-off
+  original_image_size: [64, 2048]
+  # Full-image switches
+  train_full_image: false        # enable random crops during training
+  use_sliding_window: true       # sliding-window inference/validation
 
 # Decoder
 decoder: "tinyvim_fuse_aux" # 'linear', 'up_conv', 'fpn', or 'tinyvim_fuse_aux' (TinyViM-only)
@@ -76,7 +87,6 @@ fuse_out_channels: 128    # tinyvim_fuse_aux only: channels after second fusion 
 # - If switching to false, keep all else fixed for fair ablation, then retune lr/aux_loss_weight only if needed.
 fuse_preproj: true
 aux_enable: true          # tinyvim_fuse_aux only: enable 3 auxiliary heads (train-time supervision, ignored at inference)
-aux_loss_weight: 0.5      # global auxiliary loss weight (train only)
 
 # 3D refiner / post-processing
 point_postproc: "knn" # 'kpconv', 'knn', or 'none'; overrides the boolean flags below
