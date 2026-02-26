@@ -29,6 +29,7 @@ class RangeViewLoader(Dataset):
     def __init__(self, dataset, config, data_len=-1, is_train=True, return_uproj=False, use_kpconv=False):
         self.dataset = dataset
         self.config = config
+        self.model_cfg = self.config.get('model', {})
         self.is_train = is_train
         self.data_len = data_len
         self.return_uproj = return_uproj
@@ -132,7 +133,13 @@ class RangeViewLoader(Dataset):
                 fov_left=projection_config['fov_left'], fov_right=projection_config['fov_right'],
                 proj_h=projection_config['proj_h'], proj_w=projection_config['proj_w'],
             )
-        self.train_full_image = self.config.get('train_full_image', False)
+        self.train_full_image = self.model_cfg.get('train_full_image', self.config.get('train_full_image', False))
+        image_size = self.model_cfg.get('image_size', self.config.get('image_size', None))
+        original_image_size = self.model_cfg.get('original_image_size', self.config.get('original_image_size', None))
+        if image_size is None:
+            raise KeyError("Missing config key: model.image_size (or legacy top-level image_size)")
+        if original_image_size is None:
+            raise KeyError("Missing config key: model.original_image_size (or legacy top-level original_image_size)")
         self.proj_img_mean = torch.tensor(self.config['sensor']['img_mean'], dtype=torch.float)
         self.proj_img_stds = torch.tensor(self.config['sensor']['img_stds'], dtype=torch.float)
 
@@ -155,23 +162,20 @@ class RangeViewLoader(Dataset):
         # Image augmentations
         if self.is_train:
             if self.train_full_image:
-                self.crop_size = self.config['original_image_size']
+                self.crop_size = original_image_size
                 self.aug_ops = T.Compose([
-                    T.CenterCrop((self.config['original_image_size'][0],
-                                  self.config['original_image_size'][1]))
+                    T.CenterCrop((original_image_size[0], original_image_size[1]))
                 ])
             else:
-                self.crop_size = self.config['image_size']
+                self.crop_size = image_size
                 self.aug_ops = T.Compose([
                     T.RandomCrop(
-                        size=(self.config['image_size'][0],
-                              self.config['image_size'][1])),
+                        size=(image_size[0], image_size[1])),
                 ])
         else:
-            self.crop_size = self.config['original_image_size']
+            self.crop_size = original_image_size
             self.aug_ops = T.Compose([
-                T.CenterCrop((self.config['original_image_size'][0],
-                              self.config['original_image_size'][1]))
+                T.CenterCrop((original_image_size[0], original_image_size[1]))
             ])
 
     def _maybe_sample_points(self, pointcloud, sem_label=None, inst_label=None):

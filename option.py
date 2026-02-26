@@ -38,10 +38,10 @@ class Option(object):
         self.num_workers = 4 # number of threads used for data loading
 
         # Data config
-        self.dataset = data_cfg.get('dataset', self.config['dataset'])
-        self.n_classes = data_cfg.get('n_classes', self.config['n_classes'])
+        self.dataset = data_cfg.get('dataset', self.config.get('dataset', None))
+        self.n_classes = data_cfg.get('n_classes', self.config.get('n_classes', None))
         self.data_root = data_cfg.get('data_root', self.config.get('data_root', None))
-        self.has_label = data_cfg.get('has_label', self.config['has_label'])
+        self.has_label = data_cfg.get('has_label', self.config.get('has_label', None))
         self.use_mini_version = False
         self.use_trainval = data_cfg.get('use_trainval', self.config.get('use_trainval', False))
 
@@ -49,10 +49,10 @@ class Option(object):
         self.val_only = False
         self.val_frequency = train_cfg.get('val_frequency', self.config.get('val_frequency', 10))
         self.test_split = False
-        self.n_epochs = train_cfg.get('n_epochs', self.config['n_epochs'])  # number of total epochs
-        self.batch_size = train_cfg.get('batch_size', self.config['batch_size'])  # mini-batch size
+        self.n_epochs = train_cfg.get('n_epochs', self.config.get('n_epochs', None))  # number of total epochs
+        self.batch_size = train_cfg.get('batch_size', self.config.get('batch_size', None))  # mini-batch size
         self.batch_size_val = train_cfg.get('batch_size_val', self.config.get('batch_size_val', 1)) # validation batch size
-        self.lr = train_cfg.get('lr', self.config['lr'])
+        self.lr = train_cfg.get('lr', self.config.get('lr', None))
         self.min_lr = float(train_cfg.get('min_lr', self.config.get('min_lr', 0.0)))
         self.warmup_epochs = train_cfg.get('warmup_epochs', self.config.get('warmup_epochs', 10))
         loss_cfg = train_cfg.get('loss', self.config.get('loss', {}))
@@ -77,6 +77,18 @@ class Option(object):
         self.use_fp16 = train_cfg.get('use_fp16', self.config.get('use_fp16', False)) # for mixed-precision training
         self.aux_loss_weight = float(aux_cfg.get('weight', self.config.get('aux_loss_weight', 0.3)))
         save_epochs_raw = train_cfg.get('save_epochs_at', self.config.get('save_epochs_at', []))
+        if self.dataset is None:
+            raise ValueError("Missing required config: data.dataset (or legacy top-level dataset)")
+        if self.n_classes is None:
+            raise ValueError("Missing required config: data.n_classes (or legacy top-level n_classes)")
+        if self.has_label is None:
+            raise ValueError("Missing required config: data.has_label (or legacy top-level has_label)")
+        if self.n_epochs is None:
+            raise ValueError("Missing required config: training.n_epochs (or legacy top-level n_epochs)")
+        if self.batch_size is None:
+            raise ValueError("Missing required config: training.batch_size (or legacy top-level batch_size)")
+        if self.lr is None:
+            raise ValueError("Missing required config: training.lr (or legacy top-level lr)")
         if save_epochs_raw is None:
             save_epochs_raw = []
         if not isinstance(save_epochs_raw, (list, tuple)):
