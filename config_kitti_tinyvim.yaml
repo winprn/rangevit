@@ -2,7 +2,7 @@
 num_workers: 6
 id: "exp_kitti_tinyvim_crop64x1024"
 data_root: "../dataset/SemanticKitti/data_odometry_velodyne/dataset/sequences"
-save_path: "save_rangevim_crop64x1024"
+save_path: "save_rangevim_"
 distributed: false
 
 # MLflow config
@@ -10,7 +10,7 @@ mlflow:
   enable: true
   tracking_uri: "http://140.245.117.232:5000" # e.g. 'file:./mlruns' or an HTTP URL
   experiment_name: "rangevim"
-  run_name: "[train] base_crop1024_aug_v3" # defaults to the CLI-provided id when null
+  run_name: "[train] base_" # defaults to the CLI-provided id when null
   nested: false
   log_checkpoints: false
   log_code_snapshot: false
@@ -40,6 +40,11 @@ min_lr: 0.000004 # cosine floor (eta_min). Keep > 0 to avoid fully freezing late
 use_fp16: false
 train_result_frequency: 100 # printing frequency of the train results
 boundary_loss_weight: 0.5 # Weight for boundary mIoU loss (only applied when use_kpconv is False)
+focal_loss_type: "class_weighted_focal" # "focal" (legacy alpha scaling) or "class_weighted_focal" (L = -w_c(1-p_t)^gamma log(p_t))
+focal_gamma: 2.0
+focal_ignore_index: 0
+# Optional manual class weights (length must equal n_classes). Leave null to use dataset-derived weights.
+# class_weights: [0.0, 1.0, ...]
 save_epochs_at: [] # 1-based epochs to save checkpoints; must be < n_epochs. Leave empty to save every epoch.
 
 # Model config

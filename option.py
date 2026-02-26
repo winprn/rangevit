@@ -53,6 +53,10 @@ class Option(object):
         self.min_lr = float(self.config.get('min_lr', 0.0))
         self.warmup_epochs = self.config.get('warmup_epochs', 10)
         self.boundary_loss_weight = self.config.get('boundary_loss_weight', 0.0)
+        self.focal_loss_type = str(self.config.get('focal_loss_type', 'focal')).lower()
+        self.focal_gamma = float(self.config.get('focal_gamma', 2.0))
+        self.focal_ignore_index = int(self.config.get('focal_ignore_index', 0))
+        self.class_weights = self.config.get('class_weights', None)
         self.log_frequency = 100
         self.train_result_frequency = self.config.get('train_result_frequency', 100)
         self.use_fp16 = self.config.get('use_fp16', False) # for mixed-precision training
@@ -75,6 +79,18 @@ class Option(object):
             raise ValueError('min_lr must be >= 0.')
         if self.min_lr > self.lr:
             raise ValueError(f'min_lr ({self.min_lr}) must be <= lr ({self.lr}).')
+        if self.focal_loss_type not in ('focal', 'class_weighted_focal'):
+            raise ValueError("focal_loss_type must be one of: 'focal', 'class_weighted_focal'")
+        if self.focal_gamma < 0.0:
+            raise ValueError('focal_gamma must be >= 0.')
+        if self.focal_ignore_index < 0 or self.focal_ignore_index >= self.n_classes:
+            raise ValueError(f'focal_ignore_index must be in [0, n_classes-1], got {self.focal_ignore_index}')
+        if self.class_weights is not None:
+            if not isinstance(self.class_weights, (list, tuple)):
+                raise ValueError('class_weights must be a list/tuple when provided')
+            if len(self.class_weights) != self.n_classes:
+                raise ValueError(f'class_weights length ({len(self.class_weights)}) must equal n_classes ({self.n_classes})')
+            self.class_weights = [float(w) for w in self.class_weights]
 
 
         # Model config

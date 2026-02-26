@@ -222,17 +222,37 @@ class Trainer(object):
         criterion = {}
         criterion['lovasz'] = utils.optim.Lovasz_softmax(ignore=0)
 
-        if self.settings.dataset == 'SemanticKitti':
-            alpha = np.log(1+self.cls_weight)
-            alpha = alpha / alpha.max()
-        elif self.settings.dataset == 'nuScenes':
-            alpha = np.ones((self.settings.n_classes))
-        alpha[0] = 0
+        if self.settings.focal_loss_type == 'class_weighted_focal':
+            if self.settings.class_weights is not None:
+                alpha = np.asarray(self.settings.class_weights, dtype=np.float32)
+            elif self.settings.dataset == 'SemanticKitti':
+                alpha = self.cls_weight.astype(np.float32)
+            elif self.settings.dataset == 'nuScenes':
+                alpha = np.ones((self.settings.n_classes), dtype=np.float32)
+            else:
+                alpha = np.ones((self.settings.n_classes), dtype=np.float32)
+        else:
+            if self.settings.dataset == 'SemanticKitti':
+                alpha = np.log(1 + self.cls_weight)
+                alpha = alpha / max(alpha.max(), 1e-6)
+            elif self.settings.dataset == 'nuScenes':
+                alpha = np.ones((self.settings.n_classes))
+            else:
+                alpha = np.ones((self.settings.n_classes))
+
+        alpha[self.settings.focal_ignore_index] = 0
         if self.recorder is not None:
+            self.recorder.logger.info('focal_loss_type: {}'.format(self.settings.focal_loss_type))
+            self.recorder.logger.info('focal_gamma: {}'.format(self.settings.focal_gamma))
+            self.recorder.logger.info('focal_ignore_index: {}'.format(self.settings.focal_ignore_index))
             self.recorder.logger.info('focal_loss alpha: {}'.format(alpha))
 
         criterion['focal_loss'] = utils.optim.FocalSoftmaxLoss(
-            self.settings.n_classes, gamma=2, alpha=alpha, softmax=False)
+            self.settings.n_classes,
+            gamma=self.settings.focal_gamma,
+            alpha=alpha,
+            softmax=False,
+            ignore_index=self.settings.focal_ignore_index)
 
         # Set device
         for _, v in criterion.items():

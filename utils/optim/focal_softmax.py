@@ -10,10 +10,11 @@ import numpy as np
 
 
 class FocalSoftmaxLoss(nn.Module):
-    def __init__(self, n_classes, gamma=1, alpha=0.8, softmax=True):
+    def __init__(self, n_classes, gamma=1, alpha=0.8, softmax=True, ignore_index=None):
         super(FocalSoftmaxLoss, self).__init__()
         self.gamma = gamma
         self.n_classes = n_classes
+        self.ignore_index = ignore_index
 
         if isinstance(alpha, list):
             assert len(alpha) == n_classes, 'len(alpha)!=n_classes: {} vs. {}'.format(
@@ -47,23 +48,29 @@ class FocalSoftmaxLoss(nn.Module):
         else:
             pred = x
 
-        target = target.view(-1, 1)
+        target = target.view(-1, 1).long()
+
+        valid_mask = torch.ones_like(target.squeeze(1), dtype=torch.bool)
+        if self.ignore_index is not None:
+            valid_mask = valid_mask & (target.squeeze(1) != self.ignore_index)
+        if mask is not None:
+            if len(mask.size()) > 1:
+                mask = mask.view(-1)
+            valid_mask = valid_mask & (mask > 0)
+
+        if valid_mask.sum() == 0:
+            return torch.zeros([], device=x.device, dtype=x.dtype)
 
         if self.softmax:
             pred_softmax = F.softmax(pred, 1)
         else:
             pred_softmax = pred
         pred_softmax = pred_softmax.gather(1, target).view(-1)
+        pred_softmax = pred_softmax[valid_mask]
         pred_logsoft = pred_softmax.clamp(1e-6).log()
         self.alpha = self.alpha.to(x.device)
-        alpha = self.alpha.gather(0, target.squeeze())
+        alpha = self.alpha.gather(0, target.squeeze())[valid_mask]
         loss = - (1-pred_softmax).pow(self.gamma)
         loss = loss * pred_logsoft * alpha
-        if mask is not None:
-            if len(mask.size()) > 1:
-                mask = mask.view(-1)
-            loss = (loss * mask).sum() / mask.sum()
-            return loss
-        else:
-            return loss.mean()
+        return loss.mean()
 
