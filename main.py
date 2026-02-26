@@ -263,8 +263,9 @@ class Experiment(object):
             self.mlflow_manager.log_metrics({'total_runtime_sec': cost_time}, step=self.epoch_start)
             self._finalize_mlflow()
             return None
-        best_val_result = None
-        best_epoch = {}
+        best_miou = None
+        best_miou_epoch = None
+        primary_iou_key = 'miou'
 
         save_epochs_at = getattr(self.settings, 'save_epochs_at', [])
         save_every_epoch = len(save_epochs_at) == 0
@@ -286,48 +287,44 @@ class Experiment(object):
                                   epoch == self.settings.n_epochs - 1 or
                                   epoch == self.epoch_start):
                 val_result = self.trainer.run(epoch, mode='Validation')
-                primary_iou_key = 'IOU_point' if 'IOU_point' in val_result else 'IOU'
+                primary_iou_key = 'miou_point' if 'miou_point' in val_result else 'miou'
+                current_miou = val_result[primary_iou_key]
 
                 # Save the best result
                 if self.recorder is not None:
                     self.recorder.logger.info(f'---- Best result after Epoch {epoch+1} (tracking {primary_iou_key}) ----')
-                    if best_val_result is None:
-                        best_val_result = val_result
-                    for k, v in val_result.items():
-                        if v >= best_val_result[k]:
-                            self.recorder.logger.info(
-                                'Get better {} model at epoch {}: {}'.format(k, epoch + 1, v))
-                            saved_path = os.path.join(
-                                self.recorder.checkpoint_path, 'best_{}_model.pth'.format(k))
-                            saved_path_start = os.path.join(
-                                self.recorder.checkpoint_path, 'best_{}_model_from_start_{}.pth'.format(k, self.epoch_start))
-                            best_val_result[k] = v
-                            best_epoch[k] = epoch + 1
+                    if best_miou is None or current_miou >= best_miou:
+                        self.recorder.logger.info(
+                            'Get better {} model at epoch {}: {}'.format(
+                                primary_iou_key, epoch + 1, current_miou))
+                        saved_path = os.path.join(
+                            self.recorder.checkpoint_path, 'best_miou_model.pth')
+                        saved_path_start = os.path.join(
+                            self.recorder.checkpoint_path,
+                            'best_miou_model_from_start_{}.pth'.format(self.epoch_start))
+                        best_miou = current_miou
+                        best_miou_epoch = epoch + 1
 
-                            checkpoint_data = {
-                                'model': self.model.state_dict(),
-                                'optimizer': self.trainer.optimizer.state_dict(),
-                                'epoch': epoch,
-                                k: v,
-                            }
+                        checkpoint_data = {
+                            'model': self.model.state_dict(),
+                            'optimizer': self.trainer.optimizer.state_dict(),
+                            'epoch': epoch,
+                            primary_iou_key: current_miou,
+                        }
 
-                            if self.trainer.fp16_scaler is not None:
-                                checkpoint_data['fp16_scaler'] = self.trainer.fp16_scaler.state_dict()
+                        if self.trainer.fp16_scaler is not None:
+                            checkpoint_data['fp16_scaler'] = self.trainer.fp16_scaler.state_dict()
 
-                            torch.save(checkpoint_data, saved_path)
+                        torch.save(checkpoint_data, saved_path)
+                        if self.epoch_start > 0:
+                            torch.save(checkpoint_data, saved_path_start)
+
+                        self.mlflow_manager.log_metrics({'best_miou': current_miou}, step=epoch)
+                        self.mlflow_manager.log_metrics({'best_epoch_miou': best_miou_epoch}, step=epoch)
+                        if self.settings.mlflow_log_checkpoints:
+                            self.mlflow_manager.log_artifact(saved_path, artifact_path='checkpoints')
                             if self.epoch_start > 0:
-                                torch.save(checkpoint_data, saved_path_start)
-                            # Log explicit best metric names to keep MLflow dashboards clear.
-                            best_metric_key = f'best_{k}'
-                            self.mlflow_manager.log_metrics({best_metric_key: v}, step=epoch)
-                            if k == 'IOU' and primary_iou_key == 'IOU_point':
-                                self.mlflow_manager.log_metrics({'best_IOU_point': v}, step=epoch)
-                            if k in best_epoch:
-                                self.mlflow_manager.log_metrics({f'best_epoch_{k}': best_epoch[k]}, step=epoch)
-                            if self.settings.mlflow_log_checkpoints:
-                                self.mlflow_manager.log_artifact(saved_path, artifact_path='checkpoints')
-                                if self.epoch_start > 0:
-                                    self.mlflow_manager.log_artifact(saved_path_start, artifact_path='checkpoints')
+                                self.mlflow_manager.log_artifact(saved_path_start, artifact_path='checkpoints')
 
             # Save checkpoint
             if self.recorder is not None:
@@ -351,12 +348,11 @@ class Experiment(object):
                         torch.save(checkpoint_data, latest_path)
 
                 # Logging best results
-                if best_val_result is not None:
-                    log_str = f'>>> Best Result (tracking {primary_iou_key}): '
-                    for k, v in best_val_result.items():
-                        epoch_info = best_epoch.get(k, '?')
-                        log_str += '{}: {} (epoch {}) '.format(k, v, epoch_info)
-                    log_str += '\n'
+                if best_miou is not None:
+                    log_str = (
+                        f'>>> Best Result (tracking {primary_iou_key}): '
+                        f'{primary_iou_key}: {best_miou} (epoch {best_miou_epoch})\n'
+                    )
                     self.recorder.logger.info(log_str)
 
         # Print total cost time

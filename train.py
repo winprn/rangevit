@@ -253,60 +253,13 @@ class Trainer(object):
             alpha=alpha,
             softmax=False,
             ignore_index=self.settings.focal_ignore_index)
+        criterion['boundary_loss'] = utils.optim.BoundaryLoss(
+            ignore_index=self.settings.focal_ignore_index)
 
         # Set device
         for _, v in criterion.items():
             v.cuda()
         return criterion
-
-    def _compute_boundary_mask(self, label: torch.Tensor, valid_mask: torch.Tensor) -> torch.Tensor:
-        """
-        Compute binary boundary mask from integer labels (B x H x W).
-        Only considers pixels where valid_mask is True; void (label==0) is ignored.
-        """
-        # Ensure invalid pixels are voided
-        label = label * valid_mask.long()
-        boundary = torch.zeros_like(label, dtype=torch.bool)
-        for dy, dx in ((1, 0), (-1, 0), (0, 1), (0, -1)):
-            shifted_label = torch.roll(label, shifts=(dy, dx), dims=(1, 2))
-            shifted_valid = torch.roll(valid_mask, shifts=(dy, dx), dims=(1, 2))
-            diff = (label != shifted_label) & valid_mask & shifted_valid
-            boundary = boundary | diff
-        return boundary.float() * valid_mask.float()
-
-    def _compute_pred_boundary_prob(self, prob: torch.Tensor, valid_mask: torch.Tensor) -> torch.Tensor:
-        """
-        Approximate boundary probability from class probabilities (B x C x H x W).
-        Uses neighbor similarity; higher dissimilarity -> higher boundary probability.
-        """
-        prob_valid = prob * valid_mask.unsqueeze(1)
-        sims = []
-        for dy, dx in ((1, 0), (-1, 0), (0, 1), (0, -1)):
-            shifted_prob = torch.roll(prob_valid, shifts=(dy, dx), dims=(2, 3))
-            sims.append((prob_valid * shifted_prob).sum(dim=1))
-        sims = torch.stack(sims, dim=0)
-        max_sim, _ = sims.max(dim=0)
-        boundary_prob = 1.0 - max_sim
-        boundary_prob = boundary_prob * valid_mask
-        return boundary_prob.clamp(0.0, 1.0)
-
-    def boundary_loss(self, prob: torch.Tensor, label: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
-        """
-        Boundary mIoU-style loss on range image before post-processing.
-        - Ignores void/invalid pixels (label == 0 or mask == 0).
-        - Returns 1 - boundary IoU.
-        """
-        valid_mask = (mask > 0) & (label != 0)
-        if valid_mask.sum() == 0:
-            return torch.zeros([], device=prob.device, dtype=prob.dtype)
-
-        target_boundary = self._compute_boundary_mask(label, valid_mask)
-        pred_boundary = self._compute_pred_boundary_prob(prob, valid_mask)
-
-        intersection = (pred_boundary * target_boundary).sum(dim=(1, 2))
-        union = (pred_boundary + target_boundary - pred_boundary * target_boundary).sum(dim=(1, 2)) + 1e-6
-        iou = intersection / union
-        return 1.0 - iou.mean()
 
     def _split_main_and_aux_output(self, output):
         if isinstance(output, (tuple, list)):
@@ -328,7 +281,7 @@ class Trainer(object):
 
         loss_boundary = torch.zeros([], device=output.device, dtype=output.dtype)
         if self.boundary_loss_weight > 0:
-            loss_boundary = self.boundary_loss(output_softmax, label, mask)
+            loss_boundary = self.criterion['boundary_loss'](output_softmax, label, mask)
             total_loss = total_loss + self.boundary_loss_weight * loss_boundary
 
         loss_aux = torch.zeros([], device=output.device, dtype=output.dtype)
@@ -340,7 +293,7 @@ class Trainer(object):
                 aux_focal = self.criterion['focal_loss'](aux_softmax, label, mask=mask)
                 aux_loss = aux_lovasz + aux_focal
                 if self.boundary_loss_weight > 0:
-                    aux_boundary = self.boundary_loss(aux_softmax, label, mask)
+                    aux_boundary = self.criterion['boundary_loss'](aux_softmax, label, mask)
                     aux_loss = aux_loss + self.boundary_loss_weight * aux_boundary
                 aux_total = aux_total + aux_loss
             loss_aux = aux_total
@@ -515,18 +468,7 @@ class Trainer(object):
                 self.iter_steps[mode] += 1
                 mlflow_metrics = {
                     f'{mode.lower()}_loss': loss.item(),
-                    f'{mode.lower()}_mean_iou_pixel': mean_iou_running,
-                    f'{mode.lower()}_mean_acc_pixel': mean_acc_running,
-                    f'{mode.lower()}_mean_recall_pixel': mean_recall_running,
                 }
-                # Keep legacy keys for downstream compatibility
-                mlflow_metrics[f'{mode.lower()}_mean_iou'] = mean_iou_running
-                mlflow_metrics[f'{mode.lower()}_mean_acc'] = mean_acc_running
-                mlflow_metrics[f'{mode.lower()}_mean_recall'] = mean_recall_running
-                if mode == 'Validation' and self.use_knn:
-                    mlflow_metrics[f'{mode.lower()}_mean_iou_point'] = mean_iou_point_running
-                    mlflow_metrics[f'{mode.lower()}_mean_acc_point'] = mean_acc_point_running
-                    mlflow_metrics[f'{mode.lower()}_mean_recall_point'] = mean_recall_point_running
                 if mode == 'Train':
                     mlflow_metrics[f'{mode.lower()}_lr'] = current_lr
                 self.mlflow_manager.log_metrics(mlflow_metrics, step=step_id)
@@ -675,49 +617,46 @@ class Trainer(object):
                 log_str += ' | Mem_alloc {:.1f}MB Mem_res {:.1f}MB'.format(max_alloc_mb, max_res_mb)
             self.recorder.logger.info(log_str)
 
-        if self.mlflow_manager is not None:
-            mlflow_metrics = {
-                f'{mode.lower()}_epoch_loss': loss_meter.avg,
-                f'{mode.lower()}_epoch_acc_pixel': mean_acc.item(),
-                f'{mode.lower()}_epoch_iou_pixel': mean_iou.item(),
-                f'{mode.lower()}_epoch_recall_pixel': mean_recall.item(),
-                # Legacy keys
-                f'{mode.lower()}_epoch_acc': mean_acc.item(),
-                f'{mode.lower()}_epoch_iou': mean_iou.item(),
-                f'{mode.lower()}_epoch_recall': mean_recall.item(),
-            }
-            if max_alloc_mb is not None and max_res_mb is not None:
-                mlflow_metrics[f'{mode.lower()}_epoch_max_mem_alloc_mb'] = max_alloc_mb
-                mlflow_metrics[f'{mode.lower()}_epoch_max_mem_reserved_mb'] = max_res_mb
-            if mode == 'Validation' and self.use_knn and metrics_dict_3d is not None:
-                mlflow_metrics[f'{mode.lower()}_epoch_acc_point'] = mean_acc_point
-                mlflow_metrics[f'{mode.lower()}_epoch_iou_point'] = mean_iou_point
-                mlflow_metrics[f'{mode.lower()}_epoch_recall_point'] = mean_recall_point
-            if (mode == 'Train') and (epoch_lr is not None):
-                mlflow_metrics[f'{mode.lower()}_epoch_lr'] = epoch_lr
-            # Skip logging label-dependent metrics when labels are absent.
-            if self.settings.has_label:
-                self.mlflow_manager.log_metrics(mlflow_metrics, step=self.iter_steps[mode])
-
         # Prefer point metrics for best-model selection when available (KNN validation),
         # otherwise fall back to pixel metrics.
         primary_acc = mean_acc_point if (self.settings.has_label and metrics_dict_3d is not None) else mean_acc
         primary_iou = mean_iou_point if (self.settings.has_label and metrics_dict_3d is not None) else mean_iou
         primary_recall = mean_recall_point if (self.settings.has_label and metrics_dict_3d is not None) else mean_recall
 
+        if self.mlflow_manager is not None:
+            mlflow_metrics = {
+                f'{mode.lower()}_epoch_loss': loss_meter.avg,
+                f'{mode.lower()}_epoch_acc': primary_acc if isinstance(primary_acc, float) else primary_acc.item(),
+                f'{mode.lower()}_epoch_recall': primary_recall if isinstance(primary_recall, float) else primary_recall.item(),
+                f'{mode.lower()}_epoch_iou_pixel': mean_iou.item(),
+            }
+            if max_alloc_mb is not None and max_res_mb is not None:
+                mlflow_metrics[f'{mode.lower()}_epoch_max_mem_alloc_mb'] = max_alloc_mb
+                mlflow_metrics[f'{mode.lower()}_epoch_max_mem_reserved_mb'] = max_res_mb
+            if mode == 'Validation' and self.use_knn and metrics_dict_3d is not None:
+                mlflow_metrics[f'{mode.lower()}_epoch_iou_point'] = mean_iou_point
+            if (mode == 'Train') and (epoch_lr is not None):
+                mlflow_metrics[f'{mode.lower()}_epoch_lr'] = epoch_lr
+            # Skip logging label-dependent metrics when labels are absent.
+            if self.settings.has_label:
+                self.mlflow_manager.log_metrics(mlflow_metrics, step=self.iter_steps[mode])
+
         result_metrics = {
+            'macc': primary_acc if isinstance(primary_acc, float) else primary_acc.item(),
+            'miou': primary_iou if isinstance(primary_iou, float) else primary_iou.item(),
+            'mrecall': primary_recall if isinstance(primary_recall, float) else primary_recall.item(),
+            'miou_pixel': mean_iou.item(),
+            # Legacy aliases (compatibility)
             'Acc': primary_acc if isinstance(primary_acc, float) else primary_acc.item(),
             'IOU': primary_iou if isinstance(primary_iou, float) else primary_iou.item(),
             'Recall': primary_recall if isinstance(primary_recall, float) else primary_recall.item(),
-            'Acc_pixel': mean_acc.item(),
             'IOU_pixel': mean_iou.item(),
-            'Recall_pixel': mean_recall.item(),
         }
         if metrics_dict_3d is not None:
             result_metrics.update({
-                'Acc_point': mean_acc_point,
+                'miou_point': mean_iou_point,
+                # Legacy aliases (compatibility)
                 'IOU_point': mean_iou_point,
-                'Recall_point': mean_recall_point,
             })
 
         return result_metrics
@@ -852,13 +791,6 @@ class Trainer(object):
                 self.iter_steps[mode] += 1
                 mlflow_metrics = {
                     f'{mode.lower()}_loss': loss.item(),
-                    f'{mode.lower()}_mean_iou_point': mean_iou_running,
-                    f'{mode.lower()}_mean_acc_point': mean_acc_running,
-                    f'{mode.lower()}_mean_recall_point': mean_recall_running,
-                    # Legacy keys for compatibility (point metrics in KPConv mode)
-                    f'{mode.lower()}_mean_iou': mean_iou_running,
-                    f'{mode.lower()}_mean_acc': mean_acc_running,
-                    f'{mode.lower()}_mean_recall': mean_recall_running,
                 }
                 if mode == 'Train':
                     mlflow_metrics[f'{mode.lower()}_lr'] = current_lr
@@ -985,13 +917,9 @@ class Trainer(object):
         if self.mlflow_manager is not None:
             mlflow_metrics = {
                 f'{mode.lower()}_epoch_loss': loss_meter.avg,
-                f'{mode.lower()}_epoch_acc_point': mean_acc.item(),
-                f'{mode.lower()}_epoch_iou_point': mean_iou.item(),
-                f'{mode.lower()}_epoch_recall_point': mean_recall.item(),
-                # Legacy keys for compatibility (point metrics in KPConv mode)
                 f'{mode.lower()}_epoch_acc': mean_acc.item(),
-                f'{mode.lower()}_epoch_iou': mean_iou.item(),
                 f'{mode.lower()}_epoch_recall': mean_recall.item(),
+                f'{mode.lower()}_epoch_iou_point': mean_iou.item(),
             }
             if max_alloc_mb is not None and max_res_mb is not None:
                 mlflow_metrics[f'{mode.lower()}_epoch_max_mem_alloc_mb'] = max_alloc_mb
@@ -1002,12 +930,15 @@ class Trainer(object):
 
         # KPConv path already works on point metrics; expose explicit aliases for clarity.
         result_metrics = {
+            'macc': mean_acc.item(),
+            'miou': mean_iou.item(),
+            'mrecall': mean_recall.item(),
+            'miou_point': mean_iou.item(),
+            # Legacy aliases (compatibility)
             'Acc': mean_acc.item(),
             'IOU': mean_iou.item(),
             'Recall': mean_recall.item(),
-            'Acc_point': mean_acc.item(),
             'IOU_point': mean_iou.item(),
-            'Recall_point': mean_recall.item(),
         }
 
         return result_metrics
