@@ -672,9 +672,27 @@ class Trainer(object):
                 mlflow_metrics[f'{mode.lower()}_epoch_iou_point'] = mean_iou_point
             if (mode == 'Train') and (epoch_lr is not None):
                 mlflow_metrics[f'{mode.lower()}_epoch_lr'] = epoch_lr
+            ignored_classes = set(getattr(self, 'ignore_class', []))
+            class_iou_for_log = metrics_dict.get('class_iou', None)
+            if class_iou_for_log is not None:
+                for cls_id, cls_iou in enumerate(class_iou_for_log):
+                    if cls_id in ignored_classes:
+                        continue
+                    cls_name = None
+                    if isinstance(self.mapped_cls_name, dict):
+                        cls_name = self.mapped_cls_name.get(cls_id, None)
+                    elif isinstance(self.mapped_cls_name, (list, tuple)) and cls_id < len(self.mapped_cls_name):
+                        cls_name = self.mapped_cls_name[cls_id]
+                    if cls_name is None:
+                        cls_name = f'class_{cls_id}'
+                    safe_name = ''.join(ch if ch.isalnum() else '_' for ch in str(cls_name).lower()).strip('_')
+                    if not safe_name:
+                        safe_name = f'class_{cls_id}'
+                    # Prefix with `zz_` so per-class curves appear last in most MLflow metric lists.
+                    mlflow_metrics[f'zz_{mode.lower()}_iou_{safe_name}'] = float(cls_iou.item())
             # Skip logging label-dependent metrics when labels are absent.
             if self.settings.has_label:
-                self.mlflow_manager.log_metrics(mlflow_metrics, step=self.iter_steps[mode])
+                self.mlflow_manager.log_metrics(mlflow_metrics, step=epoch + 1)
 
         result_metrics = {
             'macc': primary_acc if isinstance(primary_acc, float) else primary_acc.item(),
@@ -987,7 +1005,25 @@ class Trainer(object):
                 mlflow_metrics[f'{mode.lower()}_epoch_max_mem_reserved_mb'] = max_res_mb
             if (mode == 'Train') and (epoch_lr is not None):
                 mlflow_metrics[f'{mode.lower()}_epoch_lr'] = epoch_lr
-            self.mlflow_manager.log_metrics(mlflow_metrics, step=self.iter_steps[mode])
+            ignored_classes = set(getattr(self, 'ignore_class', []))
+            class_iou_for_log = metrics_dict.get('class_iou', None)
+            if class_iou_for_log is not None:
+                for cls_id, cls_iou in enumerate(class_iou_for_log):
+                    if cls_id in ignored_classes:
+                        continue
+                    cls_name = None
+                    if isinstance(self.mapped_cls_name, dict):
+                        cls_name = self.mapped_cls_name.get(cls_id, None)
+                    elif isinstance(self.mapped_cls_name, (list, tuple)) and cls_id < len(self.mapped_cls_name):
+                        cls_name = self.mapped_cls_name[cls_id]
+                    if cls_name is None:
+                        cls_name = f'class_{cls_id}'
+                    safe_name = ''.join(ch if ch.isalnum() else '_' for ch in str(cls_name).lower()).strip('_')
+                    if not safe_name:
+                        safe_name = f'class_{cls_id}'
+                    # Prefix with `zz_` so per-class curves appear last in most MLflow metric lists.
+                    mlflow_metrics[f'zz_{mode.lower()}_iou_{safe_name}'] = float(cls_iou.item())
+            self.mlflow_manager.log_metrics(mlflow_metrics, step=epoch + 1)
 
         # KPConv path already works on point metrics; expose explicit aliases for clarity.
         result_metrics = {

@@ -38,21 +38,21 @@ training:
   batch_size: 8
   batch_size_val: 1
   lr: 0.0004
-  min_lr: 0.000004 # cosine floor (eta_min). Keep > 0 to avoid fully freezing late training; ~1% of lr is a common start.
-  use_fp16: false
+  min_lr: 0.00006 # cosine floor (eta_min). Keep > 0 to avoid fully freezing late training; ~1% of lr is a common start.
+  use_fp16: true
   train_result_frequency: 100 # printing frequency of the train results
   loss:
     focal_loss:
-      type: "class_weighted_focal" # also accepts alias: class_weight_focal
+      type: "focal" # also accepts alias: class_weighted_focal or focal
       weight: 0.1
-      gamma: 1.5
+      gamma: 2.0
       ignore_index: 0
     lovasz_loss:
       weight: 1.0
     boundary_loss:
       weight: 1.0 # only applied when use_kpconv is False
     aux_loss:
-      weight: 0.1 # global auxiliary loss weight (train only)
+      weight: 0.0 # global auxiliary loss weight (train only)
   # Optional manual class weights (length must equal n_classes). Leave null to use dataset-derived weights.
   # class_weights: [0.0, 1.0, ...]
   save_epochs_at: [] # 1-based epochs to save checkpoints; must be < n_epochs. Leave empty to save every epoch.
@@ -70,7 +70,7 @@ model:
   use_sliding_window: true       # sliding-window inference/validation
 
 # Decoder
-decoder: "tinyvim_fuse_aux" # 'linear', 'up_conv', 'fpn', or 'tinyvim_fuse_aux' (TinyViM-only)
+decoder: "fpn" # 'linear', 'up_conv', 'fpn', or 'tinyvim_fuse_aux' (TinyViM-only)
 fuse_proj_channels: 128   # tinyvim_fuse_aux only: per-stage 1x1 projection channels (used only when fuse_preproj=true)
 fuse_mid_channels: 256    # tinyvim_fuse_aux only: channels after first fusion conv (conv_1)
 fuse_out_channels: 128    # tinyvim_fuse_aux only: channels after second fusion conv (conv_2); decoder feature dim
