@@ -42,7 +42,6 @@ class Trainer(object):
         self.use_knn = (not self.settings.use_kpconv) and self.settings.use_knn
         self.boundary_loss_weight = 0.0 if self.settings.use_kpconv else max(0.0, float(getattr(self.settings, 'boundary_loss_weight', 0.0)))
         self.remain_time = tools.RemainTime(self.settings.n_epochs)
-        self.iter_steps = {'Train': 0, 'Validation': 0}
 
         # Init data loader
         self.train_loader, self.val_loader, self.train_sampler, self.val_sampler = self._initDataloader()
@@ -484,22 +483,6 @@ class Trainer(object):
             mean_acc_point_running = float(mean_acc_point_tensor)
             mean_recall_point_running = float(mean_recall_point_tensor)
 
-            should_log = (i % log_frequency == 0) or (i == total_iter - 1)
-
-            if should_log and self.mlflow_manager is not None:
-                step_id = self.iter_steps[mode]
-                self.iter_steps[mode] += 1
-                mlflow_metrics = {
-                    f'{mode.lower()}_loss': loss.item(),
-                    f'{mode.lower()}_loss_focal': loss_focal_val,
-                    f'{mode.lower()}_loss_lovasz': loss_lovasz_val,
-                    f'{mode.lower()}_loss_boundary_weighted': loss_boundary_w_val,
-                    f'{mode.lower()}_loss_aux_weighted': loss_aux_w_val,
-                }
-                if mode == 'Train':
-                    mlflow_metrics[f'{mode.lower()}_lr'] = current_lr
-                self.mlflow_manager.log_metrics(mlflow_metrics, step=step_id)
-
             # Save predictions for SemanticKITTI test/val when KNN unprojection is used (non-KPConv path).
             if (mode == 'Validation' and save_results_path is not None and self.use_knn):
                 pred_np = unproj_argmax.cpu().numpy().reshape(-1).astype(np.int32)
@@ -522,6 +505,7 @@ class Trainer(object):
                     epoch=epoch, iters=i, total_iter=total_iter, mode=mode
                 ))
             t_start = time.time()
+            should_log = (i % log_frequency == 0) or (i == total_iter - 1)
 
             # Logging
             if should_log:
@@ -656,22 +640,22 @@ class Trainer(object):
 
         if self.mlflow_manager is not None:
             mlflow_metrics = {
-                f'{mode.lower()}_epoch_loss': loss_meter.avg,
-                f'{mode.lower()}_epoch_loss_focal': loss_focal_meter.avg,
-                f'{mode.lower()}_epoch_loss_lovasz': loss_lovasz_meter.avg,
-                f'{mode.lower()}_epoch_loss_boundary_weighted': loss_boundary_w_meter.avg,
-                f'{mode.lower()}_epoch_loss_aux_weighted': loss_aux_w_meter.avg,
-                f'{mode.lower()}_epoch_acc': primary_acc if isinstance(primary_acc, float) else primary_acc.item(),
-                f'{mode.lower()}_epoch_recall': primary_recall if isinstance(primary_recall, float) else primary_recall.item(),
-                f'{mode.lower()}_epoch_iou_pixel': mean_iou.item(),
+                f'{mode.lower()}_loss': loss_meter.avg,
+                f'{mode.lower()}_loss_focal': loss_focal_meter.avg,
+                f'{mode.lower()}_loss_lovasz': loss_lovasz_meter.avg,
+                f'{mode.lower()}_loss_boundary_weighted': loss_boundary_w_meter.avg,
+                f'{mode.lower()}_loss_aux_weighted': loss_aux_w_meter.avg,
+                f'{mode.lower()}_acc': primary_acc if isinstance(primary_acc, float) else primary_acc.item(),
+                f'{mode.lower()}_recall': primary_recall if isinstance(primary_recall, float) else primary_recall.item(),
+                f'{mode.lower()}_iou_pixel': mean_iou.item(),
             }
             if max_alloc_mb is not None and max_res_mb is not None:
-                mlflow_metrics[f'{mode.lower()}_epoch_max_mem_alloc_mb'] = max_alloc_mb
-                mlflow_metrics[f'{mode.lower()}_epoch_max_mem_reserved_mb'] = max_res_mb
+                mlflow_metrics[f'{mode.lower()}_max_mem_alloc_mb'] = max_alloc_mb
+                mlflow_metrics[f'{mode.lower()}_max_mem_reserved_mb'] = max_res_mb
             if mode == 'Validation' and self.use_knn and metrics_dict_3d is not None:
-                mlflow_metrics[f'{mode.lower()}_epoch_iou_point'] = mean_iou_point
+                mlflow_metrics[f'{mode.lower()}_iou_point'] = mean_iou_point
             if (mode == 'Train') and (epoch_lr is not None):
-                mlflow_metrics[f'{mode.lower()}_epoch_lr'] = epoch_lr
+                mlflow_metrics[f'{mode.lower()}_lr'] = epoch_lr
             ignored_classes = set(getattr(self, 'ignore_class', []))
             class_iou_for_log = metrics_dict.get('class_iou', None)
             if class_iou_for_log is not None:
@@ -850,22 +834,6 @@ class Trainer(object):
             mean_acc_running = float(mean_acc_tensor)
             mean_recall_running = float(mean_recall_tensor)
 
-            should_log = (i % log_frequency == 0) or (i == total_iter - 1)
-
-            if should_log and self.mlflow_manager is not None:
-                step_id = self.iter_steps[mode]
-                self.iter_steps[mode] += 1
-                mlflow_metrics = {
-                    f'{mode.lower()}_loss': loss.item(),
-                    f'{mode.lower()}_loss_focal': loss_focal_val,
-                    f'{mode.lower()}_loss_lovasz': loss_lovasz_val,
-                    f'{mode.lower()}_loss_boundary_weighted': loss_boundary_w_val,
-                    f'{mode.lower()}_loss_aux_weighted': loss_aux_w_val,
-                }
-                if mode == 'Train':
-                    mlflow_metrics[f'{mode.lower()}_lr'] = current_lr
-                self.mlflow_manager.log_metrics(mlflow_metrics, step=step_id)
-
             # Save the predictions
             if (mode == 'Validation' and save_results_path is not None):
                 pred_np = argmax3d.cpu().numpy()
@@ -907,6 +875,7 @@ class Trainer(object):
                     epoch=0, iters=i, total_iter=total_iter, mode=mode))
 
             t_start = time.time()
+            should_log = (i % log_frequency == 0) or (i == total_iter - 1)
 
             # Logging
             if should_log:
@@ -991,20 +960,20 @@ class Trainer(object):
 
         if self.mlflow_manager is not None:
             mlflow_metrics = {
-                f'{mode.lower()}_epoch_loss': loss_meter.avg,
-                f'{mode.lower()}_epoch_loss_focal': loss_focal_meter.avg,
-                f'{mode.lower()}_epoch_loss_lovasz': loss_lovasz_meter.avg,
-                f'{mode.lower()}_epoch_loss_boundary_weighted': loss_boundary_w_meter.avg,
-                f'{mode.lower()}_epoch_loss_aux_weighted': loss_aux_w_meter.avg,
-                f'{mode.lower()}_epoch_acc': mean_acc.item(),
-                f'{mode.lower()}_epoch_recall': mean_recall.item(),
-                f'{mode.lower()}_epoch_iou_point': mean_iou.item(),
+                f'{mode.lower()}_loss': loss_meter.avg,
+                f'{mode.lower()}_loss_focal': loss_focal_meter.avg,
+                f'{mode.lower()}_loss_lovasz': loss_lovasz_meter.avg,
+                f'{mode.lower()}_loss_boundary_weighted': loss_boundary_w_meter.avg,
+                f'{mode.lower()}_loss_aux_weighted': loss_aux_w_meter.avg,
+                f'{mode.lower()}_acc': mean_acc.item(),
+                f'{mode.lower()}_recall': mean_recall.item(),
+                f'{mode.lower()}_iou_point': mean_iou.item(),
             }
             if max_alloc_mb is not None and max_res_mb is not None:
-                mlflow_metrics[f'{mode.lower()}_epoch_max_mem_alloc_mb'] = max_alloc_mb
-                mlflow_metrics[f'{mode.lower()}_epoch_max_mem_reserved_mb'] = max_res_mb
+                mlflow_metrics[f'{mode.lower()}_max_mem_alloc_mb'] = max_alloc_mb
+                mlflow_metrics[f'{mode.lower()}_max_mem_reserved_mb'] = max_res_mb
             if (mode == 'Train') and (epoch_lr is not None):
-                mlflow_metrics[f'{mode.lower()}_epoch_lr'] = epoch_lr
+                mlflow_metrics[f'{mode.lower()}_lr'] = epoch_lr
             ignored_classes = set(getattr(self, 'ignore_class', []))
             class_iou_for_log = metrics_dict.get('class_iou', None)
             if class_iou_for_log is not None:
