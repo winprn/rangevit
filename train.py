@@ -688,8 +688,8 @@ class Trainer(object):
                     safe_name = ''.join(ch if ch.isalnum() else '_' for ch in str(cls_name).lower()).strip('_')
                     if not safe_name:
                         safe_name = f'class_{cls_id}'
-                    # Prefix with `zz_` so per-class curves appear last in most MLflow metric lists.
-                    mlflow_metrics[f'zz_{mode.lower()}_iou_{safe_name}'] = float(cls_iou.item())
+                    # Name by class first so train/validation curves of the same class stay adjacent.
+                    mlflow_metrics[f'zz_{safe_name}_iou_{mode.lower()}'] = float(cls_iou.item())
             # Skip logging label-dependent metrics when labels are absent.
             if self.settings.has_label:
                 self.mlflow_manager.log_metrics(mlflow_metrics, step=epoch + 1)
@@ -1021,8 +1021,8 @@ class Trainer(object):
                     safe_name = ''.join(ch if ch.isalnum() else '_' for ch in str(cls_name).lower()).strip('_')
                     if not safe_name:
                         safe_name = f'class_{cls_id}'
-                    # Prefix with `zz_` so per-class curves appear last in most MLflow metric lists.
-                    mlflow_metrics[f'zz_{mode.lower()}_iou_{safe_name}'] = float(cls_iou.item())
+                    # Name by class first so train/validation curves of the same class stay adjacent.
+                    mlflow_metrics[f'zz_{safe_name}_iou_{mode.lower()}'] = float(cls_iou.item())
             self.mlflow_manager.log_metrics(mlflow_metrics, step=epoch + 1)
 
         # KPConv path already works on point metrics; expose explicit aliases for clarity.
