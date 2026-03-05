@@ -279,7 +279,11 @@ class Trainer(object):
 
     def compute_losses(self, output, output_softmax, label, mask, aux_outputs=None, aux_loss_weight=0.0):
         loss_lovasz = self.criterion['lovasz'](output_softmax, label)
+        if torch.is_tensor(loss_lovasz) and loss_lovasz.ndim > 0:
+            loss_lovasz = loss_lovasz.mean()
         loss_focal = self.criterion['focal_loss'](output_softmax, label, mask=mask)
+        if torch.is_tensor(loss_focal) and loss_focal.ndim > 0:
+            loss_focal = loss_focal.mean()
         total_loss = (
             self.settings.focal_loss_weight * loss_focal +
             self.settings.lovasz_loss_weight * loss_lovasz
@@ -288,6 +292,8 @@ class Trainer(object):
         loss_boundary = torch.zeros([], device=output.device, dtype=output.dtype)
         if self.boundary_loss_weight > 0:
             loss_boundary = self.criterion['boundary_loss'](output_softmax, label, mask)
+            if torch.is_tensor(loss_boundary) and loss_boundary.ndim > 0:
+                loss_boundary = loss_boundary.mean()
             total_loss = total_loss + self.boundary_loss_weight * loss_boundary
 
         loss_aux = torch.zeros([], device=output.device, dtype=output.dtype)
@@ -296,17 +302,28 @@ class Trainer(object):
             for aux_out in aux_outputs:
                 aux_softmax = F.softmax(aux_out, dim=1)
                 aux_lovasz = self.criterion['lovasz'](aux_softmax, label)
+                if torch.is_tensor(aux_lovasz) and aux_lovasz.ndim > 0:
+                    aux_lovasz = aux_lovasz.mean()
                 aux_focal = self.criterion['focal_loss'](aux_softmax, label, mask=mask)
+                if torch.is_tensor(aux_focal) and aux_focal.ndim > 0:
+                    aux_focal = aux_focal.mean()
                 aux_loss = (
                     self.settings.lovasz_loss_weight * aux_lovasz +
                     self.settings.focal_loss_weight * aux_focal
                 )
                 if self.boundary_loss_weight > 0:
                     aux_boundary = self.criterion['boundary_loss'](aux_softmax, label, mask)
+                    if torch.is_tensor(aux_boundary) and aux_boundary.ndim > 0:
+                        aux_boundary = aux_boundary.mean()
                     aux_loss = aux_loss + self.boundary_loss_weight * aux_boundary
                 aux_total = aux_total + aux_loss
             loss_aux = aux_total
+            if torch.is_tensor(loss_aux) and loss_aux.ndim > 0:
+                loss_aux = loss_aux.mean()
             total_loss = total_loss + aux_loss_weight * loss_aux
+
+        if torch.is_tensor(total_loss) and total_loss.ndim > 0:
+            total_loss = total_loss.mean()
 
         return total_loss, loss_lovasz, loss_focal, loss_boundary, loss_aux
 
