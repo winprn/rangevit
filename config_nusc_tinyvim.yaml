@@ -1,0 +1,174 @@
+# General config
+num_workers: 4
+id: "exp_nusc_tinyvim"
+save_path: "save_nusc_rangevim_tinyvim"
+distributed: false
+
+# MLflow config
+mlflow:
+  enable: false
+  tracking_uri: "http://140.245.117.232:5000" # e.g. 'file:./mlruns' or an HTTP URL
+  experiment_name: "rangevim"
+  run_name: "[train] nusc_large_fpn" # defaults to the CLI-provided id when null
+  nested: false
+  log_checkpoints: false
+  log_code_snapshot: false
+
+# Data config
+data:
+  dataset: "nuScenes"
+  n_classes: 17 # 16 + 1(ignored)
+  data_root: "../dataset/nuscenes"
+  has_label: true
+
+knni:
+  enable: false
+  window_size: 5
+  cache: true
+  cache_train: false
+  cache_dir: "cache_nusc/knni"
+  cache_version: "v1"
+
+# Train config
+training:
+  val_frequency: 1
+  n_epochs: 150
+  warmup_epochs: 10
+  batch_size: 8
+  batch_size_val: 1
+  lr: 0.0006
+  min_lr: 0.00004
+  use_fp16: true
+  train_result_frequency: 100
+  loss:
+    focal_loss:
+      type: "focal"
+      weight: 1.0
+      gamma: 2.0
+      ignore_index: 0
+    lovasz_loss:
+      weight: 1.0
+    boundary_loss:
+      weight: 0.1 # only applied when point_postproc != kpconv
+    aux_loss:
+      weight: 0.0
+  # Leave null to use dataset-derived defaults in code.
+  class_weights: null
+  save_epochs_at: []
+
+# Model config
+model:
+  vit_backbone: "tinyvim_large"
+  in_channels: 5
+  image_size: [32, 384]         # train-time crop size
+  window_size: [32, 384]        # sliding window size for validation
+  window_stride: [32, 256]      # sliding window stride for validation
+  original_image_size: [32, 2048]
+  train_full_image: false
+  use_sliding_window: true
+
+# Decoder
+decoder: "fpn" # 'linear', 'up_conv', 'fpn', or 'tinyvim_fuse_aux' (TinyViM-only)
+fuse_proj_channels: 128
+fuse_mid_channels: 256
+fuse_out_channels: 128
+fuse_preproj: true
+aux_enable: true
+
+# 3D refiner / post-processing
+point_postproc: "knn" # 'kpconv', 'knn', or 'none'
+knn_search: 13
+knn_k: 5
+knn_sigma: 1.0
+knn_cutoff: 1.0
+
+# Checkpoint model
+checkpoint: null
+pretrained_model: null
+reuse_pos_emb: false
+reuse_patch_emb: false
+pretrained_channel_adaptation: "repeat"
+
+# Data augmentation config
+augmentation:
+  # flip
+  p_flipx: 0.
+  p_flipy: 0.5
+
+  # translation
+  p_transx: 0.5
+  trans_xmin: -5
+  trans_xmax: 5
+  p_transy: 0.5
+  trans_ymin: -3
+  trans_ymax: 3
+  p_transz: 0.5
+  trans_zmin: -1
+  trans_zmax: 0.
+
+  # rotation
+  p_rot_roll: 0.5
+  rot_rollmin: -5
+  rot_rollmax: 5
+  p_rot_pitch: 0.5
+  rot_pitchmin: -5
+  rot_pitchmax: 5
+  p_rot_yaw: 0.5
+  rot_yawmin: 5
+  rot_yawmax: -5
+
+adapted_augmentation:
+  # nuScenes mapped class ids:
+  # 0=ignore, 1=barrier, 2=bicycle, 3=bus, 4=car, 5=construction_vehicle,
+  # 6=motorcycle, 7=pedestrian, 8=traffic_cone, 9=trailer, 10=truck,
+  # 11=driveable_surface, 12=other_flat, 13=sidewalk, 14=terrain,
+  # 15=manmade, 16=vegetation
+  use_mapped_labels: true
+  pointsample:
+    enable: false
+    num_points: 120000
+    replace: false
+  polarmix:
+    enable: false
+    prob: 0.5
+    classes: [2, 3, 4, 5, 6, 7, 9, 10] # bicycle, bus, car, construction_vehicle, motorcycle, pedestrian, trailer, truck
+  instance_cutmix:
+    enable: false
+    prob: 1.0
+    instance_bank_root: "cache/instance_bank"
+    classes: [2, 3, 4, 5, 6, 7, 9, 10] # bicycle, bus, car, construction_vehicle, motorcycle, pedestrian, trailer, truck
+    min_points: 20
+    num_to_add: [0, 2]
+  clustermix:
+    enable: false
+    prob: 0.5
+    vertical_prob: 0.5
+    sector_width: 1.570796
+    height_ratio: 0.5
+  instance_copy:
+    enable: false
+    prob: 0.5
+    classes: [2, 3, 4, 5, 6, 7, 9, 10] # bicycle, bus, car, construction_vehicle, motorcycle, pedestrian, trailer, truck
+    max_instances_per_class: 1
+
+sensor:
+  name: "HDL64"
+  type: "spherical"
+  proj_h: 32
+  proj_w: 2048
+  fov_up: 10.
+  fov_down: -30.
+  fov_left: -180
+  fov_right: 180
+  img_mean:
+    - 12.12
+    - 10.88
+    - 0.23
+    - -1.04
+    - 0.21
+  img_stds:
+    - 12.32
+    - 11.47
+    - 6.91
+    - 0.86
+    - 0.16
