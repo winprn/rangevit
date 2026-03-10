@@ -70,23 +70,25 @@ model:
   use_sliding_window: true       # sliding-window inference/validation
 
 # Decoder
-decoder: "fpn" # 'linear', 'up_conv', 'fpn', or 'tinyvim_fuse_aux' (TinyViM-only)
-fuse_proj_channels: 128   # tinyvim_fuse_aux only: per-stage 1x1 projection channels (used only when fuse_preproj=true)
-fuse_mid_channels: 256    # tinyvim_fuse_aux only: channels after first fusion conv (conv_1)
-fuse_out_channels: 128    # tinyvim_fuse_aux only: channels after second fusion conv (conv_2); decoder feature dim
-# tinyvim_fuse_aux only: controls whether stage-wise 1x1 projection is applied BEFORE spatial alignment + concat.
-# - true  (default, recommended baseline):
-#     each stage -> 1x1 to fuse_proj_channels -> upsample to highest-res stage -> concat -> conv_1/conv_2.
-#     Benefits: balanced per-stage channel contribution, lower/fixed fusion width, usually more stable optimization.
-# - false (ablation mode):
-#     each stage is upsampled in original channels -> direct concat -> conv_1/conv_2 (no per-stage 1x1 pre-proj).
-#     Effects: larger concat width (TinyViM-B: 48+96+192+384=720), more memory/compute in conv_1, may emphasize deep stages.
-#     Use this for experiments; quality can improve or degrade depending on training recipe and regularization.
-# Notes:
-# - aux heads still work in both modes; when false, aux heads consume raw stage channels after alignment.
-# - If switching to false, keep all else fixed for fair ablation, then retune lr/aux_loss_weight only if needed.
-fuse_preproj: true
-aux_enable: true          # tinyvim_fuse_aux only: enable 3 auxiliary heads (train-time supervision, ignored at inference)
+decoder:
+  name: "fpn" # 'linear', 'up_conv', 'fpn', or 'tinyvim_fuse_aux' (TinyViM-only)
+  tinyvim_fuse_aux:
+    proj_channels: 128 # per-stage 1x1 projection channels (used only when preproj=true)
+    mid_channels: 256  # channels after first fusion conv (conv_1)
+    out_channels: 128  # channels after second fusion conv (conv_2); decoder feature dim
+    # controls whether stage-wise 1x1 projection is applied BEFORE spatial alignment + concat.
+    # - true  (default, recommended baseline):
+    #     each stage -> 1x1 to proj_channels -> upsample to highest-res stage -> concat -> conv_1/conv_2.
+    #     Benefits: balanced per-stage channel contribution, lower/fixed fusion width, usually more stable optimization.
+    # - false (ablation mode):
+    #     each stage is upsampled in original channels -> direct concat -> conv_1/conv_2 (no per-stage 1x1 pre-proj).
+    #     Effects: larger concat width (TinyViM-B: 48+96+192+384=720), more memory/compute in conv_1, may emphasize deep stages.
+    #     Use this for experiments; quality can improve or degrade depending on training recipe and regularization.
+    # Notes:
+    # - aux heads still work in both modes; when false, aux heads consume raw stage channels after alignment.
+    # - If switching to false, keep all else fixed for fair ablation, then retune lr/aux_loss.weight only if needed.
+    preproj: true
+    aux_enable: true # enable 3 auxiliary heads (train-time supervision, ignored at inference)
 
 # 3D refiner / post-processing
 point_postproc: "knn" # 'kpconv', 'knn', or 'none'; overrides the boolean flags below

@@ -155,13 +155,33 @@ class Option(object):
         self.D_h = self.config.get('D_h', 256)
 
         # Decoder
-        self.decoder = self.config.get('decoder', 'up_conv')
+        # Backward compatible formats:
+        # 1) legacy flat: decoder: "fpn", fuse_* at root
+        # 2) nested: decoder: { name: "fpn", tinyvim_fuse_aux: {...} }
+        decoder_cfg = self.config.get('decoder', 'up_conv')
+        if isinstance(decoder_cfg, dict):
+            self.decoder = decoder_cfg.get('name', 'up_conv')
+            tinyvim_fuse_cfg = decoder_cfg.get('tinyvim_fuse_aux', {})
+        else:
+            self.decoder = decoder_cfg
+            tinyvim_fuse_cfg = {}
+
         self.skip_filters = self.config.get('skip_filters', 0)
-        self.fuse_proj_channels = int(self.config.get('fuse_proj_channels', 128))
-        self.fuse_mid_channels = int(self.config.get('fuse_mid_channels', 256))
-        self.fuse_out_channels = int(self.config.get('fuse_out_channels', 128))
-        self.fuse_preproj = bool(self.config.get('fuse_preproj', True))
-        self.aux_enable = bool(self.config.get('aux_enable', True))
+        self.fuse_proj_channels = int(
+            tinyvim_fuse_cfg.get('proj_channels', self.config.get('fuse_proj_channels', 128))
+        )
+        self.fuse_mid_channels = int(
+            tinyvim_fuse_cfg.get('mid_channels', self.config.get('fuse_mid_channels', 256))
+        )
+        self.fuse_out_channels = int(
+            tinyvim_fuse_cfg.get('out_channels', self.config.get('fuse_out_channels', 128))
+        )
+        self.fuse_preproj = bool(
+            tinyvim_fuse_cfg.get('preproj', self.config.get('fuse_preproj', True))
+        )
+        self.aux_enable = bool(
+            tinyvim_fuse_cfg.get('aux_enable', self.config.get('aux_enable', True))
+        )
         # aux_loss_weight is configured in the Train config via loss.aux_loss.weight.
 
         # 3D refiner / post-processing

@@ -68,12 +68,14 @@ model:
   use_sliding_window: true
 
 # Decoder
-decoder: "fpn" # 'linear', 'up_conv', 'fpn', or 'tinyvim_fuse_aux' (TinyViM-only)
-fuse_proj_channels: 128
-fuse_mid_channels: 256
-fuse_out_channels: 128
-fuse_preproj: true
-aux_enable: true
+decoder:
+  name: "fpn" # 'linear', 'up_conv', 'fpn', or 'tinyvim_fuse_aux' (TinyViM-only)
+  tinyvim_fuse_aux:
+    proj_channels: 128
+    mid_channels: 256
+    out_channels: 128
+    preproj: true
+    aux_enable: true
 
 # 3D refiner / post-processing
 point_postproc: "knn" # 'kpconv', 'knn', or 'none'
