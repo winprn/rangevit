@@ -530,12 +530,13 @@ downsamplings for the last 3 stages is a layer of conv with k3, s2 and p1
 DOWNSAMPLE_LAYERS_FOUR_STAGES format: [Downsampling, Downsampling, Downsampling, Downsampling]
 use `partial` to specify some arguments
 """
+# Width-only downsampling: keep height, shrink width by 2 then 2x2x2.
 DOWNSAMPLE_LAYERS_FOUR_STAGES = [partial(Downsampling,
-            kernel_size=7, stride=4, padding=2,
+            kernel_size=(1, 7), stride=(1, 2), padding=(0, 3),
             post_norm=partial(LayerNormGeneral, bias=False, eps=1e-6)
             )] + \
             [partial(Downsampling,
-                kernel_size=3, stride=2, padding=1, 
+                kernel_size=(1, 3), stride=(1, 2), padding=(0, 1),
                 pre_norm=partial(LayerNormGeneral, bias=False, eps=1e-6), pre_permute=True
             )]*3
 

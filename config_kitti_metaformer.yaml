@@ -35,7 +35,7 @@ training:
   val_frequency: 1
   n_epochs: 90
   warmup_epochs: 4
-  batch_size: 8
+  batch_size: 4
   batch_size_val: 1
   lr: 0.0004
   min_lr: 0.00006 # cosine floor (eta_min). Keep > 0 to avoid fully freezing late training; ~1% of lr is a common start.
@@ -43,14 +43,14 @@ training:
   train_result_frequency: 100 # printing frequency of the train results
   loss:
     focal_loss:
-      type: "class_weighted_focal" # also accepts alias: class_weighted_focal or focal
+      type: "focal" # also accepts alias: class_weighted_focal or focal
       weight: 2.0
       gamma: 2.5
       ignore_index: 0
     lovasz_loss:
       weight: 1.0
     boundary_loss:
-      weight: 0.1 # only applied when use_kpconv is False
+      weight: 0.5 # only applied when use_kpconv is False
     aux_loss:
       weight: 0.0 # global auxiliary loss weight (train only)
   # Optional manual class weights (length must equal n_classes). Leave null to use dataset-derived weights.
@@ -59,7 +59,7 @@ training:
 
 # Model config
 model:
-  vit_backbone: "caformer_s18" # or "caformer_s18", "convformer_s36", "caformer_s36", "convformer_m36", "caformer_m36", "convformer_b36", "caformer_b36"
+  vit_backbone: "convformer_s18" # or "caformer_s18", "convformer_s36", "caformer_s36", "convformer_m36", "caformer_m36", "convformer_b36", "caformer_b36"
   in_channels: 5
   image_size: [64, 1024]         # train-time crop size
   window_size: [64, 1024]        # sliding window size for validation
