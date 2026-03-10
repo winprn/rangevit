@@ -26,6 +26,7 @@ from .decoders import DecoderLinear, DecoderUpConv
 from .rangevit_kpconv import RangeViT_KPConv, KPClassifier
 from .swin_transformer_v2 import SwinTransformerV2, create_swin_v2
 from .tinyvim_adapter import TinyViMAdapter
+from .metaformer_adapter import MetaFormerAdapter
 from .tinyvim.fpn_decoder import TinyViMFPNDecoder
 from .tinyvim.fuse_aux_decoder import TinyViMFuseAuxDecoder
 
@@ -171,8 +172,8 @@ def create_decoder(encoder, decoder_cfg):
         decoder_cfg['patch_stride'] = encoder.patch_stride
         decoder = DecoderUpConv(**decoder_cfg)
     elif name == 'fpn':
-        if not isinstance(encoder, TinyViMAdapter):
-            raise ValueError('FPN decoder is only supported for TinyViM backbones.')
+        if not hasattr(encoder, 'embed_dims'):
+            raise ValueError('FPN decoder requires an encoder with embed_dims and stage features.')
         decoder = TinyViMFPNDecoder(
             in_channels=encoder.embed_dims,
             n_cls=decoder_cfg['n_cls'],
@@ -215,6 +216,11 @@ def create_rangevit(model_cfg, use_kpconv=False):
         # Tell adapter whether we're loading pretrained stem weights
         model_cfg['load_pretrained_stem'] = (model_cfg.get('pretrained_path') is not None)
         encoder = TinyViMAdapter(**model_cfg)
+    elif backbone.startswith('convformer') or backbone.startswith('caformer'):
+        model_cfg['backbone_name'] = backbone
+        if decoder_cfg.get('name') == 'fpn':
+            model_cfg['use_fpn_decoder'] = True
+        encoder = MetaFormerAdapter(**model_cfg)
     else:
         encoder = create_vit(model_cfg)
     
@@ -263,7 +269,7 @@ class RangeViT_noKPConv(nn.Module):
 
         x, skip = self.encoder(im, return_features=True)
 
-        if isinstance(self.encoder, TinyViMAdapter):
+        if getattr(self.encoder, 'use_fpn_decoder', False):
             # TinyViM returns spatial feature maps; FPN consumes them via skip.
             stage_features = x if isinstance(x, (list, tuple)) else skip
             if getattr(self.decoder, 'supports_aux', False) and self.training:
@@ -392,6 +398,19 @@ class RangeViT(nn.Module):
             dropout = 0.0
             drop_path_rate = 0.1
             d_model = 512
+        elif backbone.startswith('convformer') or backbone.startswith('caformer'):
+            n_heads = 1
+            n_layers = 0
+            patch_size = 32
+            dropout = 0.0
+            drop_path_rate = 0.1
+            name = backbone.lower()
+            if 'm36' in name:
+                d_model = 576
+            elif 'b36' in name:
+                d_model = 768
+            else:
+                d_model = 512
         else:
             raise NameError('Not known ViT backbone.')
 
