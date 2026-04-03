@@ -1,7 +1,7 @@
 # General config
 num_workers: 6
 id: "exp_kitti_tinyvim_crop64x1024"
-save_path: "save_rangevim_large"
+save_path: "save_rangevim_base"
 distributed: false
 
 # MLflow config
@@ -9,7 +9,7 @@ mlflow:
   enable: true
   tracking_uri: "http://140.245.117.232:5000" # e.g. 'file:./mlruns' or an HTTP URL
   experiment_name: "rangevim"
-  run_name: "[train] large_fpn" # defaults to the CLI-provided id when null
+  run_name: "[train] base_fpn" # defaults to the CLI-provided id when null
   nested: false
   log_checkpoints: false
   log_code_snapshot: false
@@ -33,9 +33,9 @@ knni:
 # Train config
 training:
   val_frequency: 1
-  n_epochs: 90
+  n_epochs: 70
   warmup_epochs: 4
-  batch_size: 1
+  batch_size: 4
   batch_size_val: 1
   lr: 0.0004
   min_lr: 0.00006 # cosine floor (eta_min). Keep > 0 to avoid fully freezing late training; ~1% of lr is a common start.
@@ -59,10 +59,10 @@ training:
 
 # Model config
 model:
-  vit_backbone: "tinyvim_large"
+  vit_backbone: "tinyvim_base"
   in_channels: 5
-  image_size: [64, 1024]         # train-time crop size
-  window_size: [64, 1024]        # sliding window size for validation
+  image_size: [64, 512]          # train-time crop size
+  window_size: [64, 512]         # sliding window size for validation
   window_stride: [64, 512]       # 50% overlap along width; good quality/speed trade-off
   original_image_size: [64, 2048]
   # Full-image switches
@@ -103,12 +103,6 @@ pretrained_model: null  # Set to "/path/to/tinyvim_imagenet1k.pth" when using pr
 # Loading pre-trained patch and positional embeddings
 reuse_pos_emb: false
 reuse_patch_emb: false # no patch embedding as a convolutional stem (ConvStem) is used
-
-# Channel adaptation method for RGB (3-ch) -> LiDAR (5-ch) pretrained weights
-# Options:
-#   - 'repeat': [R,G,B] -> [R,G,B,R,G] x (3/5) - Default, preserves RGB info
-#   - 'grayscale': RGB -> Luminance -> [G,G,G,G,G] - Uses ITU-R BT.601 weights
-pretrained_channel_adaptation: "repeat"
 
 # Data augmentation config
 augmentation:
