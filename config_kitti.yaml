@@ -95,6 +95,9 @@ reuse_patch_emb: false # no patch embedding as a convolutional stem (ConvStem) i
 #   - 'grayscale': RGB → Luminance → [G,G,G,G,G] - Uses ITU-R BT.601 weights
 pretrained_channel_adaptation: "repeat"
 
+# Range image-level augmentation (applied on GPU batch before forward pass)
+range_aug: false
+
 # Data augmentation config
 augmentation:
   # flip
