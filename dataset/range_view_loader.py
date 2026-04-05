@@ -267,6 +267,7 @@ class RangeViewLoader(Dataset):
         if self.is_train:
             if self.instance_cutmix is not None:
                 pointcloud, sem_label = self.instance_cutmix(pointcloud, sem_label, inst_label)
+                inst_label = None  # stale after cutmix changes point count
             if self.polarmix is not None:
                 mix_pc, mix_sem, _ = self._load_mix_sample()
                 if labels_are_mapped:
@@ -374,6 +375,7 @@ class RangeViewLoader(Dataset):
         if self.is_train:
             if self.instance_cutmix is not None:
                 pointcloud, sem_label = self.instance_cutmix(pointcloud, sem_label, inst_label)
+                inst_label = None  # stale after cutmix changes point count
             if self.polarmix is not None:
                 mix_pc, mix_sem, _ = self._load_mix_sample()
                 if labels_are_mapped:
