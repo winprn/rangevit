@@ -79,6 +79,12 @@ class Trainer(object):
                 ignore=self.ignore_class, is_distributed=self.settings.distributed)
             self.metrics_3d.reset()
 
+        # Range image-level augmentation (applied on batch before forward pass)
+        self.range_aug = None
+        if getattr(self.settings, 'range_aug', False):
+            from dataset.preprocess.rangeaug import RangeAugmentation
+            self.range_aug = RangeAugmentation()
+
         # Define scheduler
         self.scheduler = utils.optim.WarmupCosineLR(
             optimizer=self.optimizer,
@@ -396,6 +402,10 @@ class Trainer(object):
             input_label = input_label.cuda().long()
             input_label = input_label * input_label.ge(1).long()
             input_mask = input_mask.cuda() * input_label.ge(1).float()
+
+            # Range image-level augmentation
+            if mode == 'Train' and self.range_aug is not None:
+                input_feature, input_label = self.range_aug(input_feature, input_label, input_mask)
 
             # Forward propagation
             if mode == 'Train':
@@ -771,6 +781,13 @@ class Trainer(object):
             labels3d = labels3d * labels3d.ge(1).long()
             mask_3d = labels3d.ge(1).float()
             num_points = batch_dict['num_points']
+
+            # Range image-level augmentation (on 2D range image before 3D processing)
+            if mode == 'Train' and self.range_aug is not None:
+                input_feature, _ = self.range_aug(
+                    input_feature,
+                    labels3d.squeeze(1).squeeze(1),
+                    mask_3d.squeeze(1).squeeze(1))
 
             # Forward propagation
             if mode == 'Train':
