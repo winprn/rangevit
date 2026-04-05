@@ -205,6 +205,8 @@ class Option(object):
         else:
             raise ValueError('point_postproc must be one of: kpconv, knn, none')
 
+        # Range image-level augmentation
+        self.range_aug = self.config.get('range_aug', False)
 
         # Checkpoint model
         self.checkpoint = self.config.get('checkpoint', None)
