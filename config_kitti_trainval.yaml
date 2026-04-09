@@ -1,6 +1,7 @@
 # General config
 num_workers: 4
 id: 'exp_kitti'
+save_path: "save_rangevim_base"
 
 # Data config
 data:
@@ -47,8 +48,8 @@ D_h: 256 # hidden dimension of the stem
 decoder: 'up_conv'  # 'linear' or 'up_conv'
 skip_filters: 256 # has to be 0 (no skip) or D_h 
 
-# 3D refiner
-use_kpconv: true
+# 3D refiner / post-processing
+point_postproc: 'kpconv' # 'kpconv', 'knn', or 'none'
 
 
 # Checkpoint model

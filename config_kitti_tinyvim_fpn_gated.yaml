@@ -1,14 +1,14 @@
 # General config
 num_workers: 4
-id: "exp_kitti"
-save_path: "save_rangevim_aug"
+id: "exp_kitti_fpn_gated"
+save_path: "save_rangevim_fpn_gated_v1"
 
 # MLflow config
 mlflow:
   enable: true
   tracking_uri: "http://140.245.117.232:5000" # e.g. 'file:./mlruns' or an HTTP URL
   experiment_name: "rangevim"
-  run_name: "[trainval] rangevim_base_aug" # defaults to the CLI-provided id when null
+  run_name: "[trainval] rangevim_base_fpn_gated" # defaults to the CLI-provided id when null
   nested: false
   log_checkpoints: false
   log_code_snapshot: false
@@ -28,7 +28,7 @@ knni:
 # Train config
 training:
   val_frequency: 1
-  n_epochs: 60
+  n_epochs: 70
   warmup_epochs: 6
   batch_size: 6
   batch_size_val: 1
@@ -48,7 +48,7 @@ training:
       weight: 0.3
   # Optional manual class weights (length must equal n_classes). Leave null to use dataset-derived weights.
   # class_weights: [0.0, 1.0, ...]
-  save_epochs_at: [30, 33, 35, 37, 39, 40, 41, 43, 45, 47, 50, 55] # 1-based epochs to save checkpoints; must be < n_epochs. Leave empty to save every epoch.
+  save_epochs_at: [47, 50, 55, 57] # 1-based epochs to save checkpoints; must be < n_epochs. Leave empty to save every epoch.
 
 # Model config
 model:
@@ -68,12 +68,10 @@ model:
 conv_stem: "ConvStem" # 'none' or 'ConvStem'
 stem_base_channels: 32
 D_h: 48
-# Note tha the test results that we provide in the paper for the SemanticKITTI were with D_h = 256.
-# However, in the validation set D_h = 128 gave us better mIoU results.
 
 # Decoder
-decoder: "fpn" # 'linear', 'up_conv', or 'fpn'
-skip_filters: 0 # FPN does not use the skip connection
+decoder: "fpn_gated" # capacity-matched gated FPN decoder
+skip_filters: 0 # FPN-style TinyViM decoders do not use the skip connection
 
 # 3D refiner / post-processing
 point_postproc: "knn" # 'kpconv', 'knn', or 'none'; overrides the boolean flags below
@@ -89,10 +87,10 @@ pretrained_model: null  # Set to "/path/to/tinyvim_imagenet1k.pth" when using pr
 reuse_pos_emb: false
 reuse_patch_emb: false # no patch embedding as a convolutional stem (ConvStem) is used
 
-# Channel adaptation method for RGB (3-ch) → LiDAR (5-ch) pretrained weights
+# Channel adaptation method for RGB (3-ch) -> LiDAR (5-ch) pretrained weights
 # Options:
-#   - 'repeat': [R,G,B] → [R,G,B,R,G] × (3/5) - Default, preserves RGB info
-#   - 'grayscale': RGB → Luminance → [G,G,G,G,G] - Uses ITU-R BT.601 weights
+#   - 'repeat': [R,G,B] -> [R,G,B,R,G] x (3/5) - Default, preserves RGB info
+#   - 'grayscale': RGB -> Luminance -> [G,G,G,G,G] - Uses ITU-R BT.601 weights
 pretrained_channel_adaptation: "repeat"
 
 # Range image-level augmentation (applied on GPU batch before forward pass)
@@ -127,11 +125,6 @@ augmentation:
   rot_yawmax: -5
 
 adapted_augmentation:
-  # SemanticKITTI mapped class ids:
-  # 0=unlabeled, 1=car, 2=bicycle, 3=motorcycle, 4=truck, 5=other-vehicle,
-  # 6=person, 7=bicyclist, 8=motorcyclist, 9=road, 10=parking, 11=sidewalk,
-  # 12=other-ground, 13=building, 14=fence, 15=vegetation, 16=trunk,
-  # 17=terrain, 18=pole, 19=traffic-sign
   use_mapped_labels: true
   pointsample:
     enable: false
@@ -140,12 +133,12 @@ adapted_augmentation:
   polarmix:
     enable: false
     prob: 0.5
-    classes: [2, 3, 4, 5, 6, 7, 8] # bicycle, motorcycle, truck, other-vehicle, person, bicyclist, motorcyclist
+    classes: [2, 3, 4, 5, 6, 7, 8]
   instance_cutmix:
     enable: false
     prob: 1.0
     instance_bank_root: "cache/instance_bank"
-    classes: [2, 3, 4, 5, 6, 7, 8] # bicycle, motorcycle, truck, other-vehicle, person, bicyclist, motorcyclist
+    classes: [2, 3, 4, 5, 6, 7, 8]
     min_points: 20
     num_to_add: [0, 2]
   clustermix:
@@ -157,7 +150,7 @@ adapted_augmentation:
   instance_copy:
     enable: false
     prob: 0.5
-    classes: [2, 3, 4, 5, 6, 7, 8] # bicycle, motorcycle, truck, other-vehicle, person, bicyclist, motorcyclist
+    classes: [2, 3, 4, 5, 6, 7, 8]
     max_instances_per_class: 1
 
 sensor:

@@ -265,7 +265,13 @@ class Option(object):
 
         # When using the KPConv layer, the decoder has to be up_conv.
         if self.use_kpconv:
-            assert self.decoder in ('up_conv', 'fpn'), 'KPConv supported only with up_conv or fpn decoders'
+            assert self.decoder in ('up_conv', 'fpn', 'fpn_gated', 'fpn_gated_detail'), 'KPConv supported only with up_conv, fpn, fpn_gated, or fpn_gated_detail decoders'
+        if self.decoder == 'fpn_gated':
+            assert self.vit_backbone.startswith('tinyvim'), 'fpn_gated decoder requires a TinyViM backbone'
+            assert self.skip_filters == 0, 'fpn_gated decoder does not use skip_filters'
+        if self.decoder == 'fpn_gated_detail':
+            assert self.vit_backbone.startswith('tinyvim'), 'fpn_gated_detail decoder requires a TinyViM backbone'
+            assert self.skip_filters == 0, 'fpn_gated_detail decoder does not use skip_filters'
         if self.decoder == 'tinyvim_fuse_aux':
             assert self.vit_backbone.startswith('tinyvim'), 'tinyvim_fuse_aux decoder requires a TinyViM backbone'
             assert self.use_kpconv is False, 'tinyvim_fuse_aux decoder does not support KPConv'
