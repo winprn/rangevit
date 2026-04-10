@@ -1,0 +1,88 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Distribution / packaging
+.Python
+build/
+dist/
+downloads/
+eggs/
+.eggs/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# PyInstaller
+*.spec
+
+# Logs / coverage / testing
+*.log
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+pytestdebug.log
+
+# Type checkers / linters
+.mypy_cache/
+.pytype/
+.pyre/
+.ruff_cache/
+.pyright/
+
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+.python_env/
+range_env
+
+# Jupyter
+.ipynb_checkpoints/
+jupyter_execute/
+
+# Framework/database odds & ends
+db.sqlite3*
+instance/
+.webassets-cache
+scrapy.cfg
+.scrapy/
+
+# Docs
+docs/_build/
+site/
+
+# Editors / IDEs
+.vscode/
+.idea/
+.vs/
+.ropeproject/
+.spyproject/
+.spyderproject
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# PEP 582
+__pypackages__/
+
+kitti_dataset/

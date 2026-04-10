@@ -42,7 +42,17 @@ class RangeProjection(object):
 
         self.cached_data = {}
 
-    def doProjection(self, pointcloud: np.ndarray):
+    @staticmethod
+    def _compute_ranking(depth: np.ndarray, point_scores=None, eps: float = 1e-2):
+        if point_scores is None:
+            return depth
+        scores = np.asarray(point_scores, dtype=np.float32).reshape(-1)
+        if scores.shape[0] != depth.shape[0]:
+            raise ValueError(
+                f'point_scores length ({scores.shape[0]}) must match point count ({depth.shape[0]})')
+        return depth * (1.0 / (scores + eps))
+
+    def doProjection(self, pointcloud: np.ndarray, point_scores=None, score_eps: float = 1e-2):
         self.cached_data = {}
         # get depth of all points
         depth = np.linalg.norm(pointcloud[:, :3], 2, axis=1)
@@ -80,9 +90,10 @@ class RangeProjection(object):
         self.cached_data['px'] = px
         self.cached_data['py'] = py
 
-        # order in decreasing depth
+        # order in decreasing ranking score
+        ranking = self._compute_ranking(depth, point_scores=point_scores, eps=score_eps)
         indices = np.arange(depth.shape[0])
-        order = np.argsort(depth)[::-1]
+        order = np.argsort(ranking)[::-1]
         depth = depth[order]
         indices = indices[order]
         pointcloud = pointcloud[order]
@@ -119,7 +130,17 @@ class ScanProjection(object):
 
         self.cached_data = {}
 
-    def doProjection(self, pointcloud: np.ndarray):
+    @staticmethod
+    def _compute_ranking(depth: np.ndarray, point_scores=None, eps: float = 1e-2):
+        if point_scores is None:
+            return depth
+        scores = np.asarray(point_scores, dtype=np.float32).reshape(-1)
+        if scores.shape[0] != depth.shape[0]:
+            raise ValueError(
+                f'point_scores length ({scores.shape[0]}) must match point count ({depth.shape[0]})')
+        return depth * (1.0 / (scores + eps))
+
+    def doProjection(self, pointcloud: np.ndarray, point_scores=None, score_eps: float = 1e-2):
         self.cached_data = {}
         # get depth of all points
         depth = np.linalg.norm(pointcloud[:, :3], 2, axis=1)
@@ -157,9 +178,10 @@ class ScanProjection(object):
         self.cached_data['px'] = px
         self.cached_data['py'] = py
 
-        # order in decreasing depth
+        # order in decreasing ranking score
+        ranking = self._compute_ranking(depth, point_scores=point_scores, eps=score_eps)
         indices = np.arange(depth.shape[0])
-        order = np.argsort(depth)[::-1]
+        order = np.argsort(ranking)[::-1]
         depth = depth[order]
         indices = indices[order]
         pointcloud = pointcloud[order]

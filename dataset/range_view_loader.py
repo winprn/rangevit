@@ -22,7 +22,10 @@ import torchvision.transforms as T
 import torchvision.transforms.functional as TF
 from scipy.spatial.ckdtree import cKDTree as kdtree
 
-from .preprocess import augmentor, projection, ClusterMix, InstanceCopy, PolarMix, InstanceCutMix, KNNI
+from .preprocess import (
+    augmentor, projection, ClusterMix, InstanceCopy, PolarMix, InstanceCutMix, KNNI,
+    compute_centerness_scores,
+)
 
 
 class RangeViewLoader(Dataset):
@@ -34,6 +37,7 @@ class RangeViewLoader(Dataset):
         self.data_len = data_len
         self.return_uproj = return_uproj
         self.use_kpconv = use_kpconv
+        self._cap_warned_missing_instances = False
 
         augment_params = augmentor.AugmentParams()
         augment_config = self.config['augmentation']
@@ -121,6 +125,17 @@ class RangeViewLoader(Dataset):
             print(f'Horizontal flip of range projections with p={self.proj_p_hflip}')
 
         projection_config = self.config['sensor']
+        proj_cfg = self.config.get('projection', {})
+        self.projection_ranking = str(proj_cfg.get('ranking', 'depth')).lower()
+        cap_cfg = proj_cfg.get('cap', {})
+        self.cap_enable = bool(cap_cfg.get('enable', self.projection_ranking == 'cap'))
+        self.cap_min_points = int(cap_cfg.get('min_points', 3))
+        self.cap_sigma_xyz = tuple(cap_cfg.get('sigma_xyz', [1.0, 1.0, 1.0]))
+        self.cap_eps = float(cap_cfg.get('eps', 0.01))
+        if self.projection_ranking not in ('depth', 'cap'):
+            raise ValueError(f"projection.ranking must be 'depth' or 'cap', got '{self.projection_ranking}'")
+        if self.cap_enable and self.projection_ranking == 'depth':
+            self.projection_ranking = 'cap'
         self.scan_proj = projection_config.get('scan_proj', False)
         if self.scan_proj:
             print('Use scan-based range projection.')
@@ -177,6 +192,21 @@ class RangeViewLoader(Dataset):
             self.aug_ops = T.Compose([
                 T.CenterCrop((original_image_size[0], original_image_size[1]))
             ])
+
+    def _compute_projection_scores(self, pointcloud, inst_label):
+        if self.projection_ranking != 'cap':
+            return None
+        if inst_label is None:
+            if not self._cap_warned_missing_instances:
+                print('CAP projection requested but instance labels are unavailable after augmentation; falling back to depth projection for this sample.')
+                self._cap_warned_missing_instances = True
+            return None
+        return compute_centerness_scores(
+            pointcloud[:, :3],
+            inst_label,
+            min_points=self.cap_min_points,
+            sigma_xyz=self.cap_sigma_xyz,
+        )
 
     def _maybe_sample_points(self, pointcloud, sem_label=None, inst_label=None):
         if self.point_sampler is None:
@@ -289,7 +319,9 @@ class RangeViewLoader(Dataset):
                 if self.instance_copy is not None:
                     pointcloud, sem_label = self.instance_copy(
                         pointcloud, sem_label, mix_pc, mix_sem, mix_inst)
-        proj_pointcloud, proj_range, proj_idx, proj_mask = self.projection.doProjection(pointcloud)
+        point_scores = self._compute_projection_scores(pointcloud, inst_label)
+        proj_pointcloud, proj_range, proj_idx, proj_mask = self.projection.doProjection(
+            pointcloud, point_scores=point_scores, score_eps=self.cap_eps)
         proj_pointcloud, proj_range, proj_mask = self._apply_knni(
             proj_pointcloud, proj_range, proj_mask, index
         )
@@ -397,7 +429,9 @@ class RangeViewLoader(Dataset):
                 if self.instance_copy is not None:
                     pointcloud, sem_label = self.instance_copy(
                         pointcloud, sem_label, mix_pc, mix_sem, mix_inst)
-        proj_pointcloud, proj_range, proj_idx, proj_mask = self.projection.doProjection(pointcloud)
+        point_scores = self._compute_projection_scores(pointcloud, inst_label)
+        proj_pointcloud, proj_range, proj_idx, proj_mask = self.projection.doProjection(
+            pointcloud, point_scores=point_scores, score_eps=self.cap_eps)
         proj_pointcloud, proj_range, proj_mask = self._apply_knni(
             proj_pointcloud, proj_range, proj_mask, index
         )

@@ -1,0 +1,172 @@
+# General config
+num_workers: 4
+id: "exp_kitti_cap"
+save_path: "save_rangevim_aug_cap"
+
+# MLflow config
+mlflow:
+  enable: true
+  tracking_uri: "http://140.245.117.232:5000" # e.g. 'file:./mlruns' or an HTTP URL
+  experiment_name: "rangevim"
+  run_name: "[train] rangevim_base_aug_cap" # defaults to the CLI-provided id when null
+  nested: false
+  log_checkpoints: false
+  log_code_snapshot: false
+
+# Data config
+data:
+  dataset: "SemanticKitti"
+  n_classes: 20 # 19 + 1(ignored)
+  data_root: "../dataset/SemanticKitti/data_odometry_velodyne/dataset/sequences"
+  has_label: true
+  use_trainval: false
+
+knni:
+  enable: false
+  window_size: 5
+
+projection:
+  ranking: "cap"
+  cap:
+    enable: true
+    min_points: 3
+    sigma_xyz: [1.0, 1.0, 1.0]
+    eps: 0.01
+
+# Train config
+training:
+  val_frequency: 1
+  n_epochs: 70
+  warmup_epochs: 6
+  batch_size: 6
+  batch_size_val: 1
+  lr: 0.0003
+  train_result_frequency: 100
+  loss:
+    focal_loss:
+      type: "focal"
+      gamma: 2.0
+      ignore_index: 0
+      weight: 1.0
+    lovasz_loss:
+      weight: 1.0
+    boundary_loss:
+      weight: 0.0
+    aux_loss:
+      weight: 0.3
+  save_epochs_at: [53, 55, 57]
+
+# Model config
+model:
+  vit_backbone: "tinyvim_base"
+  in_channels: 5
+  patch_size: [2, 2]
+  patch_stride: [2, 2]
+  image_size: [64, 2048]
+  window_size: [64, 2048]
+  window_stride: [64, 2048]
+  original_image_size: [64, 2048]
+  train_full_image: true
+  use_sliding_window: false
+
+# Stem
+conv_stem: "ConvStem"
+stem_base_channels: 32
+D_h: 48
+
+# Decoder
+decoder: "fpn"
+skip_filters: 0
+
+# 3D refiner / post-processing
+point_postproc: "knn"
+knn_search: 13
+knn_k: 5
+knn_sigma: 1.0
+knn_cutoff: 1.0
+
+# Checkpoint model
+checkpoint: null
+pretrained_model: null
+reuse_pos_emb: false
+reuse_patch_emb: false
+pretrained_channel_adaptation: "repeat"
+
+# Range image-level augmentation (applied on GPU batch before forward pass)
+range_aug: true
+use_fp16: true
+
+# Data augmentation config
+augmentation:
+  p_flipx: 0.
+  p_flipy: 0.5
+  p_transx: 0.5
+  trans_xmin: -5
+  trans_xmax: 5
+  p_transy: 0.5
+  trans_ymin: -3
+  trans_ymax: 3
+  p_transz: 0.5
+  trans_zmin: -1
+  trans_zmax: 0.
+  p_rot_roll: 0.5
+  rot_rollmin: -5
+  rot_rollmax: 5
+  p_rot_pitch: 0.5
+  rot_pitchmin: -5
+  rot_pitchmax: 5
+  p_rot_yaw: 0.5
+  rot_yawmin: 5
+  rot_yawmax: -5
+
+adapted_augmentation:
+  use_mapped_labels: true
+  pointsample:
+    enable: false
+    num_points: 120000
+    replace: false
+  polarmix:
+    enable: false
+    prob: 0.5
+    classes: [2, 3, 4, 5, 6, 7, 8]
+  instance_cutmix:
+    enable: false
+    prob: 1.0
+    instance_bank_root: "cache/instance_bank"
+    classes: [2, 3, 4, 5, 6, 7, 8]
+    min_points: 20
+    num_to_add: [0, 2]
+  clustermix:
+    enable: false
+    prob: 0.5
+    vertical_prob: 0.5
+    sector_width: 1.570796
+    height_ratio: 0.5
+  instance_copy:
+    enable: false
+    prob: 0.5
+    classes: [2, 3, 4, 5, 6, 7, 8]
+    max_instances_per_class: 1
+
+sensor:
+  name: "HDL64"
+  type: "spherical"
+  scan_proj: true
+  proj_h: 64
+  proj_w: 2048
+  fov_up: 3.
+  fov_down: -25.
+  fov_left: -180
+  fov_right: 180
+  img_mean:
+    - 12.12
+    - 10.88
+    - 0.23
+    - -1.04
+    - 0.21
+  img_stds:
+    - 12.32
+    - 11.47
+    - 6.91
+    - 0.86
+    - 0.16
