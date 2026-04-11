@@ -244,6 +244,7 @@ def save_bev_image(
     point_size: float = 0.15,
     dpi: int = 300,
     figsize: tuple = (8, 8),
+    bg: str = "white",
 ):
     """Render bird's-eye view (top-down, x-forward, y-left)."""
     x, y = pointcloud[:, 0], pointcloud[:, 1]
@@ -262,8 +263,8 @@ def save_bev_image(
     order = np.argsort(-depth)
 
     fig, ax = plt.subplots(figsize=figsize, dpi=dpi)
-    ax.set_facecolor("white")
-    fig.patch.set_facecolor("white")
+    ax.set_facecolor(bg)
+    fig.patch.set_facecolor(bg)
 
     # In BEV: horizontal = y (left-right), vertical = x (forward)
     ax.scatter(
@@ -280,7 +281,7 @@ def save_bev_image(
     ax.axis("off")
 
     path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(str(path), bbox_inches="tight", pad_inches=0, facecolor="white", dpi=dpi)
+    fig.savefig(str(path), bbox_inches="tight", pad_inches=0, facecolor=bg, dpi=dpi)
     plt.close(fig)
 
 
@@ -293,6 +294,7 @@ def save_bev_diff_image(
     point_size: float = 0.15,
     dpi: int = 300,
     figsize: tuple = (8, 8),
+    bg: str = "white",
 ):
     """Render BEV showing correct (green) vs misclassified (red) points."""
     x, y = pointcloud[:, 0], pointcloud[:, 1]
@@ -322,8 +324,8 @@ def save_bev_diff_image(
     ])
 
     fig, ax = plt.subplots(figsize=figsize, dpi=dpi)
-    ax.set_facecolor("white")
-    fig.patch.set_facecolor("white")
+    ax.set_facecolor(bg)
+    fig.patch.set_facecolor(bg)
 
     ax.scatter(
         y[order], x[order],
@@ -339,7 +341,7 @@ def save_bev_diff_image(
     ax.axis("off")
 
     path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(str(path), bbox_inches="tight", pad_inches=0, facecolor="white", dpi=dpi)
+    fig.savefig(str(path), bbox_inches="tight", pad_inches=0, facecolor=bg, dpi=dpi)
     plt.close(fig)
 
 
@@ -386,6 +388,7 @@ def parse_args():
     p.add_argument("--bev_range", type=float, default=50.0, help="BEV range in metres")
     p.add_argument("--point_size", type=float, default=0.15, help="BEV scatter point size")
     p.add_argument("--dpi", type=int, default=300, help="Output DPI")
+    p.add_argument("--bev_bg", default="white", help="BEV background colour (e.g. white, black)")
     return p.parse_args()
 
 
@@ -491,6 +494,7 @@ def main():
         bev_range=args.bev_range,
         point_size=args.point_size,
         dpi=args.dpi,
+        bg=args.bev_bg,
     )
     save_bev_image(pointcloud, gt_labels_3d,
                    path=output_dir / f"bev_gt_{tag}.png", **bev_kw)
@@ -505,6 +509,7 @@ def main():
         bev_range=args.bev_range,
         point_size=args.point_size,
         dpi=args.dpi,
+        bg=args.bev_bg,
     )
     save_bev_diff_image(pointcloud, gt_labels_3d, pred_a_3d,
                         path=output_dir / f"bev_diff_{args.label_a}_{tag}.png", **diff_kw)
