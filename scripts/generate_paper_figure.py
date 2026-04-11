@@ -64,7 +64,7 @@ CLASS_NAMES = {
     17: "terrain", 18: "pole", 19: "traffic-sign",
 }
 
-DATA_CONFIG_PATH = REPO_ROOT / "dataset" / "semantic_kitti" / "semantic-kitti.yaml"
+DATA_CONFIG_PATH = "./dataset/semantic_kitti/semantic-kitti.yaml"
 
 
 # ---------------------------------------------------------------------------
