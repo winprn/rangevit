@@ -235,48 +235,73 @@ def save_range_image(labels, mask, lmap_inv_lut, color_lut, path: Path):
     imageio.imwrite(str(path), colors.astype(np.uint8))
 
 
-def save_bev_image(
-    pointcloud: np.ndarray,
-    labels: np.ndarray,
-    mapped_color_lut: np.ndarray,
-    path: Path,
-    bev_range: float = 50.0,
-    point_size: float = 0.15,
-    dpi: int = 300,
-    figsize: tuple = (8, 8),
-    bg: str = "white",
-):
-    """Render bird's-eye view (top-down, x-forward, y-left)."""
-    x, y = pointcloud[:, 0], pointcloud[:, 1]
+def _oblique_project(pointcloud, bev_range, tilt_deg, azimuth_deg=45.0):
+    """Oblique parallel projection of 3D points to 2D screen coords.
+
+    Two-step projection:
+      1. Rotate the ground plane by azimuth_deg around the z-axis.
+      2. Tilt the camera by tilt_deg from vertical.
+
+    Args:
+        pointcloud: [N, 4+] (x, y, z, ...)
+        bev_range: spatial range filter in metres (applied on x, y before rotation)
+        tilt_deg: elevation tilt in degrees (0=top-down, 45=angled, 90=side).
+        azimuth_deg: rotation around z-axis in degrees (0=look from behind,
+            45=look from front-left corner, like isometric view).
+
+    Returns:
+        u, v: screen coordinates (u=horizontal, v=vertical)
+        depth: into-screen depth for sorting
+        valid_mask: boolean mask of points within bev_range
+    """
+    x, y, z = pointcloud[:, 0], pointcloud[:, 1], pointcloud[:, 2]
     valid = (
         (x >= -bev_range) & (x <= bev_range) &
         (y >= -bev_range) & (y <= bev_range)
     )
-    x, y, lbl = x[valid], y[valid], labels[valid]
 
-    # Colour per point
-    lbl_clipped = np.clip(lbl, 0, 19)
-    colors = mapped_color_lut[lbl_clipped].astype(np.float32) / 255.0
+    # Step 1: rotate ground plane (x, y) by azimuth
+    az = np.deg2rad(azimuth_deg)
+    cos_a, sin_a = np.cos(az), np.sin(az)
+    xr = x * cos_a - y * sin_a
+    yr = x * sin_a + y * cos_a
 
-    # Render far points first so near objects paint on top
-    depth = np.sqrt(x ** 2 + y ** 2)
-    order = np.argsort(-depth)
+    # Step 2: tilt camera (elevation)
+    tilt = np.deg2rad(tilt_deg)
+    cos_t, sin_t = np.cos(tilt), np.sin(tilt)
 
+    # Screen: u = rotated-y (horizontal), v = rotated-x * sin(tilt) + z * cos(tilt)
+    u = yr
+    v = xr * sin_t + z * cos_t
+    depth = xr * cos_t - z * sin_t
+
+    return u, v, depth, valid
+
+
+def _render_bev(u, v, depth, colors, order, path, bev_range, tilt_deg,
+                point_size, dpi, figsize, bg):
+    """Shared rendering logic for BEV and BEV-diff images."""
     fig, ax = plt.subplots(figsize=figsize, dpi=dpi)
     ax.set_facecolor(bg)
     fig.patch.set_facecolor(bg)
 
-    # In BEV: horizontal = y (left-right), vertical = x (forward)
     ax.scatter(
-        y[order], x[order],
+        u[order], v[order],
         c=colors[order],
         s=point_size,
         marker=".",
         edgecolors="none",
         rasterized=True,
     )
-    ax.set_xlim(bev_range, -bev_range)   # y: right to left
-    ax.set_ylim(-bev_range, bev_range)   # x: behind to forward
+
+    # Horizontal limits: y right-to-left
+    ax.set_xlim(bev_range, -bev_range)
+    # Vertical limits: auto-fit projected range
+    if tilt_deg == 0:
+        ax.set_ylim(-bev_range, bev_range)
+    else:
+        pad = bev_range * 0.05
+        ax.set_ylim(v[order].min() - pad, v[order].max() + pad)
     ax.set_aspect("equal")
     ax.axis("off")
 
@@ -285,63 +310,112 @@ def save_bev_image(
     plt.close(fig)
 
 
+def save_bev_image(
+    pointcloud: np.ndarray,
+    labels: np.ndarray,
+    mapped_color_lut: np.ndarray,
+    path: Path,
+    bev_range: float = 50.0,
+    tilt_deg: float = 0.0,
+    azimuth_deg: float = 45.0,
+    point_size: float = 0.15,
+    dpi: int = 300,
+    figsize: tuple = (8, 8),
+    bg: str = "white",
+):
+    """Render bird's-eye view with configurable tilt and azimuth."""
+    u, v, depth, valid = _oblique_project(pointcloud, bev_range, tilt_deg, azimuth_deg)
+    u, v, depth = u[valid], v[valid], depth[valid]
+    lbl = labels[valid]
+
+    lbl_clipped = np.clip(lbl, 0, 19)
+    colors = mapped_color_lut[lbl_clipped].astype(np.float32) / 255.0
+
+    # Far points first so near objects paint on top
+    order = np.argsort(depth)
+
+    _render_bev(u, v, depth, colors, order, path, bev_range, tilt_deg,
+                point_size, dpi, figsize, bg)
+
+
 def save_bev_diff_image(
     pointcloud: np.ndarray,
     gt_labels: np.ndarray,
     pred_labels: np.ndarray,
     path: Path,
     bev_range: float = 50.0,
+    tilt_deg: float = 0.0,
+    azimuth_deg: float = 45.0,
     point_size: float = 0.15,
     dpi: int = 300,
     figsize: tuple = (8, 8),
     bg: str = "white",
 ):
-    """Render BEV showing correct (green) vs misclassified (red) points."""
-    x, y = pointcloud[:, 0], pointcloud[:, 1]
-    valid = (
-        (x >= -bev_range) & (x <= bev_range) &
-        (y >= -bev_range) & (y <= bev_range)
-    )
-    x, y = x[valid], y[valid]
+    """Render BEV diff: correct (green), wrong (red), unlabeled (light gray)."""
+    u, v, depth, valid = _oblique_project(pointcloud, bev_range, tilt_deg, azimuth_deg)
+    u, v, depth = u[valid], v[valid], depth[valid]
     gt_v, pred_v = gt_labels[valid], pred_labels[valid]
 
-    # Skip unlabeled (class 0) for diff
     labeled = gt_v != 0
     correct = labeled & (gt_v == pred_v)
     wrong = labeled & (gt_v != pred_v)
     unlabeled_mask = ~labeled
 
-    # Assign colours: green=correct, red=wrong, light gray=unlabeled
-    colors = np.full((x.shape[0], 3), 0.85)  # light gray default
-    colors[correct] = [0.4, 0.8, 0.4]   # green
-    colors[wrong] = [0.9, 0.2, 0.2]     # red
+    colors = np.full((u.shape[0], 3), 0.85)
+    colors[correct] = [0.4, 0.8, 0.4]
+    colors[wrong] = [0.9, 0.2, 0.2]
 
-    # Draw order: unlabeled first, correct, then wrong on top
+    # Unlabeled first, correct, then wrong on top
     order = np.concatenate([
         np.where(unlabeled_mask)[0],
         np.where(correct)[0],
         np.where(wrong)[0],
     ])
 
+    _render_bev(u, v, depth, colors, order, path, bev_range, tilt_deg,
+                point_size, dpi, figsize, bg)
+
+
+def save_bev_raw(
+    pointcloud: np.ndarray,
+    path: Path,
+    bev_range: float = 50.0,
+    tilt_deg: float = 0.0,
+    azimuth_deg: float = 45.0,
+    point_size: float = 0.15,
+    dpi: int = 300,
+    figsize: tuple = (8, 8),
+):
+    """Render raw point cloud (no segmentation) — black points on white."""
+    u, v, depth, valid = _oblique_project(pointcloud, bev_range, tilt_deg, azimuth_deg)
+    u, v, depth = u[valid], v[valid], depth[valid]
+
+    order = np.argsort(depth)
+
     fig, ax = plt.subplots(figsize=figsize, dpi=dpi)
-    ax.set_facecolor(bg)
-    fig.patch.set_facecolor(bg)
+    ax.set_facecolor("white")
+    fig.patch.set_facecolor("white")
 
     ax.scatter(
-        y[order], x[order],
-        c=colors[order],
+        u[order], v[order],
+        c="black",
         s=point_size,
         marker=".",
         edgecolors="none",
         rasterized=True,
     )
+
     ax.set_xlim(bev_range, -bev_range)
-    ax.set_ylim(-bev_range, bev_range)
+    if tilt_deg == 0:
+        ax.set_ylim(-bev_range, bev_range)
+    else:
+        pad = bev_range * 0.05
+        ax.set_ylim(v[order].min() - pad, v[order].max() + pad)
     ax.set_aspect("equal")
     ax.axis("off")
 
     path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(str(path), bbox_inches="tight", pad_inches=0, facecolor=bg, dpi=dpi)
+    fig.savefig(str(path), bbox_inches="tight", pad_inches=0, facecolor="white", dpi=dpi)
     plt.close(fig)
 
 
@@ -386,6 +460,10 @@ def parse_args():
     p.add_argument("--knn", action="store_true", help="Apply KNN post-processing to 3D predictions")
     p.add_argument("--output_dir", default="artifact/paper_figures", help="Output directory")
     p.add_argument("--bev_range", type=float, default=50.0, help="BEV range in metres")
+    p.add_argument("--bev_tilt", type=float, default=45.0,
+                   help="BEV elevation tilt in degrees (0=straight down, 45=angled, 90=side)")
+    p.add_argument("--bev_azimuth", type=float, default=45.0,
+                   help="BEV azimuth rotation in degrees (0=from behind, 45=isometric corner)")
     p.add_argument("--point_size", type=float, default=0.15, help="BEV scatter point size")
     p.add_argument("--dpi", type=int, default=300, help="Output DPI")
     p.add_argument("--bev_bg", default="white", help="BEV background colour (e.g. white, black)")
@@ -487,11 +565,20 @@ def main():
     save_range_image(pred_b_2d, mask_2d, lmap_inv_lut, color_lut,
                      output_dir / f"range_pred_{args.label_b}_{tag}.png")
 
+    # ---- Save raw BEV (no segmentation) ----
+    print("Saving raw BEV...")
+    save_bev_raw(pointcloud, path=output_dir / f"bev_raw_{tag}.png",
+                 bev_range=args.bev_range, tilt_deg=args.bev_tilt,
+                 azimuth_deg=args.bev_azimuth,
+                 point_size=args.point_size, dpi=args.dpi)
+
     # ---- Save BEV views ----
     print("Saving BEV views...")
     bev_kw = dict(
         mapped_color_lut=mapped_color_lut,
         bev_range=args.bev_range,
+        tilt_deg=args.bev_tilt,
+        azimuth_deg=args.bev_azimuth,
         point_size=args.point_size,
         dpi=args.dpi,
         bg=args.bev_bg,
@@ -507,6 +594,8 @@ def main():
     print("Saving BEV diff views...")
     diff_kw = dict(
         bev_range=args.bev_range,
+        tilt_deg=args.bev_tilt,
+        azimuth_deg=args.bev_azimuth,
         point_size=args.point_size,
         dpi=args.dpi,
         bg=args.bev_bg,
@@ -546,6 +635,7 @@ def main():
     print(f"  range_gt_{tag}.png")
     print(f"  range_pred_{args.label_a}_{tag}.png")
     print(f"  range_pred_{args.label_b}_{tag}.png")
+    print(f"  bev_raw_{tag}.png")
     print(f"  bev_gt_{tag}.png")
     print(f"  bev_pred_{args.label_a}_{tag}.png")
     print(f"  bev_pred_{args.label_b}_{tag}.png")
