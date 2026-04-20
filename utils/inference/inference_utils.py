@@ -26,7 +26,27 @@ def resize(im, smaller_size):
     return im_res
 
 
-def sliding_window(im, flip, window_size, window_stride):
+def apply_tta_transform(im, meta):
+    shift = int(meta.get('shift', 0))
+    flip = bool(meta.get('flip', False))
+    if shift != 0:
+        im = torch.roll(im, shifts=shift, dims=3)
+    if flip:
+        im = torch.flip(im, (3,))
+    return im
+
+
+def restore_tta_transform(logit, meta):
+    shift = int(meta.get('shift', 0))
+    flip = bool(meta.get('flip', False))
+    if flip:
+        logit = torch.flip(logit, (2,))
+    if shift != 0:
+        logit = torch.roll(logit, shifts=-shift, dims=2)
+    return logit
+
+
+def sliding_window(im, meta, window_size, window_stride):
     B, C, H, W = im.shape
     ws_h, ws_w = window_size
     
@@ -40,7 +60,7 @@ def sliding_window(im, flip, window_size, window_stride):
             window = im[:, :, ha : ha + ws_h, wa : wa + ws_w]
             windows['crop'].append(window)
             windows['anchors'].append((ha, wa))
-    windows['flip'] = flip
+    windows['meta'] = meta
     windows['shape'] = (H, W)
     return windows
 
@@ -51,7 +71,7 @@ def merge_windows(windows, window_size, ori_shape):
     anchors = windows['anchors']
     C = im_windows[0].shape[0]
     H, W = windows['shape']
-    flip = windows['flip']
+    meta = windows.get('meta', {'flip': False, 'shift': 0})
 
     logit = torch.zeros((C, H, W), device=im_windows.device)
     count = torch.zeros((1, H, W), device=im_windows.device)
@@ -63,10 +83,7 @@ def merge_windows(windows, window_size, ori_shape):
         logit.unsqueeze(0),
         ori_shape,
         mode='bilinear')[0]
-    
-    if flip:
-        logit = torch.flip(logit, (2,))
-    return logit
+    return restore_tta_transform(logit, meta)
 
 
 def inference(
@@ -91,11 +108,11 @@ def inference(
 
     seg_map = None
     for im, im_metas in zip(ims, ims_metas):
-        flip = im_metas['flip']
+        im_in = apply_tta_transform(im, im_metas)
 
         if use_sliding_window:
-            im = resize(im, smaller_size)
-            windows = sliding_window(im, flip, window_size, window_stride)
+            im_in = resize(im_in, smaller_size)
+            windows = sliding_window(im_in, im_metas, window_size, window_stride)
             crops = torch.stack(windows.pop('crop'))[:, 0] # shape = [n_windows, in_channels, wsize_h, wsize_w]
             
             with torch.no_grad():
@@ -106,14 +123,12 @@ def inference(
             windows['seg_maps'] = seg_maps
             im_seg_map = merge_windows(windows, window_size, ori_shape) # shape = [n_classes or d_decoder, ori_shape[0], ori_shape[1]]
         else:
-            im_in = torch.flip(im, (3,)) if flip else im
             with torch.no_grad():
                 if use_kpconv:
                     seg_maps = model.forward_2d_features(im_in) # shape: [B, d_decoder, H, W]
                 else:
                     seg_maps = model.forward(im_in) # shape: [B, n_classes, H, W]
-            seg_maps = torch.flip(seg_maps, (3,)) if flip else seg_maps
-            im_seg_map = seg_maps.squeeze(0)
+            im_seg_map = restore_tta_transform(seg_maps.squeeze(0), im_metas)
             if im_seg_map.shape[-2:] != ori_shape:
                 im_seg_map = F.interpolate(
                     im_seg_map.unsqueeze(0), size=ori_shape,

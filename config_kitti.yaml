@@ -48,7 +48,7 @@ training:
       weight: 0.3
   # Optional manual class weights (length must equal n_classes). Leave null to use dataset-derived weights.
   # class_weights: [0.0, 1.0, ...]
-  save_epochs_at: [30, 33, 35, 37, 39, 40, 41, 43, 45, 47, 50, 55] # 1-based epochs to save checkpoints; must be < n_epochs. Leave empty to save every epoch.
+  save_epochs_at: [47, 50, 55, 57] # 1-based epochs to save checkpoints; must be < n_epochs. Leave empty to save every epoch.
 
 # Model config
 model:

@@ -283,6 +283,40 @@ class Trainer(object):
             return main, aux_outputs
         return output, []
 
+    def _build_tta_metas(self, input_feature):
+        tta_mode = str(getattr(self.settings, 'tta', 'none')).lower()
+        if not (getattr(self.settings, 'val_only', False)):
+            return [dict(flip=False, shift=0)]
+        width = int(input_feature.shape[-1])
+
+        def unique_shifts(values):
+            seen = set()
+            ordered = []
+            for val in values:
+                shift = int(val) % max(width, 1)
+                if shift > width // 2:
+                    shift -= width
+                if shift not in seen:
+                    seen.add(shift)
+                    ordered.append(shift)
+            return ordered
+
+        shifts = [0]
+        flips = [False]
+        if tta_mode == 'flip':
+            flips = [False, True]
+        elif tta_mode == 'shift':
+            shifts = unique_shifts([0, width // 4, width // 2, -width // 4])
+        elif tta_mode == 'strong':
+            shifts = unique_shifts([0, width // 4, width // 2, -width // 4])
+            flips = [False, True]
+
+        metas = []
+        for shift in shifts:
+            for flip in flips:
+                metas.append(dict(flip=flip, shift=shift))
+        return metas
+
     def compute_losses(self, output, output_softmax, label, mask, aux_outputs=None, aux_loss_weight=0.0):
         loss_lovasz = self.criterion['lovasz'](output_softmax, label)
         if torch.is_tensor(loss_lovasz) and loss_lovasz.ndim > 0:
@@ -437,12 +471,13 @@ class Trainer(object):
                     assert input_feature.shape[0] == 1 # validation batch size has to be 1
 
                     # Validation
-                    im_meta = dict(flip=False)
+                    ims_metas = self._build_tta_metas(input_feature)
+                    ims = [input_feature for _ in ims_metas]
                     with torch.cuda.amp.autocast(self.fp16_scaler is not None):
                         lidar_pred = inference(
                             model_without_ddp.rangevit,
-                            [input_feature],
-                            [im_meta],
+                            ims,
+                            ims_metas,
                             ori_shape=input_feature.shape[2:4],
                             window_size=self.settings.window_size,
                             window_stride=self.settings.window_stride,
@@ -817,12 +852,13 @@ class Trainer(object):
                     assert input_feature.shape[0] == 1 # validation batch size has to be 1
 
                     # Validation
-                    im_meta = dict(flip=False)
+                    ims_metas = self._build_tta_metas(input_feature)
+                    ims = [input_feature for _ in ims_metas]
                     with torch.cuda.amp.autocast(self.fp16_scaler is not None):
                         output_features2d = inference(
                             model_without_ddp.rangevit,
-                            [input_feature],
-                            [im_meta],
+                            ims,
+                            ims_metas,
                             ori_shape=input_feature.shape[2:4],
                             window_size=self.settings.window_size,
                             window_stride=self.settings.window_stride,

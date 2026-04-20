@@ -13,3 +13,7 @@ artifact/
 
 segmentation/
 cache/
+
+Paper/
+checkpoint/
+*.pth

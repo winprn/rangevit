@@ -47,6 +47,7 @@ class Option(object):
 
         # Train config
         self.val_only = False
+        self.tta = 'none'
         self.val_frequency = train_cfg.get('val_frequency', self.config.get('val_frequency', 10))
         self.test_split = False
         self.n_epochs = train_cfg.get('n_epochs', self.config.get('n_epochs', None))  # number of total epochs

@@ -1,5 +1,5 @@
 # python3 tools/profile_metrics.py config_kitti_tinyvim.yaml --device cuda --amp --validation_style
-# python3 tools/profile_metrics.py config_kitti_trainval.yaml --device cuda --amp --validation_style --profile_kpconv
+# CUDA_VISIBLE_DEVICES=6 python tools/profile_metrics.py config_kitti_trainval.yaml --device cuda --amp --validation_style --profile_kpconv --save_path tmp_profile
 import argparse
 import contextlib
 import importlib.util

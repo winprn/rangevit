@@ -404,6 +404,13 @@ if __name__ == '__main__':
     parser.add_argument('--log_frequency', type=int, default=100, help='logging frequency')
     parser.add_argument('--seed', type=int, default=1, help='random seed')
     parser.add_argument('--full', action='store_true', help='run full experiment: training followed by inference with best checkpoint')
+    parser.add_argument(
+        '--tta',
+        nargs='?',
+        const='strong',
+        default='none',
+        choices=['none', 'flip', 'shift', 'strong'],
+        help='enable inference-only TTA; plain --tta means the strongest preset')
 
     args = parser.parse_args()
     settings = Option(args.config_path, args)
@@ -433,6 +440,7 @@ if __name__ == '__main__':
     settings.log_frequency = args.log_frequency
     settings.num_workers = args.num_workers
     settings.seed = args.seed
+    settings.tta = args.tta
 
     # No patch and positional embeddings are loaded when training from scratch.
     if settings.pretrained_model is None:
@@ -487,6 +495,7 @@ if __name__ == '__main__':
         settings_infer.log_frequency = args.log_frequency
         settings_infer.num_workers = args.num_workers
         settings_infer.seed = args.seed
+        settings_infer.tta = args.tta
         settings_infer.checkpoint = checkpoint_path
         settings_infer.pretrained_model = None
         settings_infer.finetune_pretrained_model = False
