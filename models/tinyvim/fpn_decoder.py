@@ -145,6 +145,14 @@ class TinyViMFPNGatedDecoder(nn.Module):
         self.cls_seg = nn.Conv2d(head_channels, n_cls, kernel_size=1)
 
         self.apply(init_weights)
+        self._init_gate()
+
+    def _init_gate(self):
+        # Start from uniform scale fusion. This keeps the gated decoder close to
+        # the plain FPN sum at initialization and avoids early saturated gates.
+        final_gate = self.gate[-1]
+        nn.init.zeros_(final_gate.weight)
+        nn.init.zeros_(final_gate.bias)
 
     @torch.jit.ignore
     def no_weight_decay(self):
@@ -175,9 +183,11 @@ class TinyViMFPNGatedDecoder(nn.Module):
             head_feats.append(h)
 
         cat = torch.cat(head_feats, dim=1)
-        gates = torch.softmax(self.gate(cat), dim=1)
+        with torch.cuda.amp.autocast(enabled=False):
+            gate_logits = self.gate(cat.float()).clamp(-30.0, 30.0)
+        gates = torch.softmax(gate_logits, dim=1).to(cat.dtype)
 
-        fused = 0.0
+        fused = torch.zeros_like(head_feats[0])
         for i, feat in enumerate(head_feats):
             fused = fused + gates[:, i:i + 1] * feat
 
@@ -270,12 +280,21 @@ class TinyViMFPNGatedDetailDecoder(nn.Module):
         )
         self.detail_refine = DetailRefineBlock(detail_channels)
         self.detail_to_main = nn.Conv2d(detail_channels, head_channels, kernel_size=1, bias=False)
+        self.detail_scale = nn.Parameter(torch.zeros(1))
 
         self.fuse_conv = nn.Conv2d(head_channels, head_channels, kernel_size=3, padding=1)
         self.dropout = nn.Dropout2d(p=dropout_ratio) if dropout_ratio > 0 else nn.Identity()
         self.cls_seg = nn.Conv2d(head_channels, n_cls, kernel_size=1)
 
         self.apply(init_weights)
+        self._init_gate()
+
+    def _init_gate(self):
+        # Start from uniform scale fusion. The detail branch is also scaled from
+        # zero, so this decoder initially behaves like the stable gated variant.
+        final_gate = self.gate[-1]
+        nn.init.zeros_(final_gate.weight)
+        nn.init.zeros_(final_gate.bias)
 
     @torch.jit.ignore
     def no_weight_decay(self):
@@ -306,7 +325,9 @@ class TinyViMFPNGatedDetailDecoder(nn.Module):
             head_feats.append(h)
 
         cat = torch.cat(head_feats, dim=1)
-        gates = torch.softmax(self.gate(cat), dim=1)
+        with torch.cuda.amp.autocast(enabled=False):
+            gate_logits = self.gate(cat.float()).clamp(-30.0, 30.0)
+        gates = torch.softmax(gate_logits, dim=1).to(cat.dtype)
 
         fused_main = torch.zeros_like(head_feats[0])
         for i, feat in enumerate(head_feats):
@@ -321,7 +342,7 @@ class TinyViMFPNGatedDetailDecoder(nn.Module):
         detail = detail + self.detail_refine(detail)
         detail = self.detail_to_main(detail)
 
-        fused = fused_main + detail
+        fused = fused_main + self.detail_scale.to(detail.dtype) * detail
         fused = self.fuse_conv(fused)
         fused = self.dropout(fused)
 
