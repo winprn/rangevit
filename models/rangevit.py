@@ -27,7 +27,14 @@ from .rangevit_kpconv import RangeViT_KPConv, KPClassifier
 from .swin_transformer_v2 import SwinTransformerV2, create_swin_v2
 from .tinyvim_adapter import TinyViMAdapter
 from .metaformer_adapter import MetaFormerAdapter
-from .tinyvim.fpn_decoder import TinyViMFPNDecoder, TinyViMFPNGatedDecoder, TinyViMFPNGatedDetailDecoder
+from .tinyvim.fpn_decoder import (
+    TinyViMFPNDecoder,
+    TinyViMFPNGatedDecoder,
+    TinyViMFPNGatedDetailDecoder,
+    TinyViMFPNResidualDecoder,
+    TinyViMFPNCrossAttnDecoder,
+    TinyViMFPNResidualCrossAttnDecoder,
+)
 from .tinyvim.fuse_aux_decoder import TinyViMFuseAuxDecoder
 
 
@@ -202,6 +209,36 @@ def create_decoder(encoder, decoder_cfg):
             detail_channels=decoder_cfg.get('detail_channels', 64),
             dropout_ratio=decoder_cfg.get('fpn_dropout', 0.1),
         )
+    elif name == 'fpn_residual':
+        if not isinstance(encoder, TinyViMAdapter):
+            raise ValueError('fpn_residual decoder is only supported for TinyViM backbones.')
+        decoder = TinyViMFPNResidualDecoder(
+            in_channels=encoder.embed_dims,
+            n_cls=decoder_cfg['n_cls'],
+            out_channels=decoder_cfg.get('fpn_out_channels', 256),
+            head_channels=decoder_cfg.get('fpn_head_channels', 128),
+            dropout_ratio=decoder_cfg.get('fpn_dropout', 0.1),
+        )
+    elif name == 'fpn_cross_attn':
+        if not isinstance(encoder, TinyViMAdapter):
+            raise ValueError('fpn_cross_attn decoder is only supported for TinyViM backbones.')
+        decoder = TinyViMFPNCrossAttnDecoder(
+            in_channels=encoder.embed_dims,
+            n_cls=decoder_cfg['n_cls'],
+            out_channels=decoder_cfg.get('fpn_out_channels', 256),
+            head_channels=decoder_cfg.get('fpn_head_channels', 128),
+            dropout_ratio=decoder_cfg.get('fpn_dropout', 0.1),
+        )
+    elif name == 'fpn_residual_cross_attn':
+        if not isinstance(encoder, TinyViMAdapter):
+            raise ValueError('fpn_residual_cross_attn decoder is only supported for TinyViM backbones.')
+        decoder = TinyViMFPNResidualCrossAttnDecoder(
+            in_channels=encoder.embed_dims,
+            n_cls=decoder_cfg['n_cls'],
+            out_channels=decoder_cfg.get('fpn_out_channels', 256),
+            head_channels=decoder_cfg.get('fpn_head_channels', 128),
+            dropout_ratio=decoder_cfg.get('fpn_dropout', 0.1),
+        )
     elif name == 'tinyvim_fuse_aux':
         if not isinstance(encoder, TinyViMAdapter):
             raise ValueError('tinyvim_fuse_aux decoder is only supported for TinyViM backbones.')
@@ -232,7 +269,7 @@ def create_rangevit(model_cfg, use_kpconv=False):
         # For TinyViM, we pass the full config or specific args
         # Since TinyViMAdapter expects 'backbone_name' and handles capacity internally
         model_cfg['backbone_name'] = backbone
-        if decoder_cfg.get('name') in ('fpn', 'fpn_gated', 'fpn_gated_detail', 'tinyvim_fuse_aux'):
+        if decoder_cfg.get('name') in ('fpn', 'fpn_gated', 'fpn_gated_detail', 'fpn_residual', 'fpn_cross_attn', 'fpn_residual_cross_attn', 'tinyvim_fuse_aux'):
             model_cfg['use_fpn_decoder'] = True
         # Tell adapter whether we're loading pretrained stem weights
         model_cfg['load_pretrained_stem'] = (model_cfg.get('pretrained_path') is not None)
@@ -470,6 +507,30 @@ class RangeViT(nn.Module):
                 'fpn_dropout': fpn_dropout,
                 'detail_channels': 64,
                 # Needed for KPConv head channel size; decoder returns head_channels when return_features=True.
+                'd_decoder': fpn_head_channels,
+            }
+        elif decoder == 'fpn_residual':
+            decoder_cfg = {
+                'n_cls': n_cls, 'name': 'fpn_residual',
+                'fpn_out_channels': fpn_out_channels,
+                'fpn_head_channels': fpn_head_channels,
+                'fpn_dropout': fpn_dropout,
+                'd_decoder': fpn_head_channels,
+            }
+        elif decoder == 'fpn_cross_attn':
+            decoder_cfg = {
+                'n_cls': n_cls, 'name': 'fpn_cross_attn',
+                'fpn_out_channels': fpn_out_channels,
+                'fpn_head_channels': fpn_head_channels,
+                'fpn_dropout': fpn_dropout,
+                'd_decoder': fpn_head_channels,
+            }
+        elif decoder == 'fpn_residual_cross_attn':
+            decoder_cfg = {
+                'n_cls': n_cls, 'name': 'fpn_residual_cross_attn',
+                'fpn_out_channels': fpn_out_channels,
+                'fpn_head_channels': fpn_head_channels,
+                'fpn_dropout': fpn_dropout,
                 'd_decoder': fpn_head_channels,
             }
         elif decoder == 'tinyvim_fuse_aux':

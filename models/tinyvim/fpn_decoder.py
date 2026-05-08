@@ -205,6 +205,474 @@ class TinyViMFPNGatedDecoder(nn.Module):
         return logits
 
 
+# ============================================================
+#  DECODER VARIANT 1: Cross-Stage Residual
+# ============================================================
+class TinyViMFPNResidualDecoder(nn.Module):
+    """
+    TinyViMFPNDecoder + Cross-Stage Residual Connection.
+
+    Besides the FPN top-down pathway (lateral → top-down add → FPN conv → head conv → gated fusion),
+    we add a DIRECT skip path from each raw encoder stage to the final fused output.
+    This improves gradient flow and preserves fine-grained details from shallow stages.
+
+    Architecture:
+        S0 ──lateral──► FPN Conv ──► Head Conv ──┐
+        S1 ──lateral──► FPN Conv ──► Head Conv ──┼──► GATED FUSION ──► fused_main
+        S2 ──lateral──► FPN Conv ──► Head Conv ──┤
+        S3 ──lateral──► FPN Conv ──► Head Conv ──┘
+
+        S0 ──skip_proj──► skip_fused
+        S1 ──skip_proj──► interpolate ──┬── skip_fused
+        S2 ──skip_proj──► interpolate ──┤
+        S3 ──skip_proj──► interpolate ──┘
+
+        final = fused_main + α * skip_fused   (α init = 0 → starts as baseline)
+    """
+
+    def __init__(
+        self,
+        in_channels,
+        n_cls,
+        out_channels=256,
+        head_channels=128,
+        dropout_ratio=0.1,
+    ):
+        super().__init__()
+
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.head_channels = head_channels
+        self.n_cls = n_cls
+
+        # Standard FPN pathway
+        self.lateral_convs = nn.ModuleList([
+            nn.Conv2d(ch, out_channels, kernel_size=1) for ch in in_channels
+        ])
+        self.fpn_convs = nn.ModuleList([
+            nn.Conv2d(
+                out_channels,
+                out_channels,
+                kernel_size=(1, 5) if i >= 2 else 3,
+                padding=(0, 2) if i >= 2 else 1,
+            )
+            for i, _ in enumerate(in_channels)
+        ])
+        self.head_convs = nn.ModuleList([
+            nn.Conv2d(
+                out_channels,
+                head_channels,
+                kernel_size=(1, 5) if i >= 2 else 3,
+                padding=(0, 2) if i >= 2 else 1,
+            )
+            for i, _ in enumerate(in_channels)
+        ])
+        self.gate = nn.Sequential(
+            nn.Conv2d(len(in_channels) * head_channels, head_channels, kernel_size=1, bias=False),
+            nn.BatchNorm2d(head_channels),
+            nn.GELU(),
+            nn.Conv2d(head_channels, len(in_channels), kernel_size=1, bias=True),
+        )
+        # Cross-stage residual: direct projection from raw encoder features
+        self.skip_proj = nn.ModuleList([
+            nn.Conv2d(ch, head_channels, kernel_size=1) for ch in in_channels
+        ])
+        self.skip_alpha = nn.Parameter(torch.zeros(1))
+
+        self.fuse_conv = nn.Conv2d(head_channels, head_channels, kernel_size=3, padding=1)
+        self.dropout = nn.Dropout2d(p=dropout_ratio) if dropout_ratio > 0 else nn.Identity()
+        self.cls_seg = nn.Conv2d(head_channels, n_cls, kernel_size=1)
+
+        self.apply(init_weights)
+        self._init_gate()
+
+    def _init_gate(self):
+        final_gate = self.gate[-1]
+        nn.init.zeros_(final_gate.weight)
+        nn.init.zeros_(final_gate.bias)
+
+    @torch.jit.ignore
+    def no_weight_decay(self):
+        return set()
+
+    def forward(self, x, im_size, skip=None, return_features=False):
+        if not isinstance(skip, (list, tuple)):
+            raise ValueError('TinyViMFPNResidualDecoder expects a list of feature maps in skip.')
+
+        feats = skip
+        if len(feats) != len(self.in_channels):
+            raise ValueError('Number of feature maps does not match in_channels.')
+
+        # ── Standard FPN pathway ──────────────────────────────
+        laterals = [conv(feat) for conv, feat in zip(self.lateral_convs, feats)]
+
+        for i in range(len(laterals) - 1, 0, -1):
+            up = F.interpolate(laterals[i], size=laterals[i - 1].shape[-2:],
+                               mode='bilinear', align_corners=False)
+            laterals[i - 1] = laterals[i - 1] + up
+
+        outs = [conv(lat) for conv, lat in zip(self.fpn_convs, laterals)]
+
+        head_feats = []
+        target_size = outs[0].shape[-2:]
+        for i, out in enumerate(outs):
+            h = self.head_convs[i](out)
+            if i > 0:
+                h = F.interpolate(h, size=target_size, mode='bilinear', align_corners=False)
+            head_feats.append(h)
+
+        # Gated fusion (same as FPN_Gated)
+        cat = torch.cat(head_feats, dim=1)
+        with torch.cuda.amp.autocast(enabled=False):
+            gate_logits = self.gate(cat.float()).clamp(-30.0, 30.0)
+        gates = torch.softmax(gate_logits, dim=1).to(cat.dtype)
+
+        fused_main = torch.zeros_like(head_feats[0])
+        for i, feat in enumerate(head_feats):
+            fused_main = fused_main + gates[:, i:i + 1] * feat
+
+        # ── Cross-stage residual ───────────────────────────────
+        skip_fused = torch.zeros(head_feats[0].shape, device=head_feats[0].device, dtype=head_feats[0].dtype)
+        for i, (feat, proj) in enumerate(zip(feats, self.skip_proj)):
+            h = proj(feat)
+            if i > 0:
+                h = F.interpolate(h, size=target_size, mode='bilinear', align_corners=False)
+            skip_fused = skip_fused + h
+
+        fused = fused_main + self.skip_alpha.to(fused_main.dtype) * skip_fused
+        fused = self.fuse_conv(fused)
+        fused = self.dropout(fused)
+
+        if return_features:
+            if im_size is not None and fused.shape[-2:] != im_size:
+                fused = F.interpolate(fused, size=im_size, mode='bilinear', align_corners=False)
+            return fused
+
+        logits = self.cls_seg(fused)
+        if im_size is not None and logits.shape[-2:] != im_size:
+            logits = F.interpolate(logits, size=im_size, mode='bilinear', align_corners=False)
+        return logits
+
+
+# ============================================================
+#  DECODER VARIANT 2: Cross-Attention Gate
+# ============================================================
+class CrossAttentionGate(nn.Module):
+    """
+    Memory-efficient gate using spatially-downsampled attention.
+
+    Problem: full attention on 64×2048 = 131K×131K matrix ≈ 272 GB (OOM).
+    Solution: downsample spatially by 4× (to 16×512) before attention,
+    then upsample gate values back to full resolution.
+
+    This reduces attention matrix from 131K×131K → 8K×8K ≈ 0.5 GB.
+
+    Attention is applied over the SPATIAL dimension (H×W positions),
+    NOT the channel dimension. This gives each pixel a global receptive field
+    so it can decide "this pixel is on an edge → use S0" vs "flat → use S3".
+    """
+
+    def __init__(self, in_channels, num_heads=4, downsample_ratio=4):
+        super().__init__()
+        self.num_heads = num_heads
+        self.head_dim = in_channels // num_heads
+        self.scale = self.head_dim ** -0.5
+        self.downsample_ratio = downsample_ratio
+
+        self.qkv = nn.Sequential(
+            nn.Conv2d(in_channels, in_channels * 3, 1, bias=False),
+            nn.BatchNorm2d(in_channels * 3),
+        )
+        # Gate prediction on downsampled spatial resolution
+        self.proj = nn.Conv2d(in_channels, 4, 1)  # 4 = num_stages
+
+    def forward(self, x):
+        B, C, H, W = x.shape
+
+        # Downsample spatially by avg_pool to reduce attention matrix size
+        ds_h, ds_w = H // self.downsample_ratio, W // self.downsample_ratio
+        x_ds = F.adaptive_avg_pool2d(x, (ds_h, ds_w))  # [B, C, H/4, W/4]
+
+        qkv = self.qkv(x_ds)
+        q, k, v = qkv.chunk(3, dim=1)
+
+        # Reshape to [B, heads, head_dim, H_ds*W_ds]
+        q = q.reshape(B, self.num_heads, self.head_dim, ds_h * ds_w)
+        k = k.reshape(B, self.num_heads, self.head_dim, ds_h * ds_w)
+        v = v.reshape(B, self.num_heads, self.head_dim, ds_h * ds_w)
+
+        # Attention over downsampled spatial dimension
+        # [B, heads, H_ds*W_ds, H_ds*W_ds] ≈ 8K×8K ≈ 0.5 GB (vs 272 GB full)
+        attn = torch.matmul(q.transpose(-2, -1), k) * self.scale
+        attn = attn.softmax(dim=-1)
+        out = torch.matmul(attn, v.transpose(-2, -1))
+        out = out.transpose(-2, -1).reshape(B, C, ds_h, ds_w)
+
+        # Upsample gate logits back to full resolution
+        gate_logits = self.proj(out)  # [B, 4, H/4, W/4]
+        gate_logits = F.interpolate(
+            gate_logits, size=(H, W), mode='bilinear', align_corners=False
+        )  # [B, 4, H, W]
+
+        return gate_logits
+
+
+class TinyViMFPNCrossAttnDecoder(nn.Module):
+    """
+    TinyViMFPNGatedDecoder but with Cross-Attention Gate instead of Conv1×1 Gate.
+
+    Cross-Attention Gate benefits:
+    - Receptive field: full H×W (vs 1×1 in Conv1×1 gate)
+    - Learns spatial patterns: "edges need S0, flat surfaces need S3"
+    - Explicit stage interactions via attention mechanism
+    """
+
+    def __init__(
+        self,
+        in_channels,
+        n_cls,
+        out_channels=256,
+        head_channels=128,
+        dropout_ratio=0.1,
+    ):
+        super().__init__()
+
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.head_channels = head_channels
+        self.n_cls = n_cls
+
+        self.lateral_convs = nn.ModuleList([
+            nn.Conv2d(ch, out_channels, kernel_size=1) for ch in in_channels
+        ])
+        self.fpn_convs = nn.ModuleList([
+            nn.Conv2d(
+                out_channels,
+                out_channels,
+                kernel_size=(1, 5) if i >= 2 else 3,
+                padding=(0, 2) if i >= 2 else 1,
+            )
+            for i, _ in enumerate(in_channels)
+        ])
+        self.head_convs = nn.ModuleList([
+            nn.Conv2d(
+                out_channels,
+                head_channels,
+                kernel_size=(1, 5) if i >= 2 else 3,
+                padding=(0, 2) if i >= 2 else 1,
+            )
+            for i, _ in enumerate(in_channels)
+        ])
+        # Replace Conv1×1 gate with Cross-Attention Gate
+        self.gate = CrossAttentionGate(
+            in_channels=len(in_channels) * head_channels,
+            num_heads=4,
+        )
+        self._init_gate()
+
+        self.fuse_conv = nn.Conv2d(head_channels, head_channels, kernel_size=3, padding=1)
+        self.dropout = nn.Dropout2d(p=dropout_ratio) if dropout_ratio > 0 else nn.Identity()
+        self.cls_seg = nn.Conv2d(head_channels, n_cls, kernel_size=1)
+
+        self.apply(init_weights)
+
+    def _init_gate(self):
+        nn.init.zeros_(self.gate.proj.weight)
+        nn.init.zeros_(self.gate.proj.bias)
+
+    @torch.jit.ignore
+    def no_weight_decay(self):
+        return set()
+
+    def forward(self, x, im_size, skip=None, return_features=False):
+        if not isinstance(skip, (list, tuple)):
+            raise ValueError('TinyViMFPNCrossAttnDecoder expects a list of feature maps in skip.')
+
+        feats = skip
+        if len(feats) != len(self.in_channels):
+            raise ValueError('Number of feature maps does not match in_channels.')
+
+        laterals = [conv(feat) for conv, feat in zip(self.lateral_convs, feats)]
+
+        for i in range(len(laterals) - 1, 0, -1):
+            up = F.interpolate(laterals[i], size=laterals[i - 1].shape[-2:],
+                               mode='bilinear', align_corners=False)
+            laterals[i - 1] = laterals[i - 1] + up
+
+        outs = [conv(lat) for conv, lat in zip(self.fpn_convs, laterals)]
+
+        head_feats = []
+        target_size = outs[0].shape[-2:]
+        for i, out in enumerate(outs):
+            h = self.head_convs[i](out)
+            if i > 0:
+                h = F.interpolate(h, size=target_size, mode='bilinear', align_corners=False)
+            head_feats.append(h)
+
+        cat = torch.cat(head_feats, dim=1)
+        with torch.cuda.amp.autocast(enabled=False):
+            gate_logits = self.gate(cat.float()).clamp(-30.0, 30.0)
+        gates = torch.softmax(gate_logits, dim=1).to(cat.dtype)
+
+        fused = torch.zeros_like(head_feats[0])
+        for i, feat in enumerate(head_feats):
+            fused = fused + gates[:, i:i + 1] * feat
+
+        fused = self.fuse_conv(fused)
+        fused = self.dropout(fused)
+
+        if return_features:
+            if im_size is not None and fused.shape[-2:] != im_size:
+                fused = F.interpolate(fused, size=im_size, mode='bilinear', align_corners=False)
+            return fused
+
+        logits = self.cls_seg(fused)
+        if im_size is not None and logits.shape[-2:] != im_size:
+            logits = F.interpolate(logits, size=im_size, mode='bilinear', align_corners=False)
+        return logits
+
+
+# ============================================================
+#  DECODER VARIANT 3: Cross-Stage Residual + Cross-Attention Gate
+# ============================================================
+class TinyViMFPNResidualCrossAttnDecoder(nn.Module):
+    """
+    Combines both improvements:
+    1. Cross-Stage Residual Connection (Variant 1)
+    2. Cross-Attention Gate (Variant 2)
+
+    Architecture:
+        S0-S3 → FPN pathway → gated fusion = fused_main
+        S0-S3 → skip_proj → skip_fused
+        final = fused_main + α * skip_fused
+    """
+
+    def __init__(
+        self,
+        in_channels,
+        n_cls,
+        out_channels=256,
+        head_channels=128,
+        dropout_ratio=0.1,
+    ):
+        super().__init__()
+
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.head_channels = head_channels
+        self.n_cls = n_cls
+
+        # Standard FPN pathway
+        self.lateral_convs = nn.ModuleList([
+            nn.Conv2d(ch, out_channels, kernel_size=1) for ch in in_channels
+        ])
+        self.fpn_convs = nn.ModuleList([
+            nn.Conv2d(
+                out_channels,
+                out_channels,
+                kernel_size=(1, 5) if i >= 2 else 3,
+                padding=(0, 2) if i >= 2 else 1,
+            )
+            for i, _ in enumerate(in_channels)
+        ])
+        self.head_convs = nn.ModuleList([
+            nn.Conv2d(
+                out_channels,
+                head_channels,
+                kernel_size=(1, 5) if i >= 2 else 3,
+                padding=(0, 2) if i >= 2 else 1,
+            )
+            for i, _ in enumerate(in_channels)
+        ])
+        # Cross-Attention Gate
+        self.gate = CrossAttentionGate(
+            in_channels=len(in_channels) * head_channels,
+            num_heads=4,
+        )
+        self._init_gate()
+
+        # Cross-stage residual
+        self.skip_proj = nn.ModuleList([
+            nn.Conv2d(ch, head_channels, kernel_size=1) for ch in in_channels
+        ])
+        self.skip_alpha = nn.Parameter(torch.zeros(1))
+
+        self.fuse_conv = nn.Conv2d(head_channels, head_channels, kernel_size=3, padding=1)
+        self.dropout = nn.Dropout2d(p=dropout_ratio) if dropout_ratio > 0 else nn.Identity()
+        self.cls_seg = nn.Conv2d(head_channels, n_cls, kernel_size=1)
+
+        self.apply(init_weights)
+
+    def _init_gate(self):
+        nn.init.zeros_(self.gate.proj.weight)
+        nn.init.zeros_(self.gate.proj.bias)
+
+    @torch.jit.ignore
+    def no_weight_decay(self):
+        return set()
+
+    def forward(self, x, im_size, skip=None, return_features=False):
+        if not isinstance(skip, (list, tuple)):
+            raise ValueError('TinyViMFPNResidualCrossAttnDecoder expects a list of feature maps in skip.')
+
+        feats = skip
+        if len(feats) != len(self.in_channels):
+            raise ValueError('Number of feature maps does not match in_channels.')
+
+        # ── FPN pathway ──────────────────────────────────────
+        laterals = [conv(feat) for conv, feat in zip(self.lateral_convs, feats)]
+
+        for i in range(len(laterals) - 1, 0, -1):
+            up = F.interpolate(laterals[i], size=laterals[i - 1].shape[-2:],
+                               mode='bilinear', align_corners=False)
+            laterals[i - 1] = laterals[i - 1] + up
+
+        outs = [conv(lat) for conv, lat in zip(self.fpn_convs, laterals)]
+
+        head_feats = []
+        target_size = outs[0].shape[-2:]
+        for i, out in enumerate(outs):
+            h = self.head_convs[i](out)
+            if i > 0:
+                h = F.interpolate(h, size=target_size, mode='bilinear', align_corners=False)
+            head_feats.append(h)
+
+        # Cross-Attention gated fusion
+        cat = torch.cat(head_feats, dim=1)
+        with torch.cuda.amp.autocast(enabled=False):
+            gate_logits = self.gate(cat.float()).clamp(-30.0, 30.0)
+        gates = torch.softmax(gate_logits, dim=1).to(cat.dtype)
+
+        fused_main = torch.zeros_like(head_feats[0])
+        for i, feat in enumerate(head_feats):
+            fused_main = fused_main + gates[:, i:i + 1] * feat
+
+        # ── Cross-stage residual ─────────────────────────────
+        skip_fused = torch.zeros(head_feats[0].shape, device=head_feats[0].device, dtype=head_feats[0].dtype)
+        for i, (feat, proj) in enumerate(zip(feats, self.skip_proj)):
+            h = proj(feat)
+            if i > 0:
+                h = F.interpolate(h, size=target_size, mode='bilinear', align_corners=False)
+            skip_fused = skip_fused + h
+
+        fused = fused_main + self.skip_alpha.to(fused_main.dtype) * skip_fused
+        fused = self.fuse_conv(fused)
+        fused = self.dropout(fused)
+
+        if return_features:
+            if im_size is not None and fused.shape[-2:] != im_size:
+                fused = F.interpolate(fused, size=im_size, mode='bilinear', align_corners=False)
+            return fused
+
+        logits = self.cls_seg(fused)
+        if im_size is not None and logits.shape[-2:] != im_size:
+            logits = F.interpolate(logits, size=im_size, mode='bilinear', align_corners=False)
+        return logits
+
+
+# ============================================================
+#  TinyViMFPNGatedDetailDecoder (kept from original)
+# ============================================================
 class DetailRefineBlock(nn.Module):
     def __init__(self, channels=64):
         super().__init__()

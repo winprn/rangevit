@@ -30,7 +30,7 @@ training:
   val_frequency: 1
   n_epochs: 60
   warmup_epochs: 6
-  batch_size: 6
+  batch_size: 1
   batch_size_val: 1
   lr: 0.0003
   train_result_frequency: 100 # printing frequency of the train results
@@ -77,7 +77,7 @@ skip_filters: 0 # FPN does not use the skip connection
 
 # 3D refiner / post-processing
 point_postproc: "knn" # 'kpconv', 'knn', or 'none'; overrides the boolean flags below
-knn_search: 13
+knn_search: 7
 knn_k: 5
 knn_sigma: 1.0
 knn_cutoff: 1.0

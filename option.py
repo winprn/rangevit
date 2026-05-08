@@ -266,7 +266,18 @@ class Option(object):
 
         # When using the KPConv layer, the decoder has to be up_conv.
         if self.use_kpconv:
-            assert self.decoder in ('up_conv', 'fpn', 'fpn_gated', 'fpn_gated_detail'), 'KPConv supported only with up_conv, fpn, fpn_gated, or fpn_gated_detail decoders'
+            assert self.decoder in ('up_conv', 'fpn', 'fpn_gated', 'fpn_gated_detail',
+                                    'fpn_residual', 'fpn_cross_attn', 'fpn_residual_cross_attn'), \
+                   'KPConv supported only with up_conv, fpn, fpn_gated, or fpn_gated_detail decoders'
+        if self.decoder == 'fpn_residual':
+            assert self.vit_backbone.startswith('tinyvim'), 'fpn_residual decoder requires a TinyViM backbone'
+            assert self.skip_filters == 0, 'fpn_residual decoder does not use skip_filters'
+        if self.decoder == 'fpn_cross_attn':
+            assert self.vit_backbone.startswith('tinyvim'), 'fpn_cross_attn decoder requires a TinyViM backbone'
+            assert self.skip_filters == 0, 'fpn_cross_attn decoder does not use skip_filters'
+        if self.decoder == 'fpn_residual_cross_attn':
+            assert self.vit_backbone.startswith('tinyvim'), 'fpn_residual_cross_attn decoder requires a TinyViM backbone'
+            assert self.skip_filters == 0, 'fpn_residual_cross_attn decoder does not use skip_filters'
         if self.decoder == 'fpn_gated':
             assert self.vit_backbone.startswith('tinyvim'), 'fpn_gated decoder requires a TinyViM backbone'
             assert self.skip_filters == 0, 'fpn_gated decoder does not use skip_filters'
