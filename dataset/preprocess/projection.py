@@ -182,3 +182,53 @@ class ScanProjection(object):
         return proj_pointcloud, proj_range, proj_idx, proj_mask
 
 
+class TagProjection(object):
+    """Scatter points into a fixed-size range image using a precomputed
+    boolean tag mask (1-to-1 point->cell mapping). Output mirrors
+    RangeProjection: (proj_xyz_i [H,W,4], proj_range [H,W], proj_idx [H,W],
+    proj_mask [H,W]).
+    """
+
+    def __init__(self, proj_h, proj_w):
+        self.proj_h = proj_h
+        self.proj_w = proj_w
+        self.cached_data = {}
+
+    def doProjection(self, pointcloud, tag):
+        H, W = self.proj_h, self.proj_w
+        flat_n = H * W
+        if tag.shape[0] != flat_n:
+            raise ValueError(f"Tag length {tag.shape[0]} != expected {flat_n}")
+        n_points = pointcloud.shape[0]
+        n_occupied = int(tag.sum())
+        if n_occupied != n_points:
+            raise ValueError(
+                f"Tag occupied cells ({n_occupied}) != number of points ({n_points})"
+            )
+
+        proj_xyz_i = np.zeros((flat_n, 4), dtype=np.float32)
+        proj_range = np.zeros((flat_n,), dtype=np.float32)
+        proj_idx = -1 * np.ones((flat_n,), dtype=np.int32)
+
+        ranges = np.linalg.norm(pointcloud[:, :3], axis=1).astype(np.float32)
+        proj_xyz_i[tag] = pointcloud
+        proj_range[tag] = ranges
+        proj_idx[tag] = np.arange(n_points, dtype=np.int32)
+
+        proj_xyz_i = proj_xyz_i.reshape(H, W, 4)
+        proj_range = proj_range.reshape(H, W)
+        proj_idx = proj_idx.reshape(H, W)
+        proj_mask = tag.reshape(H, W).astype(np.bool_)
+
+        flat_cells = np.flatnonzero(tag).astype(np.int32)
+        uproj_y = (flat_cells // W).astype(np.int32)
+        uproj_x = (flat_cells %  W).astype(np.int32)
+        self.cached_data = {
+            "px": proj_xyz_i,
+            "py": proj_xyz_i,
+            "uproj_x_idx": uproj_x,
+            "uproj_y_idx": uproj_y,
+            "uproj_depth": ranges.astype(np.float32),
+        }
+
+        return proj_xyz_i, proj_range, proj_idx, proj_mask
