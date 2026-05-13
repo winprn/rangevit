@@ -140,6 +140,7 @@ class TinyViM(nn.Module):
                  mlp_ratios=4, downsamples=None,
                  num_classes=1000,
                  down_patch_size=3, down_stride=(1, 2), down_pad=1,
+                 stage_embedding_strides=None,
                  height_downsample_stage=1,
                  use_layer_scale=True, layer_scale_init_value=1e-5,
                  fork_feat=False,
@@ -167,8 +168,14 @@ class TinyViM(nn.Module):
             if i >= len(layers) - 1:
                 break
             if downsamples[i] or embed_dims[i] != embed_dims[i + 1]:
-                # Optionally downsample height at one selected transition.
-                stride = (2, 2) if height_downsample_stage is not None and i == height_downsample_stage else down_stride
+                if stage_embedding_strides is not None:
+                    # Caller-supplied per-transition stride (i is the
+                    # 0-indexed transition between stage i and stage i+1).
+                    stride = tuple(stage_embedding_strides[i])
+                elif height_downsample_stage is not None and i == height_downsample_stage:
+                    stride = (2, 2)
+                else:
+                    stride = down_stride
                 network.append(
                     Embedding(
                         patch_size=down_patch_size, stride=stride,
