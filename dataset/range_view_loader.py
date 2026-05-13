@@ -122,7 +122,13 @@ class RangeViewLoader(Dataset):
 
         projection_config = self.config['sensor']
         self.scan_proj = projection_config.get('scan_proj', False)
-        if self.scan_proj:
+        self.projection_mode = projection_config.get('projection_mode', 'spherical')
+        if self.projection_mode == 'tag':
+            print('Use tag-mask range projection (precomputed cell map).')
+            self.projection = projection.TagProjection(
+                proj_h=projection_config['proj_h'], proj_w=projection_config['proj_w'],
+            )
+        elif self.scan_proj:
             print('Use scan-based range projection.')
             self.projection = projection.ScanProjection(
                 proj_h=projection_config['proj_h'], proj_w=projection_config['proj_w'],
@@ -133,6 +139,15 @@ class RangeViewLoader(Dataset):
                 fov_left=projection_config['fov_left'], fov_right=projection_config['fov_right'],
                 proj_h=projection_config['proj_h'], proj_w=projection_config['proj_w'],
             )
+        if self.projection_mode == 'tag':
+            # Geometric and mix augmentations re-arrange or replace points; the
+            # precomputed tag mask becomes invalid. Disable them at construction.
+            self.augmentor = None
+            self.point_sampler = None
+            self.polarmix = None
+            self.instance_cutmix = None
+            self.clustermix = None
+            self.instance_copy = None
         self.train_full_image = self.model_cfg.get('train_full_image', self.config.get('train_full_image', False))
         image_size = self.model_cfg.get('image_size', self.config.get('image_size', None))
         original_image_size = self.model_cfg.get('original_image_size', self.config.get('original_image_size', None))
@@ -289,7 +304,11 @@ class RangeViewLoader(Dataset):
                 if self.instance_copy is not None:
                     pointcloud, sem_label = self.instance_copy(
                         pointcloud, sem_label, mix_pc, mix_sem, mix_inst)
-        proj_pointcloud, proj_range, proj_idx, proj_mask = self.projection.doProjection(pointcloud)
+        if self.projection_mode == 'tag':
+            tag = self.dataset.loadTagByIndex(index)
+            proj_pointcloud, proj_range, proj_idx, proj_mask = self.projection.doProjection(pointcloud, tag)
+        else:
+            proj_pointcloud, proj_range, proj_idx, proj_mask = self.projection.doProjection(pointcloud)
         proj_pointcloud, proj_range, proj_mask = self._apply_knni(
             proj_pointcloud, proj_range, proj_mask, index
         )
@@ -397,7 +416,11 @@ class RangeViewLoader(Dataset):
                 if self.instance_copy is not None:
                     pointcloud, sem_label = self.instance_copy(
                         pointcloud, sem_label, mix_pc, mix_sem, mix_inst)
-        proj_pointcloud, proj_range, proj_idx, proj_mask = self.projection.doProjection(pointcloud)
+        if self.projection_mode == 'tag':
+            tag = self.dataset.loadTagByIndex(index)
+            proj_pointcloud, proj_range, proj_idx, proj_mask = self.projection.doProjection(pointcloud, tag)
+        else:
+            proj_pointcloud, proj_range, proj_idx, proj_mask = self.projection.doProjection(pointcloud)
         proj_pointcloud, proj_range, proj_mask = self._apply_knni(
             proj_pointcloud, proj_range, proj_mask, index
         )
