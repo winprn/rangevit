@@ -44,6 +44,7 @@ class TinyViMAdapter(nn.Module):
         stem_stride = kwargs.pop('stem_stride', (1, 1))
         down_stride = kwargs.pop('down_stride', (1, 2))
         height_downsample_stage = kwargs.pop('height_downsample_stage', None)
+        stage_embedding_strides = kwargs.pop('stage_embedding_strides', None)
         self.patch_size = tuple(stem_stride) if isinstance(stem_stride, (list, tuple)) else (stem_stride, stem_stride)
         self.patch_stride = self.patch_size
         self.embed_dims = embed_dims
@@ -61,6 +62,7 @@ class TinyViMAdapter(nn.Module):
             fork_feat=False, # We handle feature extraction manually or change this
             stem_stride=stem_stride,
             down_stride=down_stride,
+            stage_embedding_strides=stage_embedding_strides,
             height_downsample_stage=height_downsample_stage,
         )
         
