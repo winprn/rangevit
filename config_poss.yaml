@@ -1,0 +1,164 @@
+# General config
+num_workers: 4
+id: "exp_poss"
+save_path: "save_rangevim_poss"
+
+# MLflow config
+mlflow:
+  enable: true
+  tracking_uri: "http://140.245.117.232:5000"
+  experiment_name: "rangevit"
+  run_name: "[train] rangevim_base_poss"
+  nested: false
+  log_checkpoints: false
+  log_code_snapshot: false
+
+# Data config
+data:
+  dataset: "SemanticPOSS"
+  n_classes: 14
+  data_root: "../dataset/SemanticPOSS/sequences"
+  has_label: true
+  use_trainval: false
+
+knni:
+  enable: false
+  window_size: 5
+
+# Train config
+training:
+  val_frequency: 1
+  n_epochs: 60
+  warmup_epochs: 6
+  batch_size: 8
+  batch_size_val: 1
+  lr: 0.0003
+  train_result_frequency: 100
+  loss:
+    focal_loss:
+      type: "focal"
+      gamma: 2.0
+      ignore_index: 0
+      weight: 1.0
+    lovasz_loss:
+      weight: 1.0
+    boundary_loss:
+      weight: 0.0
+    aux_loss:
+      weight: 0.3
+  save_epochs_at: [47, 50, 55, 57]
+
+# Model config
+model:
+  vit_backbone: "tinyvim_base"
+  in_channels: 5
+  patch_size: [1, 2]
+  patch_stride: [1, 2]
+  image_size: [40, 1800]
+  window_size: [40, 1800]
+  window_stride: [40, 1800]
+  original_image_size: [40, 1800]
+  train_full_image: true
+  use_sliding_window: false
+  # /8 total width budget: stem /2 + (1,1) + (1,2) + (1,2). 1800 -> 900 -> 900 -> 450 -> 225.
+  stage_embedding_strides:
+    - [1, 1]
+    - [1, 2]
+    - [1, 2]
+
+# Stem
+conv_stem: "ConvStem"
+stem_base_channels: 32
+D_h: 48
+
+# Decoder
+decoder: "fpn"
+skip_filters: 0
+
+# 3D refiner / post-processing
+point_postproc: "knn"
+knn_search: 13
+knn_k: 5
+knn_sigma: 1.0
+knn_cutoff: 1.0
+
+# Checkpoint model
+checkpoint: null
+pretrained_model: null
+reuse_pos_emb: false
+reuse_patch_emb: false
+
+pretrained_channel_adaptation: "repeat"
+
+# 2D range-image augmentation OK; 3D geometric and mix augs disabled below.
+range_aug: false
+
+augmentation:
+  p_flipx: 0.0
+  p_flipy: 0.0
+  p_transx: 0.0
+  trans_xmin: 0
+  trans_xmax: 0
+  p_transy: 0.0
+  trans_ymin: 0
+  trans_ymax: 0
+  p_transz: 0.0
+  trans_zmin: 0
+  trans_zmax: 0
+  p_rot_roll: 0.0
+  rot_rollmin: 0
+  rot_rollmax: 0
+  p_rot_pitch: 0.0
+  rot_pitchmin: 0
+  rot_pitchmax: 0
+  p_rot_yaw: 0.0
+  rot_yawmin: 0
+  rot_yawmax: 0
+
+adapted_augmentation:
+  # POSS mapped class ids:
+  # 0=unlabeled, 1=person, 2=rider, 3=car, 4=trunk, 5=plants,
+  # 6=traffic-sign, 7=pole, 8=trashcan, 9=building, 10=cone-stone,
+  # 11=fence, 12=bike, 13=ground
+  use_mapped_labels: true
+  pointsample:
+    enable: false
+    num_points: 0
+    replace: false
+  polarmix:
+    enable: false
+    prob: 0.0
+    classes: []
+  instance_cutmix:
+    enable: false
+    prob: 0.0
+    instance_bank_root: "cache/instance_bank_poss"
+    classes: []
+    min_points: 20
+    num_to_add: [0, 0]
+  clustermix:
+    enable: false
+    prob: 0.0
+    vertical_prob: 0.0
+    sector_width: 1.570796
+    height_ratio: 0.5
+  instance_copy:
+    enable: false
+    prob: 0.0
+    classes: []
+    max_instances_per_class: 0
+
+sensor:
+  name: "Pandora40"
+  type: "spherical"
+  projection_mode: "tag"     # consumed by RangeViewLoader (Task 5)
+  scan_proj: false
+  proj_h: 40
+  proj_w: 1800
+  fov_up: 7.0
+  fov_down: -16.0
+  fov_left: -180
+  fov_right: 180
+  # TODO replace with output of tools/compute_poss_stats.py before first real training run
+  img_mean: [0.0, 0.0, 0.0, 0.0, 0.0]
+  img_stds: [1.0, 1.0, 1.0, 1.0, 1.0]
