@@ -7,7 +7,7 @@ save_path: "save_rangevim_poss"
 mlflow:
   enable: true
   tracking_uri: "http://140.245.117.232:5000"
-  experiment_name: "rangevit"
+  experiment_name: "rangevim"
   run_name: "[train] rangevim_base_poss"
   nested: false
   log_checkpoints: false
@@ -17,7 +17,7 @@ mlflow:
 data:
   dataset: "SemanticPOSS"
   n_classes: 14
-  data_root: "../dataset/SemanticPOSS/sequences"
+  data_root: "../dataset/SemanticPOSS/dataset/sequences"
   has_label: true
   use_trainval: false
 
