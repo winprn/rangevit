@@ -165,6 +165,45 @@ class Trainer(object):
                 has_label=(self.settings.test_split is False),
             )
 
+        # SemanticPOSS dataset
+        elif self.settings.dataset == 'SemanticPOSS':
+            data_config_path = 'dataset/semantic_poss/semantic-poss.yaml'
+            data_config = yaml.safe_load(open(data_config_path, 'r'))
+
+            if self.settings.use_mini_version:
+                train_sequences = [0]
+            elif self.settings.use_trainval:
+                train_sequences = data_config['split']['train'] + data_config['split']['valid']
+            else:
+                train_sequences = data_config['split']['train']
+
+            trainset = dataset.semantic_poss.SemanticPOSS(
+                root=self.settings.data_root,
+                sequences=train_sequences,
+                config_path=data_config_path)
+
+            self.cls_weight = 1 / (trainset.cls_freq + 1e-3)
+            self.ignore_class = []
+            for cl, _ in enumerate(self.cls_weight):
+                if trainset.data_config['learning_ignore'][cl]:
+                    self.cls_weight[cl] = 0
+                if self.cls_weight[cl] < 1e-10:
+                    self.ignore_class.append(cl)
+            if self.recorder is not None:
+                self.recorder.logger.info('weight: {}'.format(self.cls_weight))
+            self.mapped_cls_name = trainset.mapped_cls_name
+
+            test_sequences = (
+                data_config['split']['test'] if self.settings.test_split else
+                data_config['split']['valid'])
+
+            valset = dataset.semantic_poss.SemanticPOSS(
+                root=self.settings.data_root,
+                sequences=test_sequences,
+                config_path=data_config_path,
+                has_label=(self.settings.test_split is False),
+            )
+
         else:
             raise ValueError(
                 'invalid dataset: {}'.format(self.settings.dataset))
@@ -232,12 +271,17 @@ class Trainer(object):
                 alpha = np.asarray(self.settings.class_weights, dtype=np.float32)
             elif self.settings.dataset == 'SemanticKitti':
                 alpha = self.cls_weight.astype(np.float32)
+            elif self.settings.dataset == 'SemanticPOSS':
+                alpha = self.cls_weight.astype(np.float32)
             elif self.settings.dataset == 'nuScenes':
                 alpha = np.ones((self.settings.n_classes), dtype=np.float32)
             else:
                 alpha = np.ones((self.settings.n_classes), dtype=np.float32)
         else:
             if self.settings.dataset == 'SemanticKitti':
+                alpha = np.log(1 + self.cls_weight)
+                alpha = alpha / max(alpha.max(), 1e-6)
+            elif self.settings.dataset == 'SemanticPOSS':
                 alpha = np.log(1 + self.cls_weight)
                 alpha = alpha / max(alpha.max(), 1e-6)
             elif self.settings.dataset == 'nuScenes':
@@ -924,6 +968,16 @@ class Trainer(object):
                     sk_dataset = self.val_loader.dataset.dataset
                     pred_np_origin = sk_dataset.class_map_lut_inv[pred_np]
                     seq_id, frame_id = sk_dataset.parsePathInfoByIndex(index)
+                    pred_path = os.path.join(save_results_path, 'sequences', seq_id, 'predictions')
+                    if not os.path.isdir(pred_path):
+                        os.makedirs(pred_path)
+                    pred_result_path = os.path.join(pred_path, '{}.label'.format(frame_id))
+                    pred_np_origin.tofile(pred_result_path)
+
+                elif self.settings.dataset == 'SemanticPOSS':
+                    poss_dataset = self.val_loader.dataset.dataset
+                    pred_np_origin = poss_dataset.class_map_lut_inv[pred_np]
+                    seq_id, frame_id = poss_dataset.parsePathInfoByIndex(index)
                     pred_path = os.path.join(save_results_path, 'sequences', seq_id, 'predictions')
                     if not os.path.isdir(pred_path):
                         os.makedirs(pred_path)
