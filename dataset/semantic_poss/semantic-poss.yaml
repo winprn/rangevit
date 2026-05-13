@@ -89,25 +89,30 @@ learning_ignore:
   12: false
   13: false
 
-# Raw-label frequencies (placeholder, replace via tools/compute_poss_stats.py).
+# Raw-label frequencies measured on POSS train sequences (00, 01, 02, 04, 05).
+# Raw ids 18/19/20 are not in the POSS taxonomy; they fold into unlabeled (0)
+# via the learning_map LUT default.
 content:
-  0: 0.01
-  4: 0.005
-  5: 0.005
-  6: 0.005
-  7: 0.05
-  8: 0.02
-  9: 0.30
-  10: 0.002
-  11: 0.002
-  12: 0.002
-  13: 0.01
-  14: 0.002
-  15: 0.20
-  16: 0.002
-  17: 0.05
-  21: 0.005
-  22: 0.32
+  0: 0.024571
+  4: 0.016393
+  5: 0.002858
+  6: 0.003758
+  7: 0.095694
+  8: 0.010572
+  9: 0.356822
+  10: 0.002829
+  11: 0.000653
+  12: 0.001872
+  13: 0.004209
+  14: 0.000528
+  15: 0.208311
+  16: 0.000939
+  17: 0.014889
+  18: 0.000558
+  19: 0.000045
+  20: 0.000659
+  21: 0.058660
+  22: 0.195180
 
 split:
   train: [0, 1, 2, 4, 5]

@@ -159,6 +159,5 @@ sensor:
   fov_down: -16.0
   fov_left: -180
   fov_right: 180
-  # TODO replace with output of tools/compute_poss_stats.py before first real training run
-  img_mean: [0.0, 0.0, 0.0, 0.0, 0.0]
-  img_stds: [1.0, 1.0, 1.0, 1.0, 1.0]
+  img_mean: [23.6158, 0.7202, 1.6947, -0.606, 14.8702]
+  img_stds: [19.5481, 19.0176, 23.9032, 1.7451, 16.9931]
