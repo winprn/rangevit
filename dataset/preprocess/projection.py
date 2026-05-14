@@ -206,8 +206,8 @@ class TagProjection(object):
                 f"Tag occupied cells ({n_occupied}) != number of points ({n_points})"
             )
 
-        proj_xyz_i = np.zeros((flat_n, 4), dtype=np.float32)
-        proj_range = np.zeros((flat_n,), dtype=np.float32)
+        proj_xyz_i = np.full((flat_n, 4), -1, dtype=np.float32)
+        proj_range = np.full((flat_n,), -1, dtype=np.float32)
         proj_idx = -1 * np.ones((flat_n,), dtype=np.int32)
 
         ranges = np.linalg.norm(pointcloud[:, :3], axis=1).astype(np.float32)
@@ -224,8 +224,8 @@ class TagProjection(object):
         uproj_y = (flat_cells // W).astype(np.int32)
         uproj_x = (flat_cells %  W).astype(np.int32)
         self.cached_data = {
-            "px": proj_xyz_i,
-            "py": proj_xyz_i,
+            "px": uproj_x.astype(np.float32),
+            "py": uproj_y.astype(np.float32),
             "uproj_x_idx": uproj_x,
             "uproj_y_idx": uproj_y,
             "uproj_depth": ranges.astype(np.float32),

@@ -14,6 +14,10 @@ class SemanticPOSS(object):
     H = 40
     W = 1800
 
+    @staticmethod
+    def _frame_stems(paths):
+        return [os.path.splitext(os.path.basename(path))[0] for path in paths]
+
     def __init__(self, root, sequences, config_path, has_label=True):
         self.root = root
         self.sequences = sorted(int(s) for s in sequences)
@@ -43,6 +47,12 @@ class SemanticPOSS(object):
             assert len(pc_files) == len(tag_files), (
                 f"Seq {seq_str}: {len(pc_files)} bins vs {len(tag_files)} tags"
             )
+            pc_stems = self._frame_stems(pc_files)
+            tag_stems = self._frame_stems(tag_files)
+            if pc_stems != tag_stems:
+                raise ValueError(
+                    f"Seq {seq_str}: point cloud and tag frame ids do not match"
+                )
 
             if self.has_label:
                 lbl_dir = os.path.join(seq_dir, "labels")
@@ -52,6 +62,11 @@ class SemanticPOSS(object):
                 assert len(pc_files) == len(lbl_files), (
                     f"Seq {seq_str}: {len(pc_files)} bins vs {len(lbl_files)} labels"
                 )
+                label_stems = self._frame_stems(lbl_files)
+                if pc_stems != label_stems:
+                    raise ValueError(
+                        f"Seq {seq_str}: point cloud and label frame ids do not match"
+                    )
                 self.label_files.extend(lbl_files)
 
             self.pointcloud_files.extend(pc_files)
@@ -124,6 +139,10 @@ class SemanticPOSS(object):
         return pc, sem, inst
 
     def loadTagByIndex(self, index):
+        if index < 0 or index >= len(self.tag_files):
+            raise IndexError(
+                f"Tag index {index} out of range for {len(self.tag_files)} tag files"
+            )
         return self.readTag(self.tag_files[index])
 
     def __len__(self):

@@ -60,9 +60,10 @@ model:
   original_image_size: [40, 1800]
   train_full_image: true
   use_sliding_window: false
-  # /8 total width budget: stem /2 + (1,1) + (1,2) + (1,2). 1800 -> 900 -> 900 -> 450 -> 225.
+  # Match KITTI TinyViM shrinking: no stem shrink, then width /2 at each inter-stage transition.
+  # 1800 -> 900 -> 450 -> 225.
   stage_embedding_strides:
-    - [1, 1]
+    - [1, 2]
     - [1, 2]
     - [1, 2]
 

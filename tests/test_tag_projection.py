@@ -34,6 +34,11 @@ def test_tag_projection_scatters_features_into_correct_cells():
     flat_xyz_i = proj_xyz_i.reshape(-1, 4)
     flat_range = proj_range.reshape(-1)
     flat_idx = proj_idx.reshape(-1)
+    empty_cell = 1
+    assert not flat_mask[empty_cell]
+    np.testing.assert_allclose(flat_xyz_i[empty_cell], -1)
+    np.testing.assert_allclose(flat_range[empty_cell], -1)
+    assert flat_idx[empty_cell] == -1
     for i, c in enumerate(cells):
         np.testing.assert_allclose(flat_xyz_i[c], pts[i])
         np.testing.assert_allclose(flat_range[c], np.linalg.norm(pts[i, :3]))

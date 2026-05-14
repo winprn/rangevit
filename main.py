@@ -55,6 +55,7 @@ def build_rangevit_model(settings, pretrained_path=None):
         fuse_out_channels=settings.fuse_out_channels,
         fuse_preproj=settings.fuse_preproj,
         aux_enable=settings.aux_enable,
+        stage_embedding_strides=settings.stage_embedding_strides,
         use_kpconv=settings.use_kpconv)
     return model
 

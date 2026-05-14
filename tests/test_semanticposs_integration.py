@@ -94,10 +94,10 @@ def test_tinyvim_forward_pass_on_poss_shape():
     adapter = TinyViMAdapter(
         backbone_name="tinyvim_base",
         in_channels=5,
-        stem_stride=(1, 2),
-        stage_embedding_strides=[(1, 1), (1, 2), (1, 2)],
+        stem_stride=(1, 1),
+        stage_embedding_strides=[(1, 2), (1, 2), (1, 2)],
         use_fpn_decoder=True,
     ).cuda()
     feats, _ = adapter(torch.randn(1, 5, H, W).cuda(), return_features=True)
     assert [f.shape[2] for f in feats] == [H, H, H, H]
-    assert [f.shape[3] for f in feats] == [900, 900, 450, 225]
+    assert [f.shape[3] for f in feats] == [1800, 900, 450, 225]

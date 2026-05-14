@@ -139,6 +139,7 @@ class Option(object):
         self.window_size = model_cfg.get('window_size', self.config.get('window_size', [32, 384]))
         self.window_stride = model_cfg.get('window_stride', self.config.get('window_stride', [32, 256]))
         self.original_image_size = model_cfg.get('original_image_size', self.config.get('original_image_size', [32, 2048]))
+        self.stage_embedding_strides = model_cfg.get('stage_embedding_strides', self.config.get('stage_embedding_strides', None))
         # Full-image mode: set train_full_image=True to disable training crops,
         # and use_sliding_window=False to run full-frame inference/validation.
         self.train_full_image = model_cfg.get('train_full_image', self.config.get('train_full_image', False))
@@ -299,6 +300,12 @@ class Option(object):
         for i in tuple_list:
             assert isinstance(i, (list, tuple))
             assert len(i) == 2
+        if self.stage_embedding_strides is not None:
+            assert isinstance(self.stage_embedding_strides, (list, tuple))
+            assert len(self.stage_embedding_strides) == 3
+            for stride in self.stage_embedding_strides:
+                assert isinstance(stride, (list, tuple))
+                assert len(stride) == 2
 
         if self.train_full_image:
             # Full-image mode expects the projected range map to be at least as large as original_image_size

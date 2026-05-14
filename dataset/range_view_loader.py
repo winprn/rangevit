@@ -18,8 +18,68 @@ import tempfile
 import numpy as np
 import torch
 from torch.utils.data import Dataset
-import torchvision.transforms as T
-import torchvision.transforms.functional as TF
+try:
+    import torchvision.transforms as T
+    import torchvision.transforms.functional as TF
+except Exception:
+    class _Compose:
+        def __init__(self, transforms):
+            self.transforms = transforms
+
+        def __call__(self, tensor):
+            for transform in self.transforms:
+                tensor = transform(tensor)
+            return tensor
+
+    class _CenterCrop:
+        def __init__(self, size):
+            self.size = tuple(size)
+
+        def __call__(self, tensor):
+            _, h, w = tensor.shape
+            crop_h, crop_w = self.size
+            top = max((h - crop_h) // 2, 0)
+            left = max((w - crop_w) // 2, 0)
+            return tensor[:, top:top + crop_h, left:left + crop_w]
+
+    class _RandomCrop:
+        def __init__(self, size):
+            self.size = tuple(size)
+
+        @staticmethod
+        def get_params(tensor, output_size):
+            _, h, w = tensor.shape
+            crop_h, crop_w = output_size
+            if h == crop_h:
+                top = 0
+            else:
+                top = int(torch.randint(0, h - crop_h + 1, (1,)).item())
+            if w == crop_w:
+                left = 0
+            else:
+                left = int(torch.randint(0, w - crop_w + 1, (1,)).item())
+            return top, left, crop_h, crop_w
+
+        def __call__(self, tensor):
+            top, left, crop_h, crop_w = self.get_params(tensor, self.size)
+            return tensor[:, top:top + crop_h, left:left + crop_w]
+
+    class _Transforms:
+        Compose = _Compose
+        CenterCrop = _CenterCrop
+        RandomCrop = _RandomCrop
+
+    class _Functional:
+        @staticmethod
+        def crop(tensor, top, left, height, width):
+            return tensor[:, top:top + height, left:left + width]
+
+        @staticmethod
+        def hflip(tensor):
+            return torch.flip(tensor, dims=(-1,))
+
+    T = _Transforms()
+    TF = _Functional()
 from scipy.spatial.ckdtree import cKDTree as kdtree
 
 from .preprocess import augmentor, projection, ClusterMix, InstanceCopy, PolarMix, InstanceCutMix, KNNI
@@ -456,7 +516,7 @@ class RangeViewLoader(Dataset):
             uproj_depth_tensor = torch.from_numpy(self.projection.cached_data['uproj_depth']).float()
 
             return proj_feature_tensor, proj_sem_label_tensor, proj_mask_tensor, torch.from_numpy(
-                proj_range), uproj_x_tensor, uproj_y_tensor, uproj_depth_tensor, sem_label
+                proj_range), uproj_x_tensor, uproj_y_tensor, uproj_depth_tensor, sem_label, index
         else:
             proj_tensor = torch.cat(
                 (proj_feature_tensor,

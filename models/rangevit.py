@@ -387,6 +387,7 @@ class RangeViT(nn.Module):
         fuse_out_channels=128,
         fuse_preproj=True,
         aux_enable=True,
+        stage_embedding_strides=None,
         use_kpconv=False,
         ):
         super(RangeViT, self).__init__()
@@ -563,6 +564,7 @@ class RangeViT(nn.Module):
             'conv_stem': conv_stem,
             'stem_base_channels': stem_base_channels,
             'stem_hidden_dim': stem_hidden_dim,
+            'stage_embedding_strides': stage_embedding_strides,
         }
 
 

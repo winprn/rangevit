@@ -468,9 +468,16 @@ class Trainer(object):
         for i, batch in enumerate(dataloader):
             t_process_start = time.time()
             current_lr = None
+            sample_index = i
             if mode == 'Validation' and self.use_knn:
-                (input_feature, input_label, input_mask, proj_depth,
-                 uproj_x_idx, uproj_y_idx, uproj_depth, sem_label) = batch
+                if len(batch) == 9:
+                    (input_feature, input_label, input_mask, proj_depth,
+                     uproj_x_idx, uproj_y_idx, uproj_depth, sem_label, sample_index) = batch
+                    if torch.is_tensor(sample_index):
+                        sample_index = int(sample_index.item())
+                else:
+                    (input_feature, input_label, input_mask, proj_depth,
+                     uproj_x_idx, uproj_y_idx, uproj_depth, sem_label) = batch
             else:
                 input_feature, input_label, input_mask = batch
 
@@ -589,12 +596,12 @@ class Trainer(object):
             mean_acc_point_running = float(mean_acc_point_tensor)
             mean_recall_point_running = float(mean_recall_point_tensor)
 
-            # Save predictions for SemanticKITTI test/val when KNN unprojection is used (non-KPConv path).
+            # Save predictions when KNN unprojection is used (non-KPConv path).
             if (mode == 'Validation' and save_results_path is not None and self.use_knn):
                 pred_np = unproj_argmax.cpu().numpy().reshape(-1).astype(np.int32)
-                sk_dataset = self.val_range_loader.dataset
-                pred_np_origin = sk_dataset.class_map_lut_inv[pred_np]
-                seq_id, frame_id = sk_dataset.parsePathInfoByIndex(i)
+                val_dataset = self.val_range_loader.dataset
+                pred_np_origin = val_dataset.class_map_lut_inv[pred_np]
+                seq_id, frame_id = val_dataset.parsePathInfoByIndex(sample_index)
                 pred_path = os.path.join(save_results_path, 'sequences', seq_id, 'predictions')
                 if not os.path.isdir(pred_path):
                     os.makedirs(pred_path)
