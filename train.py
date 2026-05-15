@@ -425,6 +425,15 @@ class Trainer(object):
             mem_device = None
             run_peak_alloc_bytes = None
             run_peak_res_bytes = None
+        infer_mem_count = 0
+        infer_alloc_peak_sum = 0
+        infer_res_peak_sum = 0
+        infer_alloc_delta_sum = 0
+        infer_res_delta_sum = 0
+        infer_alloc_peak_max = 0
+        infer_res_peak_max = 0
+        infer_alloc_delta_max = 0
+        infer_res_delta_max = 0
 
         model_without_ddp = self.model
         if hasattr(self.model, 'module'):
@@ -528,19 +537,19 @@ class Trainer(object):
                     if track_mem:
                         infer_peak_alloc = torch.cuda.max_memory_allocated(mem_device)
                         infer_peak_res = torch.cuda.max_memory_reserved(mem_device)
+                        infer_delta_alloc = max(0, infer_peak_alloc - infer_start_alloc)
+                        infer_delta_res = max(0, infer_peak_res - infer_start_res)
                         run_peak_alloc_bytes = max(run_peak_alloc_bytes, infer_peak_alloc)
                         run_peak_res_bytes = max(run_peak_res_bytes, infer_peak_res)
-                        if self.recorder is not None:
-                            sample_id = self._get_validation_sample_id(sample_index)
-                            self.recorder.logger.info(
-                                '>>> Validation InferMem I[{:04d}|{:04d}] Sample {} '
-                                'Mem_alloc_peak {:.1f}MB Mem_res_peak {:.1f}MB '
-                                'Mem_alloc_delta {:.1f}MB Mem_res_delta {:.1f}MB'.format(
-                                    total_iter, i + 1, sample_id,
-                                    infer_peak_alloc / (1024 ** 2),
-                                    infer_peak_res / (1024 ** 2),
-                                    (infer_peak_alloc - infer_start_alloc) / (1024 ** 2),
-                                    (infer_peak_res - infer_start_res) / (1024 ** 2)))
+                        infer_mem_count += 1
+                        infer_alloc_peak_sum += infer_peak_alloc
+                        infer_res_peak_sum += infer_peak_res
+                        infer_alloc_delta_sum += infer_delta_alloc
+                        infer_res_delta_sum += infer_delta_res
+                        infer_alloc_peak_max = max(infer_alloc_peak_max, infer_peak_alloc)
+                        infer_res_peak_max = max(infer_res_peak_max, infer_peak_res)
+                        infer_alloc_delta_max = max(infer_alloc_delta_max, infer_delta_alloc)
+                        infer_res_delta_max = max(infer_res_delta_max, infer_delta_res)
 
                     output = lidar_pred.unsqueeze(0) # [C, H, W] ==> [1, C, H, W]
                     output_softmax = F.softmax(output, dim=1)
@@ -708,6 +717,20 @@ class Trainer(object):
                 torch.cuda.max_memory_reserved(mem_device))
             max_alloc_mb = run_peak_alloc_bytes / (1024 ** 2)
             max_res_mb = run_peak_res_bytes / (1024 ** 2)
+        infer_mem_summary = None
+        if infer_mem_count > 0:
+            mb = 1024 ** 2
+            infer_mem_summary = {
+                'count': infer_mem_count,
+                'avg_alloc_peak': (infer_alloc_peak_sum / infer_mem_count) / mb,
+                'avg_res_peak': (infer_res_peak_sum / infer_mem_count) / mb,
+                'avg_alloc_delta': (infer_alloc_delta_sum / infer_mem_count) / mb,
+                'avg_res_delta': (infer_res_delta_sum / infer_mem_count) / mb,
+                'max_alloc_peak': infer_alloc_peak_max / mb,
+                'max_res_peak': infer_res_peak_max / mb,
+                'max_alloc_delta': infer_alloc_delta_max / mb,
+                'max_res_delta': infer_res_delta_max / mb,
+            }
 
         # Print results
         if self.recorder is not None:
@@ -756,6 +779,14 @@ class Trainer(object):
             if max_alloc_mb is not None and max_res_mb is not None:
                 log_str += ' | Mem_alloc {:.1f}MB Mem_res {:.1f}MB'.format(max_alloc_mb, max_res_mb)
             self.recorder.logger.info(log_str)
+            if mode == 'Validation' and infer_mem_summary is not None:
+                self.recorder.logger.info(
+                    '>>> Validation InferMemAvg N[{count}] '
+                    'Mem_alloc_peak_avg {avg_alloc_peak:.1f}MB Mem_res_peak_avg {avg_res_peak:.1f}MB '
+                    'Mem_alloc_delta_avg {avg_alloc_delta:.1f}MB Mem_res_delta_avg {avg_res_delta:.1f}MB '
+                    'Mem_alloc_peak_max {max_alloc_peak:.1f}MB Mem_res_peak_max {max_res_peak:.1f}MB '
+                    'Mem_alloc_delta_max {max_alloc_delta:.1f}MB Mem_res_delta_max {max_res_delta:.1f}MB'.format(
+                        **infer_mem_summary))
 
         # Prefer point metrics for best-model selection when available (KNN validation),
         # otherwise fall back to pixel metrics.
