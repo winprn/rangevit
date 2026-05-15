@@ -317,6 +317,26 @@ class Trainer(object):
                 metas.append(dict(flip=flip, shift=shift))
         return metas
 
+    def _get_validation_sample_id(self, sample_index):
+        try:
+            sample_index = int(sample_index)
+        except (TypeError, ValueError):
+            return str(sample_index)
+
+        range_dataset = getattr(self.val_range_loader, 'dataset', None)
+        base_dataset = getattr(range_dataset, 'dataset', None)
+
+        if range_dataset is not None and hasattr(range_dataset, '_get_sample_id'):
+            return os.path.normpath(str(range_dataset._get_sample_id(sample_index)))
+        if base_dataset is not None and hasattr(base_dataset, 'parsePathInfoByIndex'):
+            seq_id, frame_id = base_dataset.parsePathInfoByIndex(sample_index)
+            return os.path.join(str(seq_id), str(frame_id))
+        if base_dataset is not None and hasattr(base_dataset, 'lidar_filenames'):
+            return os.path.normpath(str(base_dataset.lidar_filenames[sample_index]))
+        if base_dataset is not None and hasattr(base_dataset, 'pointcloud_files'):
+            return os.path.normpath(str(base_dataset.pointcloud_files[sample_index]))
+        return str(sample_index)
+
     def compute_losses(self, output, output_softmax, label, mask, aux_outputs=None, aux_loss_weight=0.0):
         loss_lovasz = self.criterion['lovasz'](output_softmax, label)
         if torch.is_tensor(loss_lovasz) and loss_lovasz.ndim > 0:
@@ -399,8 +419,12 @@ class Trainer(object):
         if track_mem:
             torch.cuda.reset_peak_memory_stats()
             mem_device = torch.device('cuda')
+            run_peak_alloc_bytes = 0
+            run_peak_res_bytes = 0
         else:
             mem_device = None
+            run_peak_alloc_bytes = None
+            run_peak_res_bytes = None
 
         model_without_ddp = self.model
         if hasattr(self.model, 'module'):
@@ -473,6 +497,16 @@ class Trainer(object):
                     # Validation
                     ims_metas = self._build_tta_metas(input_feature)
                     ims = [input_feature for _ in ims_metas]
+                    if track_mem:
+                        run_peak_alloc_bytes = max(
+                            run_peak_alloc_bytes,
+                            torch.cuda.max_memory_allocated(mem_device))
+                        run_peak_res_bytes = max(
+                            run_peak_res_bytes,
+                            torch.cuda.max_memory_reserved(mem_device))
+                        torch.cuda.reset_peak_memory_stats()
+                        infer_start_alloc = torch.cuda.memory_allocated(mem_device)
+                        infer_start_res = torch.cuda.memory_reserved(mem_device)
                     with torch.cuda.amp.autocast(self.fp16_scaler is not None):
                         lidar_pred = inference(
                             model_without_ddp.rangevit,
@@ -484,6 +518,22 @@ class Trainer(object):
                             batch_size=input_feature.shape[0],
                             use_kpconv=False,
                             use_sliding_window=self.settings.use_sliding_window)
+                    if track_mem:
+                        infer_peak_alloc = torch.cuda.max_memory_allocated(mem_device)
+                        infer_peak_res = torch.cuda.max_memory_reserved(mem_device)
+                        run_peak_alloc_bytes = max(run_peak_alloc_bytes, infer_peak_alloc)
+                        run_peak_res_bytes = max(run_peak_res_bytes, infer_peak_res)
+                        if self.recorder is not None:
+                            sample_id = self._get_validation_sample_id(sample_index)
+                            self.recorder.logger.info(
+                                '>>> Validation InferMem I[{:04d}|{:04d}] Sample {} '
+                                'Mem_alloc_peak {:.1f}MB Mem_res_peak {:.1f}MB '
+                                'Mem_alloc_delta {:.1f}MB Mem_res_delta {:.1f}MB'.format(
+                                    total_iter, i + 1, sample_id,
+                                    infer_peak_alloc / (1024 ** 2),
+                                    infer_peak_res / (1024 ** 2),
+                                    (infer_peak_alloc - infer_start_alloc) / (1024 ** 2),
+                                    (infer_peak_res - infer_start_res) / (1024 ** 2)))
 
                     output = lidar_pred.unsqueeze(0) # [C, H, W] ==> [1, C, H, W]
                     output_softmax = F.softmax(output, dim=1)
@@ -643,8 +693,14 @@ class Trainer(object):
         epoch_lr = self.optimizer.param_groups[0]['lr']
         max_alloc_mb = max_res_mb = None
         if track_mem:
-            max_alloc_mb = torch.cuda.max_memory_allocated(mem_device) / (1024 ** 2)
-            max_res_mb = torch.cuda.max_memory_reserved(mem_device) / (1024 ** 2)
+            run_peak_alloc_bytes = max(
+                run_peak_alloc_bytes,
+                torch.cuda.max_memory_allocated(mem_device))
+            run_peak_res_bytes = max(
+                run_peak_res_bytes,
+                torch.cuda.max_memory_reserved(mem_device))
+            max_alloc_mb = run_peak_alloc_bytes / (1024 ** 2)
+            max_res_mb = run_peak_res_bytes / (1024 ** 2)
 
         # Print results
         if self.recorder is not None:
