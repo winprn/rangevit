@@ -448,9 +448,16 @@ class Trainer(object):
         for i, batch in enumerate(dataloader):
             t_process_start = time.time()
             current_lr = None
+            sample_index = i
             if mode == 'Validation' and self.use_knn:
-                (input_feature, input_label, input_mask, proj_depth,
-                 uproj_x_idx, uproj_y_idx, uproj_depth, sem_label) = batch
+                if len(batch) == 9:
+                    (input_feature, input_label, input_mask, proj_depth,
+                     uproj_x_idx, uproj_y_idx, uproj_depth, sem_label, sample_index) = batch
+                    if torch.is_tensor(sample_index):
+                        sample_index = int(sample_index.item())
+                else:
+                    (input_feature, input_label, input_mask, proj_depth,
+                     uproj_x_idx, uproj_y_idx, uproj_depth, sem_label) = batch
             else:
                 input_feature, input_label, input_mask = batch
 
