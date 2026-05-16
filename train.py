@@ -29,6 +29,7 @@ import utils.tools as tools
 from utils.metrics.eval_results import eval_results
 from utils.metrics.tensorboard_logger import tensorboard_logger
 from utils.inference.inference_utils import inference
+from utils.robust_eval import apply_robust_eval
 from utils.tools import Recorder
 
 
@@ -84,6 +85,13 @@ class Trainer(object):
         if getattr(self.settings, 'range_aug', False):
             from dataset.preprocess.rangeaug import RangeAugmentation
             self.range_aug = RangeAugmentation()
+
+        if getattr(self.settings, 'robust_eval_enabled', False) and self.recorder is not None:
+            self.recorder.logger.info(
+                'Validation robustness enabled: type=%s severity=%.4f seed=%d',
+                self.settings.robust_eval_type,
+                self.settings.robust_eval_severity,
+                self.settings.robust_eval_seed)
 
         # Define scheduler
         self.scheduler = utils.optim.WarmupCosineLR(
@@ -480,6 +488,13 @@ class Trainer(object):
             # Range image-level augmentation
             if mode == 'Train' and self.range_aug is not None:
                 input_feature, input_label = self.range_aug(input_feature, input_label, input_mask)
+            if mode == 'Validation' and getattr(self.settings, 'robust_eval_enabled', False):
+                input_feature = apply_robust_eval(
+                    input_feature=input_feature,
+                    input_mask=input_mask,
+                    corruption_type=self.settings.robust_eval_type,
+                    severity=self.settings.robust_eval_severity,
+                    seed=int(self.settings.robust_eval_seed) + int(sample_index))
 
             # Forward propagation
             if mode == 'Train':

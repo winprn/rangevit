@@ -17,6 +17,7 @@ import yaml
 import sys
 import shutil
 import utils.tools as tools
+from utils.robust_eval import SUPPORTED_ROBUST_EVAL_TYPES
 
 
 class Option(object):
@@ -209,6 +210,13 @@ class Option(object):
         # Range image-level augmentation
         self.range_aug = self.config.get('range_aug', False)
 
+        # Validation-time robustness sensitivity analysis.
+        robust_eval_cfg = self.config.get('robust_eval', {})
+        self.robust_eval_enabled = bool(robust_eval_cfg.get('enabled', False))
+        self.robust_eval_type = str(robust_eval_cfg.get('type', 'none')).lower()
+        self.robust_eval_severity = float(robust_eval_cfg.get('severity', 0.0))
+        self.robust_eval_seed = int(robust_eval_cfg.get('seed', 42))
+
         # Checkpoint model
         self.checkpoint = self.config.get('checkpoint', None)
         self.pretrained_model = self.config.get('pretrained_model', None)
@@ -291,6 +299,14 @@ class Option(object):
             assert self.aux_loss_weight >= 0.0, 'aux_loss_weight must be >= 0'
         if self.use_kpconv and self.use_knn:
             raise AssertionError('use_kpconv and use_knn cannot both be True')
+        if self.robust_eval_type not in SUPPORTED_ROBUST_EVAL_TYPES:
+            raise ValueError(
+                f"robust_eval.type must be one of: {', '.join(sorted(SUPPORTED_ROBUST_EVAL_TYPES))}"
+            )
+        if self.robust_eval_severity < 0.0 or self.robust_eval_severity > 1.0:
+            raise ValueError('robust_eval.severity must be in [0, 1].')
+        if self.robust_eval_enabled and self.use_kpconv:
+            raise AssertionError('robust_eval is supported only for the non-KPConv validation path')
 
         # The following hyperparameters have to be tuples or lists with two elements.
         tuple_list = [self.patch_size, self.patch_stride,
