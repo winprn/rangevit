@@ -52,21 +52,30 @@ class RangeAugmentation:
       - RangeInstance:   paste tail-class pixels from paired sample
 
     Args:
-        aug_prob: Per-technique probabilities. Order:
+        aug_prob: Per-technique probabilities, ordered
             [RangePolar, RangeBeams, RangeCompletion, RangeFake, RangeInstance].
             Default: [0.9, 0.7, 0.9, 0.0, 0.9].
+        tail_classes: Mapped class ids treated as tail (underrepresented).
+            Defaults to the SemanticKITTI tail set.
+        fake_pairs: Mapping from a front-class id to a list of tail-class ids
+            it may be relabelled as during RangeFake. Defaults to the
+            SemanticKITTI pair map. RangeFake is off by default; if turned on
+            for a non-KITTI dataset this map MUST be overridden.
     """
 
-    # SemanticKITTI mapped tail classes (underrepresented):
-    # 2=bicycle, 3=motorcycle, 4=truck, 5=other-vehicle, 6=person,
-    # 7=bicyclist, 8=motorcyclist, 16=trunk, 18=pole, 19=traffic-sign
-    TAIL_CLASSES = [2, 3, 4, 5, 6, 7, 8, 16, 18, 19]
+    _DEFAULT_TAIL_CLASSES = [2, 3, 4, 5, 6, 7, 8, 16, 18, 19]
+    _DEFAULT_FAKE_PAIRS = {1: [2, 3, 5, 8], 9: [10, 11, 12]}
 
-    def __init__(self, aug_prob=None):
+    def __init__(self, aug_prob=None, tail_classes=None, fake_pairs=None):
         if aug_prob is None:
             aug_prob = [0.9, 0.7, 0.9, 0.0, 0.9]
         self.aug_prob = aug_prob
-        print(f'[INFO] Range image augmentation enabled with probabilities {aug_prob}')
+        self.tail_classes = list(tail_classes) if tail_classes is not None else list(self._DEFAULT_TAIL_CLASSES)
+        self.fake_pairs = dict(fake_pairs) if fake_pairs is not None else dict(self._DEFAULT_FAKE_PAIRS)
+        print(
+            f'[INFO] Range image augmentation enabled with probabilities {aug_prob}, '
+            f'tail_classes={self.tail_classes}'
+        )
 
     def __call__(self, data, label, mask):
         """Apply range augmentations to a batch.
@@ -122,7 +131,7 @@ class RangeAugmentation:
         label_a[:, p_start:p_end] = label_b[:, p_start:p_end]
 
         # Extract tail-class pixels, flip horizontally, paste back
-        tail_tensor = torch.tensor(self.TAIL_CLASSES, device=label_a.device)
+        tail_tensor = torch.tensor(self.tail_classes, device=label_a.device)
         class_mask = torch.isin(label_a, tail_tensor)
         masked_scan_a = torch.full_like(scan_a, -1.0)
         masked_scan_a[:, class_mask] = scan_a[:, class_mask]
@@ -164,19 +173,24 @@ class RangeAugmentation:
         return scan_a, label_a
 
     def _range_fake(self, scan_a, label_a):
-        """Relabel front-class pixels as tail-class (unstable, disabled by default)."""
-        pairs = {
-            1: [2, 3, 5, 8],    # car -> bicycle, motorcycle, other-vehicle, motorcyclist
-            9: [10, 11, 12],     # road -> parking, sidewalk, other-ground
-        }
-        rand_front_class = random.choice(list(pairs.keys()))
-        rand_tail_class = random.choice(pairs[rand_front_class])
+        """Relabel front-class pixels as tail-class (unstable, disabled by default).
+
+        Uses self.fake_pairs (front_cls -> list of tail_cls). For non-KITTI
+        datasets the caller must provide an appropriate fake_pairs map.
+        """
+        if not self.fake_pairs:
+            return scan_a, label_a
+        rand_front_class = random.choice(list(self.fake_pairs.keys()))
+        candidates = self.fake_pairs[rand_front_class]
+        if not candidates:
+            return scan_a, label_a
+        rand_tail_class = random.choice(candidates)
         label_a[label_a == rand_front_class] = rand_tail_class
         return scan_a, label_a
 
     def _range_instance(self, scan_a, label_a, scan_b, label_b):
         """Paste all tail-class pixels from paired sample."""
-        for cls in self.TAIL_CLASSES:
+        for cls in self.tail_classes:
             pix = label_b == cls
             scan_a[:, pix] = scan_b[:, pix]
             label_a[pix] = label_b[pix]
