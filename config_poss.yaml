@@ -39,7 +39,7 @@ training:
       type: "focal"
       gamma: 2.0
       ignore_index: 0
-      weight: 1.0
+      weight: 2.5
     lovasz_loss:
       weight: 1.0
     boundary_loss:
@@ -78,7 +78,7 @@ skip_filters: 0
 
 # 3D refiner / post-processing
 point_postproc: "knn"
-knn_search: 13
+knn_search: 7
 knn_k: 5
 knn_sigma: 1.0
 knn_cutoff: 1.0
