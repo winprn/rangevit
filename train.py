@@ -79,11 +79,15 @@ class Trainer(object):
                 ignore=self.ignore_class, is_distributed=self.settings.distributed)
             self.metrics_3d.reset()
 
-        # Range image-level augmentation (applied on batch before forward pass)
+        # Range image-level augmentation (applied on batch before forward pass).
+        # Tail classes and per-op probabilities flow from option.parse_range_aug.
         self.range_aug = None
         if getattr(self.settings, 'range_aug', False):
             from dataset.preprocess.rangeaug import RangeAugmentation
-            self.range_aug = RangeAugmentation()
+            self.range_aug = RangeAugmentation(
+                aug_prob=getattr(self.settings, 'range_aug_probs', None),
+                tail_classes=getattr(self.settings, 'range_aug_tail_classes', None),
+            )
 
         # Define scheduler
         self.scheduler = utils.optim.WarmupCosineLR(
