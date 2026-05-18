@@ -119,3 +119,38 @@ def test_range_aug_block_with_enable_false_disables():
     cfg = {'range_aug': {'enable': False, 'p_hflip': 0.5}}
     enable, _, _, _ = Option.parse_range_aug(cfg)
     assert enable is False
+
+
+def test_p_hflip_prefers_range_aug_block():
+    """When range_aug is a dict with p_hflip, it wins over augmentation.p_hflip."""
+    from dataset.range_view_loader import _resolve_p_hflip
+    cfg = {
+        'range_aug': {'enable': True, 'p_hflip': 0.7},
+        'augmentation': {'p_hflip': 0.3},
+    }
+    assert _resolve_p_hflip(cfg) == 0.7
+
+
+def test_p_hflip_falls_back_to_augmentation_block():
+    from dataset.range_view_loader import _resolve_p_hflip
+    cfg = {
+        'range_aug': True,  # legacy bool — no p_hflip inside
+        'augmentation': {'p_hflip': 0.3},
+    }
+    assert _resolve_p_hflip(cfg) == 0.3
+
+
+def test_p_hflip_defaults_to_zero_when_absent():
+    from dataset.range_view_loader import _resolve_p_hflip
+    cfg = {'augmentation': {}}
+    assert _resolve_p_hflip(cfg) == 0.0
+
+
+def test_p_hflip_block_without_key_falls_back():
+    """range_aug block present but without p_hflip falls back to augmentation."""
+    from dataset.range_view_loader import _resolve_p_hflip
+    cfg = {
+        'range_aug': {'enable': True},
+        'augmentation': {'p_hflip': 0.4},
+    }
+    assert _resolve_p_hflip(cfg) == 0.4

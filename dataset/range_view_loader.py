@@ -85,6 +85,22 @@ from scipy.spatial.ckdtree import cKDTree as kdtree
 from .preprocess import augmentor, projection, ClusterMix, InstanceCopy, PolarMix, InstanceCutMix, KNNI
 
 
+def _resolve_p_hflip(config):
+    """Resolve the range-image horizontal-flip probability.
+
+    Lookup order:
+      1. ``config['range_aug']['p_hflip']`` when ``range_aug`` is a dict and
+         the key is present.
+      2. ``config['augmentation']['p_hflip']`` (legacy location).
+      3. ``0.0`` when neither is set.
+    """
+    range_aug_cfg = config.get('range_aug', None)
+    if isinstance(range_aug_cfg, dict) and 'p_hflip' in range_aug_cfg:
+        return float(range_aug_cfg['p_hflip'])
+    augment_cfg = config.get('augmentation', {}) or {}
+    return float(augment_cfg.get('p_hflip', 0.0))
+
+
 class RangeViewLoader(Dataset):
     def __init__(self, dataset, config, data_len=-1, is_train=True, return_uproj=False, use_kpconv=False):
         self.dataset = dataset
@@ -176,7 +192,7 @@ class RangeViewLoader(Dataset):
                 max_instances_per_class=instcopy_cfg.get('max_instances_per_class', 1),
             )
 
-        self.proj_p_hflip = augment_config.get('p_hflip', 0.0)
+        self.proj_p_hflip = _resolve_p_hflip(self.config)
         if self.proj_p_hflip > 0.0:
             print(f'Horizontal flip of range projections with p={self.proj_p_hflip}')
 
