@@ -67,3 +67,66 @@ def test_poss_tail_set_construction():
     aug = RangeAugmentation(tail_classes=poss_tail, aug_prob=[0.0, 0.0, 0.0, 0.0, 0.0])
     assert aug.tail_classes == poss_tail
     assert all(c <= 13 for c in aug.tail_classes)
+
+
+import yaml
+
+from option import Option
+
+
+def _make_settings_with_range_aug(tmp_path, value):
+    """Build a minimal Option-like settings object by patching the YAML config.
+
+    Option.__init__ requires a full config; we monkey-build a tiny dict and
+    invoke the parser path directly to avoid coupling tests to unrelated keys.
+    """
+    return value  # placeholder; the real test uses the helper below
+
+
+def test_range_aug_parses_legacy_bool_true():
+    cfg = {'range_aug': True}
+    enable, p_hflip, tail, probs = Option.parse_range_aug(cfg)
+    assert enable is True
+    assert p_hflip is None
+    assert tail is None
+    assert probs is None
+
+
+def test_range_aug_parses_legacy_bool_false():
+    cfg = {'range_aug': False}
+    enable, p_hflip, tail, probs = Option.parse_range_aug(cfg)
+    assert enable is False
+    assert p_hflip is None
+    assert tail is None
+    assert probs is None
+
+
+def test_range_aug_parses_missing_key():
+    cfg = {}
+    enable, p_hflip, tail, probs = Option.parse_range_aug(cfg)
+    assert enable is False
+    assert p_hflip is None
+    assert tail is None
+    assert probs is None
+
+
+def test_range_aug_parses_full_block():
+    cfg = {
+        'range_aug': {
+            'enable': True,
+            'p_hflip': 0.5,
+            'tail_classes': [1, 2, 4, 6, 7, 8, 10, 11, 12],
+            'probs': [0.9, 0.7, 0.9, 0.0, 0.9],
+        }
+    }
+    enable, p_hflip, tail, probs = Option.parse_range_aug(cfg)
+    assert enable is True
+    assert p_hflip == 0.5
+    assert tail == [1, 2, 4, 6, 7, 8, 10, 11, 12]
+    assert probs == [0.9, 0.7, 0.9, 0.0, 0.9]
+
+
+def test_range_aug_block_with_enable_false_disables():
+    cfg = {'range_aug': {'enable': False, 'p_hflip': 0.5}}
+    enable, _, _, _ = Option.parse_range_aug(cfg)
+    assert enable is False

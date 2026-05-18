@@ -20,6 +20,36 @@ import utils.tools as tools
 
 
 class Option(object):
+    @staticmethod
+    def parse_range_aug(config):
+        """Parse the ``range_aug`` config key into flat scalars.
+
+        Accepts either:
+          * a bool (legacy): ``range_aug: true`` / ``range_aug: false``
+          * a dict (new block form) with keys:
+                enable (bool, default false),
+                p_hflip (float, default None),
+                tail_classes (list[int], default None),
+                probs (list[float] length 5, default None).
+
+        Returns a 4-tuple ``(enable, p_hflip, tail_classes, probs)``. Values left
+        as ``None`` instruct downstream code to use its built-in defaults.
+        """
+        raw = config.get('range_aug', False)
+        if isinstance(raw, dict):
+            enable = bool(raw.get('enable', False))
+            p_hflip = raw.get('p_hflip', None)
+            if p_hflip is not None:
+                p_hflip = float(p_hflip)
+            tail_classes = raw.get('tail_classes', None)
+            if tail_classes is not None:
+                tail_classes = [int(c) for c in tail_classes]
+            probs = raw.get('probs', None)
+            if probs is not None:
+                probs = [float(p) for p in probs]
+            return enable, p_hflip, tail_classes, probs
+        return bool(raw), None, None, None
+
     def __init__(self, config_path, args):
         self.config_path = config_path
         self.config = yaml.safe_load(open(config_path, 'r'))
@@ -207,8 +237,14 @@ class Option(object):
         else:
             raise ValueError('point_postproc must be one of: kpconv, knn, none')
 
-        # Range image-level augmentation
-        self.range_aug = self.config.get('range_aug', False)
+        # Range image-level augmentation. ``range_aug`` accepts either a legacy
+        # bool or a dict block (see ``parse_range_aug`` for the schema).
+        (
+            self.range_aug,
+            self.range_aug_p_hflip,
+            self.range_aug_tail_classes,
+            self.range_aug_probs,
+        ) = Option.parse_range_aug(self.config)
 
         # Checkpoint model
         self.checkpoint = self.config.get('checkpoint', None)
