@@ -69,18 +69,7 @@ def test_poss_tail_set_construction():
     assert all(c <= 13 for c in aug.tail_classes)
 
 
-import yaml
-
 from option import Option
-
-
-def _make_settings_with_range_aug(tmp_path, value):
-    """Build a minimal Option-like settings object by patching the YAML config.
-
-    Option.__init__ requires a full config; we monkey-build a tiny dict and
-    invoke the parser path directly to avoid coupling tests to unrelated keys.
-    """
-    return value  # placeholder; the real test uses the helper below
 
 
 def test_range_aug_parses_legacy_bool_true():
