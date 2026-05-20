@@ -16,6 +16,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import copy
+import inspect
 import timm
 from timm.models.layers import trunc_normal_
 
@@ -160,6 +161,10 @@ def create_vit(model_cfg):
             new_patch_stride = new_patch_size
         model_cfg['patch_size'] = new_patch_size
         model_cfg['patch_stride'] = new_patch_stride
+
+    valid_args = set(inspect.signature(VisionTransformer.__init__).parameters)
+    valid_args.discard('self')
+    model_cfg = {k: v for k, v in model_cfg.items() if k in valid_args}
 
     model = VisionTransformer(**model_cfg)
 
