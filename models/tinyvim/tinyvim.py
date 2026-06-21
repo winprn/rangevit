@@ -11,6 +11,13 @@ except ImportError:
     from timm.models.layers import to_2tuple
 from .tvimblock import TViMBlock, Conv2d_BN, RepDW, FFN
 
+try:
+    from mmengine.logging import get_root_logger
+    from mmengine.runner import _load_checkpoint
+except ImportError:
+    get_root_logger = None
+    _load_checkpoint = None
+
 TinyViM_width = {
     'S': [48, 64, 168, 224],
     'B': [48, 96, 192, 384],
@@ -213,12 +220,16 @@ class TinyViM(nn.Module):
     # init for mmdetection or mmsegmentation by loading
     # imagenet pre-trained weights
     def init_weights(self, pretrained=None):
+        if get_root_logger is None or _load_checkpoint is None:
+            raise ImportError(
+                'mmengine is required for init_weights(). '
+                'Install it with: pip install mmengine'
+            )
         logger = get_root_logger()
         if self.init_cfg is None and pretrained is None:
-            logger.warn(f'No pre-trained weights for '
+            logger.warning(f'No pre-trained weights for '
                         f'{self.__class__.__name__}, '
                         f'training start from scratch')
-            pass
         else:
             assert 'checkpoint' in self.init_cfg, f'Only support ' \
                                                   f'specify `Pretrained` in ' \

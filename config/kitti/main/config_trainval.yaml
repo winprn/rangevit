@@ -10,9 +10,6 @@ data:
   has_label: true
   use_trainval: true 
 
-knni:
-  enable: false
-  window_size: 5
 
 # Train config
 training:
@@ -22,10 +19,7 @@ training:
   batch_size: 4
   batch_size_val: 1
   lr: 0.0004
-  train_result_frequency: 100 # printing frequency of the train results
-
-
-# Model config
+  train_result_frequency: 100 # printing frequency of the train results# Model config
 model:
   vit_backbone: 'vit_small_patch16_384'
   in_channels: 5
@@ -49,19 +43,13 @@ decoder: 'up_conv'  # 'linear' or 'up_conv'
 skip_filters: 256 # has to be 0 (no skip) or D_h 
 
 # 3D refiner / post-processing
-point_postproc: 'kpconv' # 'kpconv', 'knn', or 'none'
-
-
-# Checkpoint model
+point_postproc: 'kpconv' # 'kpconv', 'knn', or 'none'# Checkpoint model
 checkpoint: null
 pretrained_model: '/path_to_pretrained_model/model.pth'
 
 # Loading pre-trained patch and positional embeddings
 reuse_pos_emb: true
-reuse_patch_emb: false # no patch embedding as a convolutional stem (ConvStem) is used
-
-
-# Data augmentation config
+reuse_patch_emb: false # no patch embedding as a convolutional stem (ConvStem) is used# Data augmentation config
 augmentation:
   # flip
   p_flipx: 0.
@@ -88,40 +76,6 @@ augmentation:
   p_rot_yaw: 0.5
   rot_yawmin: 5
   rot_yawmax: -5
-
-adapted_augmentation:
-  # SemanticKITTI mapped class ids:
-  # 0=unlabeled, 1=car, 2=bicycle, 3=motorcycle, 4=truck, 5=other-vehicle,
-  # 6=person, 7=bicyclist, 8=motorcyclist, 9=road, 10=parking, 11=sidewalk,
-  # 12=other-ground, 13=building, 14=fence, 15=vegetation, 16=trunk,
-  # 17=terrain, 18=pole, 19=traffic-sign
-  use_mapped_labels: true
-  pointsample:
-    enable: true
-    num_points: 120000
-    replace: false
-  polarmix:
-    enable: true
-    prob: 0.5
-    classes: [2, 3, 4, 5, 6, 7, 8] # bicycle, motorcycle, truck, other-vehicle, person, bicyclist, motorcyclist
-  instance_cutmix:
-    enable: true
-    prob: 1.0
-    instance_bank_root: "cache/instance_bank"
-    classes: [2, 3, 4, 5, 6, 7, 8] # bicycle, motorcycle, truck, other-vehicle, person, bicyclist, motorcyclist
-    min_points: 20
-    num_to_add: [0, 2]
-  clustermix:
-    enable: true
-    prob: 0.5
-    vertical_prob: 0.5
-    sector_width: 1.570796
-    height_ratio: 0.5
-  instance_copy:
-    enable: true
-    prob: 0.5
-    classes: [2, 3, 4, 5, 6, 7, 8] # bicycle, motorcycle, truck, other-vehicle, person, bicyclist, motorcyclist
-    max_instances_per_class: 1
 
 sensor:
   name: 'HDL64'

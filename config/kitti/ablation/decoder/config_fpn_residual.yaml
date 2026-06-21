@@ -8,7 +8,7 @@ mlflow:
   enable: true
   tracking_uri: "http://140.245.117.232:5000"
   experiment_name: "rangevim"
-  run_name: "[trainval] tinyvim_small_fpn_baseline"  # NOTE: baseline = fpn (no gating)
+  run_name: "[trainval] tinyvim_small_fpn_residual"  # V1: + cross-stage residual
   nested: false
   log_checkpoints: false
   log_code_snapshot: false
@@ -21,9 +21,6 @@ data:
   has_label: true
   use_trainval: true
 
-knni:
-  enable: false
-  window_size: 5
 
 # Train config
 training:
@@ -61,13 +58,11 @@ model:
   train_full_image: true
   use_sliding_window: false
 
-# Stem
+# Stem (TinyViM uses its own hardcoded stem; conv_stem is ignored)
 conv_stem: "ConvStem"
-stem_base_channels: 32
-D_h: 48
 
-# Decoder — BASELINE: fpn (sum fusion, no gating)
-decoder: "fpn"
+# Decoder
+decoder: "fpn_residual"
 skip_filters: 0
 
 # 3D refiner / post-processing
@@ -80,8 +75,6 @@ knn_cutoff: 1.0
 # Checkpoint model
 checkpoint: null
 pretrained_model: null
-reuse_pos_emb: false
-reuse_patch_emb: false
 pretrained_channel_adaptation: "repeat"
 
 # Range image-level augmentation
@@ -111,8 +104,21 @@ augmentation:
   rot_yawmin: 5
   rot_yawmax: -5
 
+# NOTE: Point-level augmentations experimented during development.
+# All are currently DISABLED - results were not stable / did not consistently improve mIoU.
+# Re-enable selectively if you wish to reproduce or iterate on these experiments.
+#
+# Sub-augmentations:
+#   - pointsample    : randomly sample N points per scan (enable: false)
+#   - polarmix       : mix two scans in polar coordinates for rare classes
+#                      (bicycle, motorcycle, truck, other-vehicle, person,
+#                       bicyclist, motorcyclist - all rare on SemanticKITTI)
+#   - instance_cutmix: copy-paste foreground instances between scans
+#   - clustermix     : mix point clusters across scans
+
+
 adapted_augmentation:
-  use_mapped_labels: true
+  use_mapped_labels: false
   pointsample:
     enable: false
     num_points: 120000

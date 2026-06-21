@@ -189,7 +189,7 @@ class Option(object):
         # 3D refiner / post-processing
         self.use_kpconv = False
         self.use_knn = False
-        self.knn_search = self.config.get('knn_search', 13)
+        self.knn_search = self.config.get('knn_search', 7)
         self.knn_k = self.config.get('knn_k', 5)
         self.knn_sigma = self.config.get('knn_sigma', 1.0)
         self.knn_cutoff = self.config.get('knn_cutoff', 1.0)

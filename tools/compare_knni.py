@@ -21,7 +21,7 @@ def parse_args():
     parser.add_argument(
         "--config",
         type=str,
-        default=str(REPO_ROOT / "config_kitti.yaml"),
+        default=str(REPO_ROOT / "config" / "kitti" / "main" / "config.yaml"),
         help="Path to config YAML.",
     )
     parser.add_argument("--seq", type=str, required=True, help="Sequence id (e.g., 00, 08).")

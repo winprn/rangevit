@@ -21,20 +21,12 @@ data:
   data_root: "../dataset/nuscenes"
   has_label: true
 
-knni:
-  enable: false
-  window_size: 5
-  cache: true
-  cache_train: false
-  cache_dir: "cache_nusc/knni"
-  cache_version: "v1"
-
 # Train config
 training:
   val_frequency: 1
-  n_epochs: 150
+  n_epochs: 120
   warmup_epochs: 10
-  batch_size: 8
+  batch_size: 6
   batch_size_val: 1
   lr: 0.0006
   min_lr: 0.00004
@@ -70,16 +62,10 @@ model:
 # Decoder
 decoder:
   name: "fpn" # 'linear', 'up_conv', 'fpn', or 'tinyvim_fuse_aux' (TinyViM-only)
-  tinyvim_fuse_aux:
-    proj_channels: 128
-    mid_channels: 256
-    out_channels: 128
-    preproj: true
-    aux_enable: true
 
 # 3D refiner / post-processing
 point_postproc: "knn" # 'kpconv', 'knn', or 'none'
-knn_search: 13
+knn_search: 7
 knn_k: 5
 knn_sigma: 1.0
 knn_cutoff: 1.0
@@ -87,8 +73,6 @@ knn_cutoff: 1.0
 # Checkpoint model
 checkpoint: null
 pretrained_model: null
-reuse_pos_emb: false
-reuse_patch_emb: false
 pretrained_channel_adaptation: "repeat"
 
 # Data augmentation config
@@ -119,13 +103,24 @@ augmentation:
   rot_yawmin: 5
   rot_yawmax: -5
 
+# NOTE: Point-level augmentations experimented during development.
+# All are currently DISABLED - results were not stable / did not consistently improve mIoU.
+# Re-enable selectively if you wish to reproduce or iterate on these experiments.
+#
+# Sub-augmentations:
+#   - pointsample    : randomly sample N points per scan (enable: false)
+#   - polarmix       : mix two scans in polar coordinates for rare classes
+#                      (bicycle, bus, car, construction_vehicle, motorcycle,
+#                       pedestrian, trailer, truck - all rare on nuScenes)
+#   - instance_cutmix: copy-paste foreground instances between scans
+#   - clustermix     : mix point clusters across scans
 adapted_augmentation:
   # nuScenes mapped class ids:
   # 0=ignore, 1=barrier, 2=bicycle, 3=bus, 4=car, 5=construction_vehicle,
   # 6=motorcycle, 7=pedestrian, 8=traffic_cone, 9=trailer, 10=truck,
   # 11=driveable_surface, 12=other_flat, 13=sidewalk, 14=terrain,
   # 15=manmade, 16=vegetation
-  use_mapped_labels: true
+  use_mapped_labels: false
   pointsample:
     enable: false
     num_points: 120000

@@ -340,7 +340,7 @@ if __name__ == '__main__':
     parser.add_argument('--save_eval_results', type=bool)
     parser.add_argument('--log_frequency', type=int)
     parser.add_argument('--knn', type=bool, default=False)
-    parser.add_argument('--knn_search', type=int, default=13)
+    parser.add_argument('--knn_search', type=int, default=7)
 
     args = parser.parse_args()
     settings = Option(args.config_path, args)

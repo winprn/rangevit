@@ -11,9 +11,6 @@ data:
   n_classes: 17 # 16 + 1(ignored)
   has_label: true
 
-knni:
-  enable: false
-  window_size: 5
 
 # Train config
 training:
@@ -90,7 +87,7 @@ adapted_augmentation:
   # 6=person, 7=bicyclist, 8=motorcyclist, 9=road, 10=parking, 11=sidewalk,
   # 12=other-ground, 13=building, 14=fence, 15=vegetation, 16=trunk,
   # 17=terrain, 18=pole, 19=traffic-sign
-  use_mapped_labels: true
+  use_mapped_labels: false
   pointsample:
     enable: true
     num_points: 120000

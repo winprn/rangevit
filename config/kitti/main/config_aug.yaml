@@ -1,14 +1,14 @@
 # General config
 num_workers: 4
-id: "exp_kitti_robust_range_noise"
-save_path: "save_rangevim_aug_robust_range_noise"
+id: "exp_kitti"
+save_path: "save_rangevim_aug"
 
 # MLflow config
 mlflow:
   enable: true
   tracking_uri: "http://140.245.117.232:5000" # e.g. 'file:./mlruns' or an HTTP URL
   experiment_name: "rangevim"
-  run_name: "[val] rangevim_base_aug_robust_range_noise" # defaults to the CLI-provided id when null
+  run_name: "[train] rangevim_base_aug" # defaults to the CLI-provided id when null
   nested: false
   log_checkpoints: false
   log_code_snapshot: false
@@ -21,9 +21,6 @@ data:
   has_label: true
   use_trainval: false # set to true if you want to train on train-val of SemanticKITTI.
 
-knni:
-  enable: false
-  window_size: 5
 
 # Train config
 training:
@@ -64,12 +61,7 @@ model:
   train_full_image: true         # train on the full projection (no random crop or scaling)
   use_sliding_window: false      # full-frame inference/validation; keeps spatial size
 
-# Stem
-conv_stem: "ConvStem" # 'none' or 'ConvStem'
-stem_base_channels: 32
-D_h: 48
-# Note tha the test results that we provide in the paper for the SemanticKITTI were with D_h = 256.
-# However, in the validation set D_h = 128 gave us better mIoU results.
+
 
 # Decoder
 decoder: "fpn" # 'linear', 'up_conv', or 'fpn'
@@ -82,25 +74,8 @@ knn_k: 5
 knn_sigma: 1.0
 knn_cutoff: 1.0
 
-# Validation-time robustness sensitivity analysis.
-robust_eval:
-  enabled: true
-  type: "range_noise"
-  severity: 0.05
-  seed: 42
-
 # Checkpoint model
 checkpoint: null
-pretrained_model: null  # Set to "/path/to/tinyvim_imagenet1k.pth" when using pretrained weights
-# Loading pre-trained patch and positional embeddings
-reuse_pos_emb: false
-reuse_patch_emb: false # no patch embedding as a convolutional stem (ConvStem) is used
-
-# Channel adaptation method for RGB (3-ch) → LiDAR (5-ch) pretrained weights
-# Options:
-#   - 'repeat': [R,G,B] → [R,G,B,R,G] × (3/5) - Default, preserves RGB info
-#   - 'grayscale': RGB → Luminance → [G,G,G,G,G] - Uses ITU-R BT.601 weights
-pretrained_channel_adaptation: "repeat"
 
 # Range image-level augmentation (applied on GPU batch before forward pass)
 range_aug: true
@@ -133,13 +108,26 @@ augmentation:
   rot_yawmin: 5
   rot_yawmax: -5
 
+# NOTE: Point-level augmentations experimented during development.
+# All are currently DISABLED - results were not stable / did not consistently improve mIoU.
+# Re-enable selectively if you wish to reproduce or iterate on these experiments.
+#
+# Sub-augmentations:
+#   - pointsample    : randomly sample N points per scan (enable: false)
+#   - polarmix       : mix two scans in polar coordinates for rare classes
+#                      (bicycle, motorcycle, truck, other-vehicle, person,
+#                       bicyclist, motorcyclist - all rare on SemanticKITTI)
+#   - instance_cutmix: copy-paste foreground instances between scans
+#   - clustermix     : mix point clusters across scans
+
+
 adapted_augmentation:
   # SemanticKITTI mapped class ids:
   # 0=unlabeled, 1=car, 2=bicycle, 3=motorcycle, 4=truck, 5=other-vehicle,
   # 6=person, 7=bicyclist, 8=motorcyclist, 9=road, 10=parking, 11=sidewalk,
   # 12=other-ground, 13=building, 14=fence, 15=vegetation, 16=trunk,
   # 17=terrain, 18=pole, 19=traffic-sign
-  use_mapped_labels: true
+  use_mapped_labels: false
   pointsample:
     enable: false
     num_points: 120000

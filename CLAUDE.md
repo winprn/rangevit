@@ -12,8 +12,17 @@ This file provides guidance to Claude Code when working with code in this reposi
 
 ```
 rangevit/
-├── config_kitti.yaml          # SemanticKITTI config with TinyViM
-├── config_nusc.yaml           # nuScenes config (standard ViT)
+├── config/
+│   ├── kitti/
+│   │   ├── main/                  # Main experiments (SemanticKITTI)
+│   │   ├── ablation/              # Ablation studies
+│   │   │   ├── backbone/          # Backbone variants
+│   │   │   ├── decoder/           # Decoder variants
+│   │   │   ├── window/            # Sliding window studies
+│   │   │   └── robustness/        # Robustness sensitivity
+│   │   └── reproduce/              # Reproduction configs
+│   └── nusc/
+│       └── reproduce/              # nuScenes configs
 ├── main.py                    # Training/evaluation entry point
 ├── train.py                   # Trainer class with train/val loops
 ├── option.py                  # Configuration parsing
@@ -312,7 +321,7 @@ pip install nuscenes-devkit
 **SemanticKITTI with TinyViM:**
 ```bash
 python -m torch.distributed.launch --nproc_per_node=4 --master_port=63545 \
-    --use_env main.py config_kitti.yaml \
+    --use_env main.py config/kitti/main/config.yaml \
     --data_root /path/to/semantic_kitti/dataset/sequences/ \
     --save_path ./logs/tinyvim_kitti \
     --pretrained_model /path/to/tinyvim_checkpoint.pth
@@ -321,7 +330,7 @@ python -m torch.distributed.launch --nproc_per_node=4 --master_port=63545 \
 **nuScenes with standard ViT:**
 ```bash
 python -m torch.distributed.launch --nproc_per_node=4 --master_port=63545 \
-    --use_env main.py config_nusc.yaml \
+    --use_env main.py config/nusc/config.yaml \
     --data_root /path/to/nuscenes/ \
     --save_path ./logs/rangevit_nusc \
     --pretrained_model /path/to/vit_checkpoint.pth
@@ -332,7 +341,7 @@ python -m torch.distributed.launch --nproc_per_node=4 --master_port=63545 \
 **Validation:**
 ```bash
 python -m torch.distributed.launch --nproc_per_node=1 --master_port=63545 \
-    --use_env main.py config_kitti.yaml \
+    --use_env main.py config/kitti/main/config.yaml \
     --data_root /path/to/dataset/ \
     --save_path ./logs/eval \
     --checkpoint /path/to/trained_model.pth \
@@ -342,7 +351,7 @@ python -m torch.distributed.launch --nproc_per_node=1 --master_port=63545 \
 **Test set (SemanticKITTI):**
 ```bash
 python -m torch.distributed.launch --nproc_per_node=1 --master_port=63545 \
-    --use_env main.py config_kitti.yaml \
+    --use_env main.py config/kitti/main/config.yaml \
     --data_root /path/to/dataset/ \
     --save_path ./logs/test \
     --checkpoint /path/to/trained_model.pth \
@@ -592,7 +601,8 @@ When loading RGB-pretrained model for LiDAR (3→5 channels):
 
 **Configuration:**
 - `option.py:L1` - Config parsing
-- `config_kitti.yaml:L1` - SemanticKITTI config
+- `config/kitti/main/config.yaml:L1` - SemanticKITTI main config
+- `config/nusc/config.yaml:L1` - nuScenes config
 
 ## Research Context
 

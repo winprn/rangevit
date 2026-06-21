@@ -1,14 +1,14 @@
 # General config
 num_workers: 4
 id: "exp_kitti"
-save_path: "save_rangevim_aug"
+save_path: "save_rangeTinyVim_small_aug"
 
 # MLflow config
 mlflow:
   enable: true
   tracking_uri: "http://140.245.117.232:5000"
   experiment_name: "rangevim"
-  run_name: "[trainval] tinyvim_small_fpn_residual"  # V1: + cross-stage residual
+  run_name: "[trainval] tinyvim_small_fpn_baseline"  # NOTE: baseline = fpn (no gating)
   nested: false
   log_checkpoints: false
   log_code_snapshot: false
@@ -20,10 +20,6 @@ data:
   data_root: "../dataset/SemanticKitti/data_odometry_velodyne/dataset/sequences"
   has_label: true
   use_trainval: true
-
-knni:
-  enable: false
-  window_size: 5
 
 # Train config
 training:
@@ -45,8 +41,8 @@ training:
     boundary_loss:
       weight: 0.0
     aux_loss:
-      weight: 0.3
-  save_epochs_at: [47, 50, 55, 57]
+      weight: 0.0
+  save_epochs_at: []
 
 # Model config
 model:
@@ -61,13 +57,8 @@ model:
   train_full_image: true
   use_sliding_window: false
 
-# Stem
-conv_stem: "ConvStem"
-stem_base_channels: 32
-D_h: 48
-
-# Decoder — V1: + cross-stage residual connection
-decoder: "fpn_residual"
+# Decoder
+decoder: "fpn"
 skip_filters: 0
 
 # 3D refiner / post-processing
@@ -80,8 +71,6 @@ knn_cutoff: 1.0
 # Checkpoint model
 checkpoint: null
 pretrained_model: null
-reuse_pos_emb: false
-reuse_patch_emb: false
 pretrained_channel_adaptation: "repeat"
 
 # Range image-level augmentation
@@ -112,7 +101,7 @@ augmentation:
   rot_yawmax: -5
 
 adapted_augmentation:
-  use_mapped_labels: true
+  use_mapped_labels: false
   pointsample:
     enable: false
     num_points: 120000

@@ -8,9 +8,6 @@ data:
   n_classes: 17 # 16 + 1(ignored)
   has_label: true
 
-knni:
-  enable: false
-  window_size: 5
 
 # Train config
 training:
@@ -20,10 +17,7 @@ training:
   batch_size: 8
   batch_size_val: 1
   lr: 0.0008 # when using DINO ViT-S/16 encoder as initialization use 0.0002.
-  train_result_frequency: 100 # printing frequency of the train results
-
-
-# Model config
+  train_result_frequency: 100 # printing frequency of the train results# Model config
 model:
   vit_backbone: 'vit_small_patch16_384'
   in_channels: 5
@@ -44,19 +38,13 @@ decoder: 'up_conv'  # 'linear' or 'up_conv'
 skip_filters: 256 # has to be 0 (no skip) or D_h
 
 # 3D refiner
-use_kpconv: true
-
-
-# Checkpoint model
+use_kpconv: true # Checkpoint model
 checkpoint: null
 pretrained_model: '/path_to_pretrained_model/model.pth'
 
 # Loading pre-trained patch and positional embeddings
 reuse_pos_emb: true
-reuse_patch_emb: false # no patch embedding as a convolutional stem (ConvStem) is used
-
-
-# Data augmentation config
+reuse_patch_emb: false # no patch embedding as a convolutional stem (ConvStem) is used# Data augmentation config
 augmentation:
   # flip
   p_flipx: 0.
@@ -83,40 +71,6 @@ augmentation:
   p_rot_yaw: 0.5
   rot_yawmin: 5
   rot_yawmax: -5
-
-adapted_augmentation:
-  # nuScenes mapped class ids:
-  # 0=ignore, 1=barrier, 2=bicycle, 3=bus, 4=car, 5=construction_vehicle,
-  # 6=motorcycle, 7=pedestrian, 8=traffic_cone, 9=trailer, 10=truck,
-  # 11=driveable_surface, 12=other_flat, 13=sidewalk, 14=terrain,
-  # 15=manmade, 16=vegetation
-  use_mapped_labels: true
-  pointsample:
-    enable: true
-    num_points: 120000
-    replace: false
-  polarmix:
-    enable: true
-    prob: 0.5
-    classes: [2, 3, 4, 5, 6, 7, 9, 10] # bicycle, bus, car, construction_vehicle, motorcycle, pedestrian, trailer, truck
-  instance_cutmix:
-    enable: true
-    prob: 1.0
-    instance_bank_root: "cache/instance_bank"
-    classes: [2, 3, 4, 5, 6, 7, 9, 10] # bicycle, bus, car, construction_vehicle, motorcycle, pedestrian, trailer, truck
-    min_points: 20
-    num_to_add: [0, 2]
-  clustermix:
-    enable: true
-    prob: 0.5
-    vertical_prob: 0.5
-    sector_width: 1.570796
-    height_ratio: 0.5
-  instance_copy:
-    enable: true
-    prob: 0.5
-    classes: [2, 3, 4, 5, 6, 7, 9, 10] # bicycle, bus, car, construction_vehicle, motorcycle, pedestrian, trailer, truck
-    max_instances_per_class: 1
 
 sensor:
   name: 'HDL64'

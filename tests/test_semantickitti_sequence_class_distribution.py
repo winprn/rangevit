@@ -2,7 +2,7 @@
 Plot SemanticKITTI class distribution per sequence for train+valid splits.
 
 Example:
-python tests/test_semantickitti_sequence_class_distribution.py --config config_kitti_tinyvim.yaml
+python tests/test_semantickitti_sequence_class_distribution.py --config config/kitti/main/config_tinyvim.yaml
 """
 
 import argparse
@@ -28,7 +28,7 @@ def parse_args():
     parser.add_argument(
         "--config",
         type=str,
-        default=str(REPO_ROOT / "config_kitti_tinyvim.yaml"),
+        default=str(REPO_ROOT / "config" / "kitti" / "main" / "config_tinyvim.yaml"),
         help="Path to project config YAML (contains data.data_root).",
     )
     parser.add_argument(

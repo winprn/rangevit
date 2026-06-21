@@ -1,5 +1,5 @@
-# python3 tools/profile_metrics.py config_kitti_tinyvim.yaml --device cuda --amp --validation_style
-# CUDA_VISIBLE_DEVICES=6 python tools/profile_metrics.py config_kitti_trainval.yaml --device cuda --amp --validation_style --profile_kpconv --save_path tmp_profile
+# python3 tools/profile_metrics.py config/kitti/main/config_tinyvim.yaml --device cuda --amp --validation_style
+# CUDA_VISIBLE_DEVICES=6 python tools/profile_metrics.py config/kitti/main/config_trainval.yaml --device cuda --amp --validation_style --profile_kpconv --save_path tmp_profile
 import argparse
 import contextlib
 import importlib.util
@@ -680,6 +680,10 @@ def main():
         "input_mode": input_label,
         "input_shape": [args.batch_size, settings.in_channels, height, width],
         "validation_style": bool(args.validation_style),
+        "use_sliding_window": bool(settings.use_sliding_window),
+        "window_size": list(settings.window_size),
+        "window_stride": list(settings.window_stride),
+        "original_image_size": list(settings.original_image_size),
         "backbone": settings.vit_backbone,
         "decoder": settings.decoder,
         "point_postproc": "kpconv" if settings.use_kpconv else ("knn" if settings.use_knn else "none"),
@@ -721,6 +725,10 @@ def main():
     print(f"Input mode:             {results['input_mode']}")
     print(f"Input tensor:           {results['input_shape']}")
     print(f"Validation style:       {results['validation_style']}")
+    print(f"Use sliding window:     {results['use_sliding_window']}")
+    print(f"Window size:            {results['window_size']}")
+    print(f"Window stride:          {results['window_stride']}")
+    print(f"Original image size:    {results['original_image_size']}")
     print(f"AMP:                    {results['amp']}")
     print(f"Parameters:             {format_large_number(total_params)} ({total_params:,})")
     print(f"Trainable parameters:   {format_large_number(trainable_params)} ({trainable_params:,})")

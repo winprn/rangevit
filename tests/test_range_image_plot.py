@@ -1,4 +1,4 @@
-# running script: python3 tests/test_range_image_plot.py --config config_kitti_tinyvim.yaml --seq 08 --frame 0 --knni --knni_fill_labels
+# running script: python tests/test_range_image_plot.py --config config/kitti/main/config_tinyvim.yaml --seq 08 --frame 0 --knni --knni_fill_labels
 import argparse
 import os
 import sys
@@ -61,8 +61,8 @@ def parse_args():
     parser.add_argument(
         "--config",
         type=str,
-        default=str(REPO_ROOT / "config_kitti.yaml"),
-        help="Path to config YAML (e.g., config_kitti.yaml).",
+        default=str(REPO_ROOT / "config" / "kitti" / "main" / "config.yaml"),
+        help="Path to config YAML (e.g., config/kitti/main/config.yaml).",
     )
     parser.add_argument(
         "--seq",

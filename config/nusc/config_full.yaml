@@ -20,9 +20,6 @@ data:
   data_root: "../dataset/nuscenes"
   has_label: true
 
-knni:
-  enable: false
-  window_size: 5
 
 # Train config
 training:
@@ -64,10 +61,8 @@ model:
   train_full_image: true         # train on the full projection
   use_sliding_window: false      # full-frame inference/validation
 
-# Stem
+# Stem (TinyViM uses its own hardcoded stem; conv_stem is ignored)
 conv_stem: "ConvStem" # 'none' or 'ConvStem'
-stem_base_channels: 32
-D_h: 48
 
 # Decoder
 decoder: "fpn" # 'linear', 'up_conv', or 'fpn'
@@ -75,23 +70,13 @@ skip_filters: 0 # FPN does not use the skip connection
 
 # 3D refiner / post-processing
 point_postproc: "knn" # 'kpconv', 'knn', or 'none'; overrides the boolean flags below
-knn_search: 13
+knn_search: 7
 knn_k: 5
 knn_sigma: 1.0
 knn_cutoff: 1.0
 
 # Checkpoint model
 checkpoint: null
-pretrained_model: null  # Set to "/path/to/tinyvim_imagenet1k.pth" when using pretrained weights
-# Loading pre-trained patch and positional embeddings
-reuse_pos_emb: false
-reuse_patch_emb: false # no patch embedding as a convolutional stem (ConvStem) is used
-
-# Channel adaptation method for RGB (3-ch) -> LiDAR (5-ch) pretrained weights
-# Options:
-#   - 'repeat': [R,G,B] -> [R,G,B,R,G] x (3/5) - Default, preserves RGB info
-#   - 'grayscale': RGB -> Luminance -> [G,G,G,G,G] - Uses ITU-R BT.601 weights
-pretrained_channel_adaptation: "repeat"
 
 # Range image-level augmentation (applied on GPU batch before forward pass)
 range_aug: true
@@ -125,13 +110,26 @@ augmentation:
   rot_yawmin: 5
   rot_yawmax: -5
 
+# NOTE: Point-level augmentations experimented during development.
+# All are currently DISABLED - results were not stable / did not consistently improve mIoU.
+# Re-enable selectively if you wish to reproduce or iterate on these experiments.
+#
+# Sub-augmentations:
+#   - pointsample    : randomly sample N points per scan (enable: false)
+#   - polarmix       : mix two scans in polar coordinates for rare classes
+#                      (bicycle, bus, car, construction_vehicle, motorcycle,
+#                       pedestrian, trailer, truck - all rare on nuScenes)
+#   - instance_cutmix: copy-paste foreground instances between scans
+#   - clustermix     : mix point clusters across scans
+
+
 adapted_augmentation:
   # nuScenes mapped class ids:
   # 0=ignore, 1=barrier, 2=bicycle, 3=bus, 4=car, 5=construction_vehicle,
   # 6=motorcycle, 7=pedestrian, 8=traffic_cone, 9=trailer, 10=truck,
   # 11=driveable_surface, 12=other_flat, 13=sidewalk, 14=terrain,
   # 15=manmade, 16=vegetation
-  use_mapped_labels: true
+  use_mapped_labels: false
   pointsample:
     enable: false
     num_points: 120000

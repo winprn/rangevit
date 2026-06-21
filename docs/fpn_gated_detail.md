@@ -165,6 +165,6 @@ That isolates:
 
 ## Config Files
 
-- Baseline: [config_kitti_tinyvim.yaml](/E:/KLTN/RangeTinyVim/config_kitti_tinyvim.yaml)
-- V1: [config_kitti_tinyvim_fpn_gated.yaml](/E:/KLTN/RangeTinyVim/config_kitti_tinyvim_fpn_gated.yaml)
-- V2: [config_kitti_tinyvim_fpn_gated_detail.yaml](/E:/KLTN/RangeTinyVim/config_kitti_tinyvim_fpn_gated_detail.yaml)
+- Baseline: [config/kitti/main/config_tinyvim.yaml](/E:/KLTN/RangeTinyVim/config/kitti/main/config_tinyvim.yaml)
+- V1: [config/kitti/ablation/decoder/config_fpn_gated.yaml](/E:/KLTN/RangeTinyVim/config/kitti/ablation/decoder/config_fpn_gated.yaml)
+- V2: [config/kitti/ablation/decoder/config_fpn_gated_detail.yaml](/E:/KLTN/RangeTinyVim/config/kitti/ablation/decoder/config_fpn_gated_detail.yaml)
