@@ -45,6 +45,14 @@ class Option(object):
         self.has_label = data_cfg.get('has_label', self.config.get('has_label', None))
         self.use_mini_version = False
         self.use_trainval = data_cfg.get('use_trainval', self.config.get('use_trainval', False))
+        label_efficient_cfg = data_cfg.get('label_efficient', self.config.get('label_efficient', {}))
+        if label_efficient_cfg is None:
+            label_efficient_cfg = {}
+        if not isinstance(label_efficient_cfg, dict):
+            raise ValueError('data.label_efficient must be a mapping when provided.')
+        self.label_efficient_enable = bool(label_efficient_cfg.get('enable', False))
+        self.label_efficient_sampling = str(label_efficient_cfg.get('sampling', 'uniform_stride')).lower()
+        self.label_efficient_stride = int(label_efficient_cfg.get('stride', 1))
 
         # Train config
         self.val_only = False
@@ -129,6 +137,13 @@ class Option(object):
             if len(self.class_weights) != self.n_classes:
                 raise ValueError(f'class_weights length ({len(self.class_weights)}) must equal n_classes ({self.n_classes})')
             self.class_weights = [float(w) for w in self.class_weights]
+        if self.label_efficient_enable:
+            if self.dataset != 'SemanticKitti':
+                raise ValueError('data.label_efficient is currently supported only for SemanticKitti.')
+            if self.label_efficient_sampling != 'uniform_stride':
+                raise ValueError("data.label_efficient.sampling must be 'uniform_stride'.")
+            if self.label_efficient_stride <= 0:
+                raise ValueError('data.label_efficient.stride must be a positive integer.')
 
 
         # Model config

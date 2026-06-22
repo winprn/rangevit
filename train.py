@@ -146,10 +146,16 @@ class Trainer(object):
             else:
                 train_sequences = data_config['split']['train']
 
+            # Label-efficient: subsample training scans by uniform stride
+            le_stride = None
+            if self.settings.label_efficient_enable:
+                le_stride = self.settings.label_efficient_stride
+
             trainset = dataset.semantic_kitti.SemanticKitti(
                 root=self.settings.data_root,
                 sequences=train_sequences,
-                config_path=data_config_path)
+                config_path=data_config_path,
+                uniform_stride=le_stride)
 
             self.cls_weight = 1 / (trainset.cls_freq + 1e-3)
             self.ignore_class = []

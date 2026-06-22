@@ -22,7 +22,8 @@ class SemanticKitti(object):
     def __init__(self, root,  # directory where data is
                  sequences,  # sequences for this data (e.g. [1,3,4,6])
                  config_path,  # directory of config file
-                 has_label=True):
+                 has_label=True,
+                 uniform_stride=None):
         self.root = root
         self.sequences = sequences
         self.sequences.sort()  # sort seq id
@@ -69,6 +70,21 @@ class SemanticKitti(object):
         self.pointcloud_files.sort()
         if self.has_label:
             self.label_files.sort()
+
+        if uniform_stride is not None:
+            uniform_stride = int(uniform_stride)
+            if uniform_stride <= 0:
+                raise ValueError('uniform_stride must be a positive integer.')
+            if uniform_stride > 1:
+                original_count = len(self.pointcloud_files)
+                keep_indices = list(range(0, original_count, uniform_stride))
+                self.pointcloud_files = [self.pointcloud_files[i] for i in keep_indices]
+                if self.has_label:
+                    self.label_files = [self.label_files[i] for i in keep_indices]
+                print(
+                    f'Applied uniform stride {uniform_stride}: '
+                    f'{len(self.pointcloud_files)} / {original_count} pointclouds selected'
+                )
 
         print(f'Using {len(self.pointcloud_files)} pointclouds from sequences {self.sequences}')
 
