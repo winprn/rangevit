@@ -146,16 +146,19 @@ class Trainer(object):
             else:
                 train_sequences = data_config['split']['train']
 
-            # Label-efficient: subsample training scans by uniform stride
-            le_stride = None
+            # Label-efficient (BALViT protocol): apply a percentile split at
+            # the parser level via percentiles_split.json, plus optional
+            # per-loader subsampling via dataset_skip_step / repeat_factor.
+            skip_ratio = 1
             if self.settings.label_efficient_enable:
-                le_stride = self.settings.label_efficient_stride
+                skip_ratio = self.settings.dataset_skip_step_org
 
             trainset = dataset.semantic_kitti.SemanticKitti(
                 root=self.settings.data_root,
                 sequences=train_sequences,
                 config_path=data_config_path,
-                uniform_stride=le_stride)
+                split='train',
+                skip_ratio=skip_ratio)
 
             self.cls_weight = 1 / (trainset.cls_freq + 1e-3)
             self.ignore_class = []
@@ -186,7 +189,9 @@ class Trainer(object):
         self.train_range_loader = dataset.RangeViewLoader(
             dataset=trainset,
             config=self.settings.config,
-            use_kpconv=self.settings.use_kpconv)
+            use_kpconv=self.settings.use_kpconv,
+            dataset_skip_step=self.settings.dataset_skip_step,
+            repeat_factor=self.settings.repeat_factor)
 
         self.val_range_loader = dataset.RangeViewLoader(
             dataset=valset,

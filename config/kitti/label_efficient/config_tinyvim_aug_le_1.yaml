@@ -1,7 +1,8 @@
 # =============================================================================
 # RangeViM – Label-Efficient 1% (BALViT protocol)
-# Based on: config/kitti/main/config_tinyvim_aug.yaml
-# Changes: label_efficient stride=100 (~191 scans), 500 epochs, bs=4, lr=4e-4
+#
+# Mirrors the BALViT skip_ratio=100 split. With ~19,130 train scans in
+# SemanticKITTI this yields ~191 scans (1% of the data).
 # =============================================================================
 
 # General config
@@ -26,15 +27,19 @@ data:
   data_root: "../dataset/SemanticKitti/data_odometry_velodyne/dataset/sequences"
   has_label: true
   use_trainval: false
-  label_efficient:
-    enable: true
-    sampling: "uniform_stride"
-    stride: 100  # ~191 scans out of ~19,130 ≈ 1%
+  # BALViT-style two-level skip.
+  #   skip_ratio=100 -> JSON key "1pct"   -> ~191 scans (1% of 19,130)
+  # dataset_skip_step stays at 1 at the loader level so epoch length
+  # equals the parser-selected scan count (matches BALViT's protocol).
+  dataset_skip_step_org: 100
+  dataset_skip_step: 1
+  repeat_factor: 1
+  label_efficient_enable: true
 
 # Train config
 training:
   val_frequency: 5
-  n_epochs: 500
+  n_epochs: 1000
   warmup_epochs: 20
   batch_size: 4
   batch_size_val: 1

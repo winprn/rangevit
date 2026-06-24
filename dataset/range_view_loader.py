@@ -26,7 +26,8 @@ from .preprocess import augmentor, projection, ClusterMix, InstanceCopy, PolarMi
 
 
 class RangeViewLoader(Dataset):
-    def __init__(self, dataset, config, data_len=-1, is_train=True, return_uproj=False, use_kpconv=False):
+    def __init__(self, dataset, config, data_len=-1, is_train=True, return_uproj=False, use_kpconv=False,
+                 dataset_skip_step=1, repeat_factor=1):
         self.dataset = dataset
         self.config = config
         self.model_cfg = self.config.get('model', {})
@@ -34,6 +35,11 @@ class RangeViewLoader(Dataset):
         self.data_len = data_len
         self.return_uproj = return_uproj
         self.use_kpconv = use_kpconv
+        # BALViT-style per-loader subsampling. Mirrors BALViT/balvit/
+        # dataset/range_view_loader.py: dataset_skip_step multiplies the
+        # sample index; repeat_factor expands the effective epoch length.
+        self.dataset_skip_step = max(1, int(dataset_skip_step))
+        self.repeat_factor = max(1, int(repeat_factor))
 
         augment_params = augmentor.AugmentParams()
         augment_config = self.config['augmentation']
@@ -364,10 +370,20 @@ class RangeViewLoader(Dataset):
         proj_sem_label_tensor: HxW
         proj_mask_tensor: HxW
         '''
-        if self.use_kpconv:
-            return self.get_item_for_kpconv(index)
+        # BALViT-style two-level skip: the effective dataset index is
+        # scaled by dataset_skip_step and (optionally) repeated to expand
+        # epoch length. Matches BALViT/balvit/dataset/dataset_utils.py:82.
+        if self.dataset_skip_step > 1 or self.repeat_factor > 1:
+            effective_index = (
+                index // self.repeat_factor
+            ) * self.dataset_skip_step
+        else:
+            effective_index = index
 
-        pointcloud, sem_label, inst_label = self.dataset.loadDataByIndex(index)
+        if self.use_kpconv:
+            return self.get_item_for_kpconv(effective_index)
+
+        pointcloud, sem_label, inst_label = self.dataset.loadDataByIndex(effective_index)
         labels_are_mapped = False
         if self.is_train and self.adapted_use_mapped_labels:
             sem_label = self.dataset.labelMapping(sem_label)
@@ -446,6 +462,9 @@ class RangeViewLoader(Dataset):
             return proj_tensor[0:5], proj_tensor[5], proj_tensor[6]
 
     def __len__(self):
+        if self.dataset_skip_step > 1 or self.repeat_factor > 1:
+            base = len(self.dataset) // self.dataset_skip_step
+            return base * self.repeat_factor
         if self.data_len > 0 and self.data_len < len(self.dataset):
             return self.data_len
         else:

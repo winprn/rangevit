@@ -12,10 +12,41 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import json
 import os
+
 import yaml
 import numpy as np
 from PIL import Image
+
+
+# BALViT-style skip ratio -> JSON key mapping. NOTE: BALViT's original
+# naming uses keys like "0.1" / "0.01" / "0.001" which look like percent
+# values but actually correspond to ``skip_ratio`` values 10 / 100 / 1000
+# (so they represent 10%, 1%, 0.1% of the data respectively). We use the
+# clearer percent-based labels here.
+SKIP_RATIO_TO_PERCENT = {
+    10: "10pct",
+    100: "1pct",
+    1000: "0.1pct",
+}
+
+DEFAULT_PERCENTILES_JSON = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    "percentiles_split.json",
+)
+
+
+def _rewrite_root(path: str, original_prefix: str, new_root: str) -> str:
+    """Replace the dataset root prefix in a stored path so the percentiles
+    JSON (generated against one root) works for any other root.
+    """
+    norm = path.replace("\\", "/")
+    if original_prefix and norm.startswith(original_prefix.replace("\\", "/")):
+        suffix = norm[len(original_prefix.replace("\\", "/")):]
+        suffix = suffix.lstrip("/")
+        return os.path.join(new_root, suffix)
+    return os.path.join(new_root, os.path.basename(path))
 
 
 class SemanticKitti(object):
@@ -23,11 +54,16 @@ class SemanticKitti(object):
                  sequences,  # sequences for this data (e.g. [1,3,4,6])
                  config_path,  # directory of config file
                  has_label=True,
-                 uniform_stride=None):
+                 split='train',
+                 skip_ratio=1,
+                 percentiles_json=DEFAULT_PERCENTILES_JSON):
         self.root = root
         self.sequences = sequences
         self.sequences.sort()  # sort seq id
         self.has_label = has_label
+        self.split = split
+        self.skip_ratio = int(skip_ratio) if skip_ratio is not None else 1
+        self.percentiles_json = percentiles_json
 
         # check file exists
         if os.path.isfile(config_path):
@@ -71,20 +107,56 @@ class SemanticKitti(object):
         if self.has_label:
             self.label_files.sort()
 
-        if uniform_stride is not None:
-            uniform_stride = int(uniform_stride)
-            if uniform_stride <= 0:
-                raise ValueError('uniform_stride must be a positive integer.')
-            if uniform_stride > 1:
-                original_count = len(self.pointcloud_files)
-                keep_indices = list(range(0, original_count, uniform_stride))
-                self.pointcloud_files = [self.pointcloud_files[i] for i in keep_indices]
-                if self.has_label:
-                    self.label_files = [self.label_files[i] for i in keep_indices]
-                print(
-                    f'Applied uniform stride {uniform_stride}: '
-                    f'{len(self.pointcloud_files)} / {original_count} pointclouds selected'
+        if (
+            self.skip_ratio is not None
+            and self.skip_ratio > 1
+            and self.split == "train"
+        ):
+            if self.skip_ratio not in SKIP_RATIO_TO_PERCENT:
+                raise ValueError(
+                    f"Unsupported skip_ratio {self.skip_ratio}. Supported values "
+                    f"are {sorted(SKIP_RATIO_TO_PERCENT)}."
                 )
+            percentage = SKIP_RATIO_TO_PERCENT[self.skip_ratio]
+            if not os.path.isfile(self.percentiles_json):
+                raise FileNotFoundError(
+                    f"Percentiles split file not found: {self.percentiles_json}. "
+                    "Run scripts/generate_percentiles_split.py to create it."
+                )
+            with open(self.percentiles_json, "r") as p:
+                splits = json.load(p)
+            if percentage not in splits:
+                raise ValueError(
+                    f"Percentage {percentage!r} missing from "
+                    f"{self.percentiles_json}. Available: {sorted(splits)}."
+                )
+
+            self.pointcloud_files = []
+            self.label_files = []
+            for seq, paths in splits[percentage].items():
+                self.pointcloud_files.extend(paths.get("points", []))
+                self.label_files.extend(paths.get("labels", []))
+
+            # The percentiles JSON stores paths generated against a specific
+            # dataset root (typically a placeholder). Rewrite the root so
+            # the same JSON works regardless of where the dataset lives.
+            placeholder_root = (
+                "Datasets/SemanticKitti/dataset/sequences"
+            )
+            self.pointcloud_files = [
+                _rewrite_root(p, placeholder_root, self.root)
+                for p in self.pointcloud_files
+            ]
+            self.label_files = [
+                _rewrite_root(p, placeholder_root, self.root)
+                for p in self.label_files
+            ]
+            print(
+                f"Applied BALViT percentile split {percentage} "
+                f"(skip_ratio={self.skip_ratio}): "
+                f"{len(self.pointcloud_files)} pointclouds selected from "
+                f"{self.percentiles_json}"
+            )
 
         print(f'Using {len(self.pointcloud_files)} pointclouds from sequences {self.sequences}')
 

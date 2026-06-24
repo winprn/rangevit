@@ -45,14 +45,32 @@ class Option(object):
         self.has_label = data_cfg.get('has_label', self.config.get('has_label', None))
         self.use_mini_version = False
         self.use_trainval = data_cfg.get('use_trainval', self.config.get('use_trainval', False))
-        label_efficient_cfg = data_cfg.get('label_efficient', self.config.get('label_efficient', {}))
-        if label_efficient_cfg is None:
-            label_efficient_cfg = {}
-        if not isinstance(label_efficient_cfg, dict):
-            raise ValueError('data.label_efficient must be a mapping when provided.')
-        self.label_efficient_enable = bool(label_efficient_cfg.get('enable', False))
-        self.label_efficient_sampling = str(label_efficient_cfg.get('sampling', 'uniform_stride')).lower()
-        self.label_efficient_stride = int(label_efficient_cfg.get('stride', 1))
+        # Label-efficient / BALViT-style two-level skip:
+        #   dataset_skip_step_org: applied at the parser level via the
+        #     percentiles_split.json (one of 10 / 100 / 1000 for our three
+        #     standard splits; set to 1 to disable).
+        #   dataset_skip_step: applied at the DataLoader/RangeViewLoader
+        #     level for additional per-epoch subsampling.
+        #   repeat_factor: number of times to repeat each selected scan in
+        #     an epoch (BALViT uses this to compensate for very small splits).
+        self.dataset_skip_step_org = int(
+            data_cfg.get('dataset_skip_step_org',
+                         self.config.get('dataset_skip_step_org', 1))
+        )
+        self.dataset_skip_step = int(
+            data_cfg.get('dataset_skip_step',
+                         self.config.get('dataset_skip_step', 1))
+        )
+        self.repeat_factor = int(
+            data_cfg.get('repeat_factor',
+                         self.config.get('repeat_factor', 1))
+        )
+        # Convenience flag: enable the BALViT label-efficient protocol.
+        self.label_efficient_enable = bool(
+            data_cfg.get('label_efficient_enable',
+                         self.config.get('label_efficient_enable',
+                                         self.dataset_skip_step_org > 1))
+        )
 
         # Train config
         self.val_only = False
@@ -139,11 +157,16 @@ class Option(object):
             self.class_weights = [float(w) for w in self.class_weights]
         if self.label_efficient_enable:
             if self.dataset != 'SemanticKitti':
-                raise ValueError('data.label_efficient is currently supported only for SemanticKitti.')
-            if self.label_efficient_sampling != 'uniform_stride':
-                raise ValueError("data.label_efficient.sampling must be 'uniform_stride'.")
-            if self.label_efficient_stride <= 0:
-                raise ValueError('data.label_efficient.stride must be a positive integer.')
+                raise ValueError('Label-efficient training is currently supported only for SemanticKitti.')
+            if self.dataset_skip_step_org not in (10, 100, 1000):
+                raise ValueError(
+                    'data.dataset_skip_step_org must be one of (10, 100, 1000) '
+                    'when label-efficient training is enabled.'
+                )
+            if self.dataset_skip_step < 1:
+                raise ValueError('data.dataset_skip_step must be a positive integer.')
+            if self.repeat_factor < 1:
+                raise ValueError('data.repeat_factor must be a positive integer.')
 
 
         # Model config
