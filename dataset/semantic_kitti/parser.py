@@ -141,7 +141,7 @@ class SemanticKitti(object):
             # dataset root (typically a placeholder). Rewrite the root so
             # the same JSON works regardless of where the dataset lives.
             placeholder_root = (
-                "Datasets/SemanticKitti/dataset/sequences"
+                "../dataset/SemanticKitti/data_odometry_velodyne/dataset/sequences"
             )
             self.pointcloud_files = [
                 _rewrite_root(p, placeholder_root, self.root)
