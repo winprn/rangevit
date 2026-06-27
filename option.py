@@ -156,17 +156,25 @@ class Option(object):
                 raise ValueError(f'class_weights length ({len(self.class_weights)}) must equal n_classes ({self.n_classes})')
             self.class_weights = [float(w) for w in self.class_weights]
         if self.label_efficient_enable:
-            if self.dataset != 'SemanticKitti':
-                raise ValueError('Label-efficient training is currently supported only for SemanticKitti.')
-            if self.dataset_skip_step_org not in (10, 100, 1000):
-                raise ValueError(
-                    'data.dataset_skip_step_org must be one of (10, 100, 1000) '
-                    'when label-efficient training is enabled.'
-                )
+            if self.dataset not in ('SemanticKitti', 'nuScenes'):
+                raise ValueError('Label-efficient training is currently supported only for SemanticKitti and nuScenes.')
+            if self.dataset == 'SemanticKitti':
+                if self.dataset_skip_step_org not in (10, 100, 1000):
+                    raise ValueError(
+                        'data.dataset_skip_step_org must be one of (10, 100, 1000) '
+                        'when label-efficient training is enabled for SemanticKitti.'
+                    )
+            elif self.dataset == 'nuScenes':
+                if self.dataset_skip_step not in (10, 100, 1000):
+                    raise ValueError(
+                        'data.dataset_skip_step must be one of (10, 100, 1000) '
+                        'when label-efficient training is enabled for nuScenes.'
+                    )
             if self.dataset_skip_step < 1:
                 raise ValueError('data.dataset_skip_step must be a positive integer.')
             if self.repeat_factor < 1:
                 raise ValueError('data.repeat_factor must be a positive integer.')
+
 
 
         # Model config
