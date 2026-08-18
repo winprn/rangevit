@@ -5,8 +5,8 @@ save_path: "save_rangevim_aug"
 
 # MLflow config
 mlflow:
-  enable: true
-  tracking_uri: "http://140.245.117.232:5000"
+  enable: false
+  tracking_uri: 
   experiment_name: "rangevim"
   run_name: "[trainval] tinyvim_small_fpn_cross_attn"  # V2: + cross-attention gate
   nested: false

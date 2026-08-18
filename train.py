@@ -94,13 +94,15 @@ class Trainer(object):
                 self.settings.robust_eval_seed)
 
         # Define scheduler
+        accum_steps = max(1, getattr(self.settings, 'grad_accum_steps', 1))
+        steps_per_epoch = max(1, (len(self.train_loader) + accum_steps - 1) // accum_steps)
         self.scheduler = utils.optim.WarmupCosineLR(
             optimizer=self.optimizer,
             lr=self.settings.lr,
             min_lr=getattr(self.settings, 'min_lr', 0.0),
-            warmup_steps=self.settings.warmup_epochs * len(self.train_loader),
+            warmup_steps=self.settings.warmup_epochs * steps_per_epoch,
             momentum=0.9,
-            max_steps=len(self.train_loader) * (self.settings.n_epochs - self.settings.warmup_epochs))
+            max_steps=steps_per_epoch * (self.settings.n_epochs - self.settings.warmup_epochs))
 
         # For mixed precision training
         self.fp16_scaler = None
@@ -182,6 +184,47 @@ class Trainer(object):
                 has_label=(self.settings.test_split is False),
             )
 
+        # SemanticPOSS dataset
+        elif self.settings.dataset == 'SemanticPOSS':
+            data_config_path = 'dataset/semantic_poss/semantic-poss.yaml'
+            data_config = yaml.safe_load(open(data_config_path, 'r'))
+
+            if self.settings.use_mini_version:
+                train_sequences = [0]
+            elif self.settings.use_trainval:
+                train_sequences = data_config['split']['train'] + data_config['split']['valid']
+            else:
+                train_sequences = data_config['split']['train']
+
+            trainset = dataset.semantic_poss.SemanticPOSS(
+                root=self.settings.data_root,
+                sequences=train_sequences,
+                config_path=data_config_path,
+                split='train',
+                skip_ratio=1)
+
+            self.cls_weight = 1 / (trainset.cls_freq + 1e-3)
+            self.ignore_class = []
+            for cl, _ in enumerate(self.cls_weight):
+                if trainset.data_config['learning_ignore'][cl]:
+                    self.cls_weight[cl] = 0
+                if self.cls_weight[cl] < 1e-10:
+                    self.ignore_class.append(cl)
+            if self.recorder is not None:
+                self.recorder.logger.info('weight: {}'.format(self.cls_weight))
+            self.mapped_cls_name = trainset.mapped_cls_name
+
+            test_sequences = (
+                data_config['split']['test'] if self.settings.test_split else
+                data_config['split']['valid'])
+
+            valset = dataset.semantic_poss.SemanticPOSS(
+                root=self.settings.data_root,
+                sequences=test_sequences,
+                config_path=data_config_path,
+                has_label=(self.settings.test_split is False),
+            )
+
         else:
             raise ValueError(
                 'invalid dataset: {}'.format(self.settings.dataset))
@@ -249,14 +292,14 @@ class Trainer(object):
         if self.settings.focal_loss_type == 'class_weighted_focal':
             if self.settings.class_weights is not None:
                 alpha = np.asarray(self.settings.class_weights, dtype=np.float32)
-            elif self.settings.dataset == 'SemanticKitti':
+            elif self.settings.dataset in ('SemanticKitti', 'SemanticPOSS'):
                 alpha = self.cls_weight.astype(np.float32)
             elif self.settings.dataset == 'nuScenes':
                 alpha = np.ones((self.settings.n_classes), dtype=np.float32)
             else:
                 alpha = np.ones((self.settings.n_classes), dtype=np.float32)
         else:
-            if self.settings.dataset == 'SemanticKitti':
+            if self.settings.dataset in ('SemanticKitti', 'SemanticPOSS'):
                 alpha = np.log(1 + self.cls_weight)
                 alpha = alpha / max(alpha.max(), 1e-6)
             elif self.settings.dataset == 'nuScenes':
@@ -471,6 +514,9 @@ class Trainer(object):
         total_iter = len(dataloader)
         t_start = time.time()
 
+        if mode == 'Train':
+            self.optimizer.zero_grad()
+
         log_frequency = max(1, self.settings.log_frequency)
 
         for i, batch in enumerate(dataloader):
@@ -520,18 +566,22 @@ class Trainer(object):
                         aux_outputs=aux_outputs,
                         aux_loss_weight=self.settings.aux_loss_weight)
 
-                # Backward
-                self.optimizer.zero_grad()
+                # Backward with gradient accumulation
+                accum_steps = max(1, getattr(self.settings, 'grad_accum_steps', 1))
+                loss_scaled = total_loss / accum_steps
                 if self.fp16_scaler is None:
-                    total_loss.backward()
-                    self.optimizer.step()
+                    loss_scaled.backward()
                 else:
-                    self.fp16_scaler.scale(total_loss).backward()
-                    self.fp16_scaler.step(self.optimizer)
-                    self.fp16_scaler.update()
+                    self.fp16_scaler.scale(loss_scaled).backward()
 
-                # Update lr after backward (required by pytorch)
-                self.scheduler.step()
+                if (i + 1) % accum_steps == 0 or (i + 1) == total_iter:
+                    if self.fp16_scaler is None:
+                        self.optimizer.step()
+                    else:
+                        self.fp16_scaler.step(self.optimizer)
+                        self.fp16_scaler.update()
+                    self.optimizer.zero_grad()
+                    self.scheduler.step()
             with torch.no_grad():
                 if mode == 'Validation':
                     assert input_feature.shape[0] == 1 # validation batch size has to be 1
@@ -917,6 +967,9 @@ class Trainer(object):
         total_iter = len(dataloader)
         t_start = time.time()
 
+        if mode == 'Train':
+            self.optimizer.zero_grad()
+
         log_frequency = max(1, self.settings.log_frequency)
 
         for i, batch_dict in enumerate(dataloader):
@@ -955,18 +1008,22 @@ class Trainer(object):
                     total_loss, loss_lovasz, loss_focal, loss_boundary, loss_aux = self.compute_losses(
                         output3d, output3d_softmax, labels3d, mask_3d)
 
-                # Backward
-                self.optimizer.zero_grad()
+                # Backward with gradient accumulation
+                accum_steps = max(1, getattr(self.settings, 'grad_accum_steps', 1))
+                loss_scaled = total_loss / accum_steps
                 if self.fp16_scaler is None:
-                    total_loss.backward()
-                    self.optimizer.step()
+                    loss_scaled.backward()
                 else:
-                    self.fp16_scaler.scale(total_loss).backward()
-                    self.fp16_scaler.step(self.optimizer)
-                    self.fp16_scaler.update()
+                    self.fp16_scaler.scale(loss_scaled).backward()
 
-                # Update lr after backward (required by pytorch)
-                self.scheduler.step()
+                if (i + 1) % accum_steps == 0 or (i + 1) == total_iter:
+                    if self.fp16_scaler is None:
+                        self.optimizer.step()
+                    else:
+                        self.fp16_scaler.step(self.optimizer)
+                        self.fp16_scaler.update()
+                    self.optimizer.zero_grad()
+                    self.scheduler.step()
             with torch.no_grad():
                 if mode == 'Validation':
                     assert input_feature.shape[0] == 1 # validation batch size has to be 1
@@ -1040,7 +1097,7 @@ class Trainer(object):
                     pred_result_path = os.path.join(pred_path, '{}_lidarseg.bin'.format(lidar_token))
                     pred_np.tofile(pred_result_path)
 
-                elif self.settings.dataset == 'SemanticKitti':
+                elif self.settings.dataset in ('SemanticKitti', 'SemanticPOSS'):
                     sk_dataset = self.val_loader.dataset.dataset
                     pred_np_origin = sk_dataset.class_map_lut_inv[pred_np]
                     seq_id, frame_id = sk_dataset.parsePathInfoByIndex(index)

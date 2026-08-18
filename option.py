@@ -80,6 +80,7 @@ class Option(object):
         self.n_epochs = train_cfg.get('n_epochs', self.config.get('n_epochs', None))  # number of total epochs
         self.batch_size = train_cfg.get('batch_size', self.config.get('batch_size', None))  # mini-batch size
         self.batch_size_val = train_cfg.get('batch_size_val', self.config.get('batch_size_val', 1)) # validation batch size
+        self.grad_accum_steps = max(1, int(train_cfg.get('grad_accum_steps', self.config.get('grad_accum_steps', 1))))
         self.lr = train_cfg.get('lr', self.config.get('lr', None))
         self.min_lr = float(train_cfg.get('min_lr', self.config.get('min_lr', 0.0)))
         self.warmup_epochs = train_cfg.get('warmup_epochs', self.config.get('warmup_epochs', 10))

@@ -14,8 +14,8 @@ save_path: "save_rangevim_aug_le_0_1"
 
 # MLflow config
 mlflow:
-  enable: true
-  tracking_uri: "http://140.245.117.232:5000"
+  enable: false
+  tracking_uri: 
   experiment_name: "rangevim"
   run_name: "[train] rangevim_base_aug_le_0.1"
   nested: false

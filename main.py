@@ -226,6 +226,8 @@ class Experiment(object):
                     del checkpoint_data['model'][key]
 
             checkpoint_data_model = checkpoint_data['model']
+            if any(k.startswith('module.') for k in checkpoint_data_model.keys()):
+                checkpoint_data_model = {k.replace('module.', '', 1): v for k, v in checkpoint_data_model.items()}
             msg = self.model.load_state_dict(checkpoint_data_model, strict=(not self.settings.finetune_pretrained_model))
             #print(f'msg = {msg}')
 
@@ -235,8 +237,25 @@ class Experiment(object):
                     self.trainer.optimizer.load_state_dict(checkpoint_data['optimizer'])
                 self.epoch_start = checkpoint_data['epoch'] + 1
 
+                if ('scheduler' in checkpoint_data) and (checkpoint_data['scheduler'] is not None):
+                    if hasattr(self.trainer, 'scheduler') and (self.trainer.scheduler is not None):
+                        try:
+                            self.trainer.scheduler.load_state_dict(checkpoint_data['scheduler'])
+                            print(f'==> Loaded scheduler state successfully')
+                        except Exception as e:
+                            print(f'==> Warning: Could not load scheduler state ({e})')
+
                 if ('fp16_scaler' in checkpoint_data) and (checkpoint_data['fp16_scaler'] is not None):
                     self.trainer.fp16_scaler.load_state_dict(checkpoint_data['fp16_scaler'])
+
+                if 'best_miou' in checkpoint_data and checkpoint_data['best_miou'] is not None:
+                    self.best_miou = checkpoint_data['best_miou']
+                    self.best_miou_epoch = checkpoint_data.get('best_miou_epoch', None)
+                    print(f'==> Restored best_miou: {self.best_miou} (epoch {self.best_miou_epoch})')
+                elif 'miou_point' in checkpoint_data:
+                    self.best_miou = checkpoint_data['miou_point']
+                elif 'miou' in checkpoint_data:
+                    self.best_miou = checkpoint_data['miou']
 
     def _finalize_mlflow(self, status='FINISHED'):
         if self._mlflow_finalized:
@@ -263,14 +282,20 @@ class Experiment(object):
             self.mlflow_manager.log_metrics({'total_runtime_sec': cost_time}, step=self.epoch_start)
             self._finalize_mlflow()
             return None
-        best_miou = None
-        best_miou_epoch = None
+        best_miou = getattr(self, 'best_miou', None)
+        best_miou_epoch = getattr(self, 'best_miou_epoch', None)
         primary_iou_key = 'miou'
 
         save_epochs_at = getattr(self.settings, 'save_epochs_at', [])
         save_every_epoch = len(save_epochs_at) == 0
 
-        #self.trainer.scheduler.step(self.epoch_start*len(self.trainer.train_loader))
+        # If continuing without saved scheduler state, advance scheduler to epoch_start
+        if self.epoch_start > 0 and hasattr(self.trainer, 'scheduler') and self.trainer.scheduler is not None:
+            if getattr(self.trainer.scheduler, 'last_epoch', -1) <= 0:
+                accum_steps = max(1, getattr(self.settings, 'grad_accum_steps', 1))
+                steps_per_epoch = max(1, (len(self.trainer.train_loader) + accum_steps - 1) // accum_steps)
+                print(f'==> Advancing scheduler to step {self.epoch_start * steps_per_epoch}')
+                self.trainer.scheduler.step(self.epoch_start * steps_per_epoch)
 
         for epoch in range(self.epoch_start, self.settings.n_epochs):
 
@@ -304,13 +329,20 @@ class Experiment(object):
                             'best_miou_model_from_start_{}.pth'.format(self.epoch_start))
                         best_miou = current_miou
                         best_miou_epoch = epoch + 1
+                        self.best_miou = best_miou
+                        self.best_miou_epoch = best_miou_epoch
 
                         checkpoint_data = {
                             'model': self.model.state_dict(),
                             'optimizer': self.trainer.optimizer.state_dict(),
                             'epoch': epoch,
+                            'best_miou': best_miou,
+                            'best_miou_epoch': best_miou_epoch,
                             primary_iou_key: current_miou,
                         }
+
+                        if hasattr(self.trainer, 'scheduler') and self.trainer.scheduler is not None:
+                            checkpoint_data['scheduler'] = self.trainer.scheduler.state_dict()
 
                         if self.trainer.fp16_scaler is not None:
                             checkpoint_data['fp16_scaler'] = self.trainer.fp16_scaler.state_dict()
@@ -334,7 +366,12 @@ class Experiment(object):
                         'model': self.model.state_dict(),
                         'optimizer': self.trainer.optimizer.state_dict(),
                         'epoch': epoch,
+                        'best_miou': best_miou,
+                        'best_miou_epoch': best_miou_epoch,
                     }
+                    if hasattr(self.trainer, 'scheduler') and self.trainer.scheduler is not None:
+                        checkpoint_data['scheduler'] = self.trainer.scheduler.state_dict()
+
                     if self.trainer.fp16_scaler is not None:
                         checkpoint_data['fp16_scaler'] = self.trainer.fp16_scaler.state_dict()
 

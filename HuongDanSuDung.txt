@@ -1,0 +1,81 @@
+================================================================================
+                HƯỚNG DẪN BIÊN DỊCH VÀ CHẠY CHƯƠNG TRÌNH (USE GUIDE)
+     ĐỀ TÀI: RANGE TINYVIM - PHÂN ĐOẠN NGỮ CẢNH DỮ LIỆU LIDAR 3D RANGE IMAGE
+================================================================================
+
+I. TỔNG QUAN VỀ CÁC TỆP THỰC THI CHÍNH
+--------------------------------------------------------------------------------
+1. `train.py`: Chương trình chính dùng để Huấn luyện (Train) và Đánh giá (Evaluate) mô hình trên các tập dữ liệu (SemanticKITTI, nuScenes, SemanticPOSS).
+2. `option.py`: Module xử lý các tham số dòng lệnh và file cấu hình YAML.
+3. `export_trt_dynamic.py`: Script xuất mô hình PyTorch sang định dạng ONNX và TensorRT engine (kích thước động/cố định).
+4. `test_trt_inference.py`: Script kiểm tra và đo tốc độ suy luận (FPS/Latency) bằng TensorRT execution engine.
+5. `utils/inference/infer_knn.py`: Script suy luận và làm mịn dự đoán 3D bằng thuật toán k-Nearest Neighbors (kNN unprojection).
+
+--------------------------------------------------------------------------------
+II. HƯỚNG DẪN CHẠY HUẤN LUYỆN (TRAINING)
+--------------------------------------------------------------------------------
+
+Cú pháp tổng quát:
+    $ python train.py --config <đường_dẫn_file_config.yaml> [--data_root <đường_dẫn_dữ_liệu>]
+
+1. HUẤN LUYỆN TRÊN TAP DỮ LIỆU SEMANTICKITTI:
+   - Chạy huấn luyện mô hình RangeTinyVim tiêu chuẩn:
+     $ python train.py --config config/kitti/main/config_tinyvim.yaml
+
+   - Chạy huấn luyện với kỹ thuật Augmentation (RangeAug):
+     $ python train.py --config config/kitti/main/config_tinyvim_aug.yaml
+
+   - Chạy huấn luyện giao thức Label-Efficient (rút gọn 10%, 1%, 0.1% dữ liệu):
+     $ python train.py --config config/kitti/label_efficient/config_tinyvim_aug_le_10.yaml
+     $ python train.py --config config/kitti/label_efficient/config_tinyvim_aug_le_1.yaml
+     $ python train.py --config config/kitti/label_efficient/config_tinyvim_aug_le_0_1.yaml
+
+2. HUẤN LUYỆN TRÊN TẬP DỮ LIỆU NUSCENES:
+   - Chạy huấn luyện mô hình trên nuScenes LiDAR:
+     $ python train.py --config config/nusc/main/config_tinyvim.yaml
+
+3. HUẤN LUYỆN TRÊN TẬP DỮ LIỆU SEMANTICPOSS:
+   - Chạy huấn luyện mô hình trên SemanticPOSS (Pandora LiDAR 40 channels):
+     $ python train.py --config config/SemanticPOSS/config_poss.yaml
+
+LƯU Ý: Nếu dữ liệu nằm ở thư mục tùy chỉnh, bổ sung cờ `--data_root`:
+   $ python train.py --config config/SemanticPOSS/config_poss.yaml --data_root /path/to/SemanticPOSS/dataset/sequences
+
+--------------------------------------------------------------------------------
+III. HƯỚNG DẪN ĐÁNH GIÁ VÀ SUY LUẬN (EVALUATION & INFERENCE)
+--------------------------------------------------------------------------------
+
+1. CHẠY ĐÁNH GIÁ BẢN CHUẨN (VALIDATION ONLY):
+   Tải trọng số pre-trained hoặc checkpoint đã huấn luyện và chạy đánh giá mIoU:
+   $ python train.py --config config/kitti/main/config_tinyvim.yaml --val_only --checkpoint checkpoint/model_best.pth
+
+2. CHẠY SUY LUẬN VÀ LÀM MỊN BẰNG KNN UNPROJECTION:
+   Thực hiện hậu xử lý kNN chiếu ngược từ Range Image 2D về Point Cloud 3D:
+   $ python utils/inference/infer_knn.py --config config/kitti/main/config_tinyvim.yaml --checkpoint checkpoint/model_best.pth
+
+3. XUẤT NỘP FILE KẾT QUẢ CHẠY DỰ ĐOÁN (.LABEL / .BIN):
+   Khi chạy evaluation với cờ lưu kết quả, các file nhãn dự đoán sẽ tự động được ghi vào thư mục `save_path/sequences/<seq_id>/predictions/*.label` để nộp lên benchmark server.
+
+--------------------------------------------------------------------------------
+IV. CHUYỂN ĐỔI MÔ HÌNH & BÀI ĐO HIỆU NĂNG (BENCHMARK TENSORRT)
+--------------------------------------------------------------------------------
+
+1. Xuất mô hình sang định dạng ONNX và TensorRT Engine:
+   $ python export_trt_dynamic.py
+
+2. Kiểm tra suy luận bằng TensorRT C++ Engine:
+   $ python test_trt_inference.py
+
+--------------------------------------------------------------------------------
+V. QUẢN LÝ KẾT QUẢ VÀ LOGS
+--------------------------------------------------------------------------------
+1. TensorBoard:
+   Theo dõi độ chính xác (mIoU, Accuracy, Loss) theo từng epoch:
+   $ tensorboard --logdir save_rangevim_poss
+
+2. MLflow Tracking (Nếu bật trong config):
+   Nếu `mlflow.enable: true`, mở trình duyệt truy cập địa chỉ MLflow UI đã cấu hình để xem biểu đồ chi tiết.
+
+================================================================================
+                      KẾT THÚC HƯỚNG DẪN SUY LUẬN VÀ CHẠY
+================================================================================

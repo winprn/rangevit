@@ -193,7 +193,7 @@ class Inference(object):
                         pred_result_path = os.path.join(pred_path, '{}_lidarseg.bin'.format(lidar_token))
                         pred_np.tofile(pred_result_path)
 
-                    elif self.settings.dataset == 'SemanticKitti':
+                    elif self.settings.dataset in ('SemanticKitti', 'SemanticPOSS'):
                         pred_np_origin = self.val_range_loader.dataset.class_map_lut_inv[pred_np]
                         seq_id, frame_id = self.val_range_loader.dataset.parsePathInfoByIndex(i)
                         pred_path = os.path.join(self.prediction_path, 'sequences', seq_id, 'predictions')

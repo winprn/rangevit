@@ -5,8 +5,8 @@ save_path: "save_nusc_rangevim_tinyvim_full"
 
 # MLflow config
 mlflow:
-  enable: true
-  tracking_uri: "http://140.245.117.232:5000" # e.g. 'file:./mlruns' or an HTTP URL
+  enable: false
+  tracking_uri:  # e.g. 'file:./mlruns' or an HTTP URL
   experiment_name: "rangevim"
   run_name: "[train] nusc_tinyvim_base_full" # defaults to the CLI-provided id when null
   nested: false

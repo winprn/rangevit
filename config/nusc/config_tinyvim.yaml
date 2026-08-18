@@ -7,7 +7,7 @@ distributed: false
 # MLflow config
 mlflow:
   enable: false
-  tracking_uri: "http://140.245.117.232:5000" # e.g. 'file:./mlruns' or an HTTP URL
+  tracking_uri:  # e.g. 'file:./mlruns' or an HTTP URL
   experiment_name: "rangevim"
   run_name: "[train] nusc_large_fpn" # defaults to the CLI-provided id when null
   nested: false

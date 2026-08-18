@@ -1,0 +1,105 @@
+================================================================================
+                    HƯỚNG DẪN CÀI ĐẶT MÔI TRƯỜNG & THƯ VIỆN
+     ĐỀ TÀI: RANGE TINYVIM - PHÂN ĐOẠN NGỮ CẢNH DỮ LIỆU LIDAR 3D RANGE IMAGE
+================================================================================
+
+I. CẤU HÌNH PHẦN CỨNG & MÔI TRƯỜNG HỆ THỐNG YÊU CẦU
+--------------------------------------------------------------------------------
+1. Hệ điều hành: Linux (Ubuntu 20.04/22.04) hoặc Windows 10/11 (khuyên dùng WSL2 - Ubuntu).
+2. Phần cứng:
+   - GPU: NVIDIA GPU có VRAM >= 8GB (đối với batch size nhỏ) hoặc >= 16GB.
+   - RAM: Tối thiểu 16GB.
+   - Đĩa cứng: Tối thiểu 50GB trống cho dataset và checkpoints.
+3. Phần mềm & Trình điều khiển (Drivers):
+   - CUDA Toolkit: 11.8 hoặc 12.1 trở lên.
+   - cuDNN: Tương thích với phiên bản CUDA.
+   - Python: Phiên bản 3.10.x.
+
+--------------------------------------------------------------------------------
+II. HƯỚNG DẪN CÀI ĐẶT CHI TIẾT THEO TỪNG BƯỚC
+--------------------------------------------------------------------------------
+
+BƯỚC 1: TẠO VÀ KÍCH HOẠT MÔI TRƯỜNG ẢO (VIRTUAL ENVIRONMENT)
+
+  * Cách 1: Sử dụng Conda (Khuyên dùng)
+    $ conda create -n rangetinyvim python=3.10 -y
+    $ conda activate rangetinyvim
+
+  * Cách 2: Sử dụng venv sẵn có của Python
+    $ python3 -m venv venv
+    # Trê Linux / WSL:
+    $ source venv/bin/activate
+    # Trên Windows PowerShell:
+    > .\venv\Scripts\Activate.ps1
+
+--------------------------------------------------------------------------------
+BƯỚC 2: CÀI ĐẶT PYTORCH HỖ TRỢ CUDA
+
+Cài đặt PyTorch phù hợp với phiên bản CUDA trên máy (ví dụ CUDA 12.1):
+
+    $ pip install torch==2.5.0 torchvision==0.20.0 --extra-index-url https://download.pytorch.org/whl/cu121
+
+(Nếu sử dụng CUDA 11.8, thay link extra-index-url tương ứng: https://download.pytorch.org/whl/cu118)
+
+--------------------------------------------------------------------------------
+BƯỚC 3: CÀI ĐẶT CÁC THƯ VIỆN PHỤ THUỘC (DEPENDENCIES)
+
+Cài đặt các gói phụ thuộc được liệt kê trong file `requirements.txt`:
+
+    $ pip install -r requirements.txt
+
+Các thư viện chính bao gồm:
+- einops (0.8.1): Xử lý biến đổi tensor
+- scipy (1.15.3), numpy (2.2.6): Tính toán đại số tuyến tính & xử lý mảng
+- PyYAML (6.0.3), ruamel.yaml: Đọc/ghi file cấu hình YAML
+- Pillow (12.2.0), opencv-python (4.9.0.80): Xử lý ảnh range image
+- tensorboardX (2.6.4), mlflow (3.4.0): Ghi log quá trình huấn luyện
+- timm (1.0.12): Thư viện Vision Transformer backbone
+- nuscenes-devkit (1.1.11): Xử lý dữ liệu nuScenes dataset
+- prettytable (3.17.0): In bảng kết quả đánh giá IoU
+
+--------------------------------------------------------------------------------
+BƯỚC 4: CÀI ĐẶT BỔ SUNG KHỐI CHUẨN HÓA / KERNEL CHO VISION TRANSFORMER (TÙY CHỌN)
+
+Nếu huấn luyện các biến thể TinyViM / Mamba selective scan:
+    $ pip install ninja packaging
+    $ python -m pip install mamba-ssm==2.3.0 --no-build-isolation
+
+--------------------------------------------------------------------------------
+III. HƯỚNG DẪN CẤU TRÚC THƯ MỤC DỮ LIỆU (DATASETS)
+--------------------------------------------------------------------------------
+Dữ liệu cần được chuẩn bị và đặt tại thư mục `dataset/` hoặc thư mục ngoài theo cấu trúc sau:
+
+1. SemanticKITTI Dataset:
+   dataset/
+   └── SemanticKitti/
+       └── data_odometry_velodyne/
+           └── dataset/
+               └── sequences/
+                   ├── 00/
+                   │   ├── velodyne/   (*.bin)
+                   │   └── labels/     (*.label)
+                   ├── 01/ ...
+                   └── 21/
+
+2. nuScenes Dataset:
+   dataset/
+   └── nuScenes/
+       ├── v1.0-trainval/
+       ├── samples/
+       └── sweeps/
+
+3. SemanticPOSS Dataset:
+   dataset/
+   └── SemanticPOSS/
+       └── dataset/
+           └── sequences/
+               ├── 00/
+               │   ├── velodyne/   (*.bin)
+               │   └── labels/     (*.label)
+               ├── 01/ ...
+               └── 05/
+
+================================================================================
+                HOÀN TẤT CÀI ĐẶT - SẴN SÀNG CHẠY CHƯƠNG TRÌNH
+================================================================================
